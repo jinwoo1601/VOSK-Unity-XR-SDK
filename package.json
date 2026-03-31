@@ -1,0 +1,29 @@
+{
+  "name": "com.jinwoo1601.vosk-xr",
+  "version": "0.1.0",
+  "displayName": "VOSK XR Speech Recognition",
+  "description": "Offline speech recognition for XR applications. Wraps the VOSK toolkit behind a Unity-native C# API with native audio capture via AAudio on Android arm64.",
+  "unity": "6000.0",
+  "documentationUrl": "",
+  "changelogUrl": "",
+  "licensesUrl": "",
+  "keywords": [
+    "vosk",
+    "speech",
+    "recognition",
+    "xr",
+    "quest",
+    "offline"
+  ],
+  "author": {
+    "name": "jinwoo1601"
+  },
+  "license": "Apache-2.0",
+  "samples": [
+    {
+      "displayName": "Basic Transcription",
+      "description": "Demonstrates live speech-to-text with on-screen display.",
+      "path": "Samples~/BasicTranscription"
+    }
+  ]
+}
