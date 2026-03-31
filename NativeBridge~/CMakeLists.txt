@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(BRIDGE_SOURCES
     src/vosk_bridge.cpp
-    src/audio_capture_aaudio.cpp
+    src/audio_capture_audiorecord.cpp
 )
 
 set(BRIDGE_HEADERS
@@ -16,7 +16,7 @@ set(BRIDGE_HEADERS
     src/ring_buffer.h
     src/downsampler.h
     src/result_queue.h
-    src/audio_capture_aaudio.h
+    src/audio_capture_audiorecord.h
     include/vosk_api.h
 )
 
@@ -45,7 +45,6 @@ set_target_properties(vosk PROPERTIES
 
 target_link_libraries(vosk-bridge PRIVATE
     vosk
-    aaudio
     log
 )
 

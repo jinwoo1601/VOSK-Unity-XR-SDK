@@ -24,7 +24,8 @@ int AudioCapture::Start(RingBuffer<float>* ring_buffer) {
     AAudioStreamBuilder_setChannelCount(builder, kChannelCount);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
     AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
+    AAudioStreamBuilder_setInputPreset(builder, AAUDIO_INPUT_PRESET_UNPROCESSED);
     AAudioStreamBuilder_setDataCallback(builder, DataCallback, this);
     AAudioStreamBuilder_setErrorCallback(builder, ErrorCallback, this);
 
@@ -35,7 +36,7 @@ int AudioCapture::Start(RingBuffer<float>* ring_buffer) {
         LOGE("Failed to open AAudio stream: %s", AAudio_convertResultToText(result));
         stream_ = nullptr;
 
-        if (result == AAUDIO_ERROR_NO_SERVICE || result == AAUDIO_ERROR_NO_PERMISSION)
+        if (result == AAUDIO_ERROR_NO_SERVICE)
             return VOSK_BRIDGE_ERR_PERMISSION_DENIED;
         return VOSK_BRIDGE_ERR_AUDIO_DEVICE_UNAVAIL;
     }
@@ -75,6 +76,17 @@ aaudio_data_callback_result_t AudioCapture::DataCallback(
 
     auto* samples = static_cast<const float*>(audio_data);
     self->ring_buffer_->Write(samples, static_cast<uint32_t>(num_frames));
+
+    // Diagnostic: log first callback and then every ~5 seconds (48kHz / 960 frames ≈ 50 cb/s)
+    uint32_t count = self->callback_count_.fetch_add(1, std::memory_order_relaxed);
+    if (count == 0 || count % 250 == 0) {
+        float peak = 0.0f;
+        for (int32_t i = 0; i < num_frames; ++i) {
+            float v = samples[i] < 0 ? -samples[i] : samples[i];
+            if (v > peak) peak = v;
+        }
+        LOGI("DataCallback #%u: frames=%d peak=%.6f", count, num_frames, peak);
+    }
 
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }

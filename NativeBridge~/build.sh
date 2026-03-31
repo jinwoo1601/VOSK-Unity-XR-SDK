@@ -50,7 +50,7 @@ echo ""
 cmake -B "${BUILD_DIR}" -S "${SCRIPT_DIR}" \
     -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
     -DANDROID_ABI=arm64-v8a \
-    -DANDROID_PLATFORM=android-27 \
+    -DANDROID_PLATFORM=android-29 \
     -DANDROID_STL=c++_shared \
     -DCMAKE_BUILD_TYPE=Release
 

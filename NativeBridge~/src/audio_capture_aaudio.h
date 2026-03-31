@@ -34,6 +34,7 @@ private:
     RingBuffer<float>* ring_buffer_;
     std::atomic<bool> running_;
     std::atomic<bool> error_occurred_;
+    std::atomic<uint32_t> callback_count_{0};
 };
 
 #endif // AUDIO_CAPTURE_AAUDIO_H

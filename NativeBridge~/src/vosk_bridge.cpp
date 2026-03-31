@@ -3,7 +3,7 @@
 #include "ring_buffer.h"
 #include "downsampler.h"
 #include "result_queue.h"
-#include "audio_capture_aaudio.h"
+#include "audio_capture_audiorecord.h"
 
 #include <thread>
 #include <atomic>
@@ -35,6 +35,22 @@ static QueuedResult      g_current_result;
 static constexpr uint32_t kReadChunkSize = 4096;       // 48 kHz samples per read (~85 ms)
 static constexpr uint32_t kDownsampledSize = kReadChunkSize / Downsampler::kDecimationFactor + 1;
 
+// Mic gain — Quest 3 mic levels are somewhat low.
+// Gentle boost to bring speech into VOSK's optimal range without clipping.
+static constexpr float kMicGain = 3.0f;
+
+// Convert float [-1,1] to int16 for vosk_recognizer_accept_waveform_s.
+// The float variant of the VOSK API does not work reliably on all arm64
+// builds of libvosk, so we use the int16 path instead.
+static void float_to_int16(const float* src, short* dst, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        float v = src[i] * 32767.0f;
+        if (v > 32767.0f) v = 32767.0f;
+        else if (v < -32768.0f) v = -32768.0f;
+        dst[i] = static_cast<short>(v);
+    }
+}
+
 static void reset_pipeline() {
     g_ring_buffer.Reset();
     g_result_queue.Clear();
@@ -47,6 +63,7 @@ static void reset_pipeline() {
 static void recognition_loop() {
     float read_buf[kReadChunkSize];
     float downsampled_buf[kDownsampledSize];
+    short int16_buf[kDownsampledSize];
 
     LOGI("Recognition thread started");
 
@@ -70,9 +87,20 @@ static void recognition_loop() {
         // Downsample 48 kHz -> 16 kHz
         uint32_t ds_count = g_downsampler.Process(read_buf, read_count, downsampled_buf);
 
+        // Apply mic gain and clamp to [-1, 1]
+        for (uint32_t i = 0; i < ds_count; ++i) {
+            float v = downsampled_buf[i] * kMicGain;
+            if (v > 1.0f) v = 1.0f;
+            else if (v < -1.0f) v = -1.0f;
+            downsampled_buf[i] = v;
+        }
+
+        // Convert to int16 for VOSK
+        float_to_int16(downsampled_buf, int16_buf, ds_count);
+
         if (ds_count > 0) {
-            int result = vosk_recognizer_accept_waveform_f(
-                g_recognizer, downsampled_buf, static_cast<int>(ds_count));
+            int result = vosk_recognizer_accept_waveform_s(
+                g_recognizer, int16_buf, static_cast<int>(ds_count));
 
             if (result == 1) {
                 // Utterance boundary — final result
@@ -101,7 +129,6 @@ static void recognition_loop() {
     }
 
     // Ensure g_running is false so vosk_bridge_is_running() returns 0 to C#
-    // (may already be false in the normal-stop case; necessary in the error case)
     g_running.store(false, std::memory_order_release);
 
     // Flush remaining audio as final result
@@ -154,9 +181,6 @@ void vosk_bridge_destroy() {
     if (!g_initialised.load(std::memory_order_acquire))
         return;
 
-    // Signal stop and always join the thread if joinable.
-    // g_running may already be false (e.g. AAudio ErrorCallback),
-    // but the thread could still be executing its final iteration.
     g_running.store(false, std::memory_order_release);
     g_audio_capture.Stop();
     if (g_recognition_thread.joinable())
@@ -205,13 +229,9 @@ int vosk_bridge_start() {
 }
 
 void vosk_bridge_stop() {
-    // Signal thread to stop (may already be false if audio error occurred)
     g_running.store(false, std::memory_order_release);
-
-    // Stop audio capture and close the stream
     g_audio_capture.Stop();
 
-    // Wait for recognition thread to drain and exit
     if (g_recognition_thread.joinable())
         g_recognition_thread.join();
 
@@ -224,7 +244,6 @@ int vosk_bridge_reset() {
     if (!g_initialised.load(std::memory_order_acquire))
         return VOSK_BRIDGE_ERR_NOT_INITIALISED;
 
-    // Stop recognition thread to avoid concurrent access to g_recognizer
     bool was_running = g_running.load(std::memory_order_acquire);
     if (was_running)
         vosk_bridge_stop();
