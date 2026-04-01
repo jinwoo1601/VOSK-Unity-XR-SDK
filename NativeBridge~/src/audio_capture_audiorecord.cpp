@@ -180,6 +180,14 @@ void AudioCapture::ReadLoop(JavaVM* jvm) {
         jint framesRead = env->CallIntMethod(audio_record_, readMethod,
             jbuf, 0, kReadFrames, 0 /*READ_BLOCKING*/);
 
+        if (env->ExceptionCheck()) {
+            env->ExceptionDescribe();
+            env->ExceptionClear();
+            LOGE("AudioCapture: read() threw exception");
+            error_occurred_.store(true, std::memory_order_release);
+            break;
+        }
+
         if (framesRead < 0) {
             LOGE("AudioCapture: read() returned error %d", framesRead);
             error_occurred_.store(true, std::memory_order_release);

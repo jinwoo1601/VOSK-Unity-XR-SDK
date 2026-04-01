@@ -1,6 +1,8 @@
 #ifndef VOSK_BRIDGE_H
 #define VOSK_BRIDGE_H
 
+#define VOSK_BRIDGE_EXPORT __attribute__((visibility("default")))
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -17,22 +19,22 @@ enum VoskBridgeError {
 };
 
 // Heavyweight lifecycle (model load / teardown)
-int  vosk_bridge_init(const char* model_path, float sample_rate);
-void vosk_bridge_destroy();
+VOSK_BRIDGE_EXPORT int  vosk_bridge_init(const char* model_path, float sample_rate);
+VOSK_BRIDGE_EXPORT void vosk_bridge_destroy();
 
 // Lightweight lifecycle (audio stream start / stop)
-int  vosk_bridge_start();
-void vosk_bridge_stop();
-int  vosk_bridge_reset();
+VOSK_BRIDGE_EXPORT int  vosk_bridge_start();
+VOSK_BRIDGE_EXPORT void vosk_bridge_stop();
+VOSK_BRIDGE_EXPORT int  vosk_bridge_reset();
 
 // Results (polled from C# Update loop)
-int         vosk_bridge_has_result();
-const char* vosk_bridge_get_result(int* out_is_final);
+VOSK_BRIDGE_EXPORT int         vosk_bridge_has_result();
+VOSK_BRIDGE_EXPORT const char* vosk_bridge_get_result(int* out_is_final);
 
 // Status
-int vosk_bridge_is_running();
-int vosk_bridge_is_initialised();
-int vosk_bridge_get_error(char* buf, int buf_size);
+VOSK_BRIDGE_EXPORT int vosk_bridge_is_running();
+VOSK_BRIDGE_EXPORT int vosk_bridge_is_initialised();
+VOSK_BRIDGE_EXPORT int vosk_bridge_get_error(char* buf, int buf_size);
 
 #ifdef __cplusplus
 }
