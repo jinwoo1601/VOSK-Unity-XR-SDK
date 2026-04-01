@@ -19,7 +19,8 @@ enum VoskBridgeError {
 };
 
 // Heavyweight lifecycle (model load / teardown)
-VOSK_BRIDGE_EXPORT int  vosk_bridge_init(const char* model_path, float sample_rate);
+VOSK_BRIDGE_EXPORT int  vosk_bridge_init(const char* model_path, float sample_rate,
+                                         float mic_gain_target_db);
 VOSK_BRIDGE_EXPORT void vosk_bridge_destroy();
 
 // Lightweight lifecycle (audio stream start / stop)

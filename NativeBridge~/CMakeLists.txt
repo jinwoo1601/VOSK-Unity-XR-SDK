@@ -15,6 +15,7 @@ set(BRIDGE_HEADERS
     src/vosk_bridge.h
     src/ring_buffer.h
     src/downsampler.h
+    src/agc.h
     src/result_queue.h
     src/audio_capture_audiorecord.h
     include/vosk_api.h

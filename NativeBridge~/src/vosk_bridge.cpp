@@ -2,6 +2,7 @@
 #include "vosk_api.h"
 #include "ring_buffer.h"
 #include "downsampler.h"
+#include "agc.h"
 #include "result_queue.h"
 #include "audio_capture_audiorecord.h"
 
@@ -22,6 +23,7 @@ static RingBuffer<float> g_ring_buffer;
 static ResultQueue       g_result_queue;
 static AudioCapture      g_audio_capture;
 static Downsampler       g_downsampler;
+static Agc               g_agc;
 
 static std::thread       g_recognition_thread;
 static std::atomic<bool> g_running{false};
@@ -34,10 +36,6 @@ static QueuedResult      g_current_result;
 // Processing buffer sizes
 static constexpr uint32_t kReadChunkSize = 4096;       // 48 kHz samples per read (~85 ms)
 static constexpr uint32_t kDownsampledSize = kReadChunkSize / Downsampler::kDecimationFactor + 1;
-
-// Mic gain — Quest 3 mic levels are somewhat low.
-// Gentle boost to bring speech into VOSK's optimal range without clipping.
-static constexpr float kMicGain = 3.0f;
 
 // Convert float [-1,1] to int16 for vosk_recognizer_accept_waveform_s.
 // The float variant of the VOSK API does not work reliably on all arm64
@@ -55,6 +53,7 @@ static void reset_pipeline() {
     g_ring_buffer.Reset();
     g_result_queue.Clear();
     g_downsampler.Reset();
+    g_agc.Reset();
     g_last_partial.clear();
 }
 
@@ -87,13 +86,8 @@ static void recognition_loop() {
         // Downsample 48 kHz -> 16 kHz
         uint32_t ds_count = g_downsampler.Process(read_buf, read_count, downsampled_buf);
 
-        // Apply mic gain and clamp to [-1, 1]
-        for (uint32_t i = 0; i < ds_count; ++i) {
-            float v = downsampled_buf[i] * kMicGain;
-            if (v > 1.0f) v = 1.0f;
-            else if (v < -1.0f) v = -1.0f;
-            downsampled_buf[i] = v;
-        }
+        // Automatic gain control + soft saturation
+        g_agc.Process(downsampled_buf, ds_count);
 
         // Convert to int16 for VOSK
         float_to_int16(downsampled_buf, int16_buf, ds_count);
@@ -145,8 +139,14 @@ static void recognition_loop() {
 
 extern "C" {
 
-int vosk_bridge_init(const char* model_path, float sample_rate) {
+int vosk_bridge_init(const char* model_path, float sample_rate,
+                     float mic_gain_target_db) {
     g_last_error.clear();
+
+    if (!model_path) {
+        g_last_error = "model_path is null";
+        return VOSK_BRIDGE_ERR_MODEL_LOAD_FAILED;
+    }
 
     if (g_initialised.load(std::memory_order_acquire))
         return VOSK_BRIDGE_ERR_ALREADY_INITIALISED;
@@ -170,10 +170,13 @@ int vosk_bridge_init(const char* model_path, float sample_rate) {
         return VOSK_BRIDGE_ERR_MODEL_LOAD_FAILED;
     }
 
+    g_agc.Configure(mic_gain_target_db, g_sample_rate);
+
     reset_pipeline();
 
     g_initialised.store(true, std::memory_order_release);
-    LOGI("Bridge initialised: model=%s, sample_rate=%.0f", model_path, sample_rate);
+    LOGI("Bridge initialised: model=%s, sample_rate=%.0f, agc_target=%.1f dB",
+         model_path, sample_rate, mic_gain_target_db);
     return VOSK_BRIDGE_OK;
 }
 
