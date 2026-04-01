@@ -17,6 +17,7 @@ public:
     static constexpr float kDefaultTargetDb = -18.0f;   // dBFS
 
     void Configure(float target_db, float sample_rate) {
+        if (sample_rate <= 0.0f) sample_rate = 16000.0f;
         target_level_ = std::pow(10.0f, target_db / 20.0f);
 
         // Level tracker — fast attack (catches onsets), slow release (holds

@@ -143,6 +143,11 @@ int vosk_bridge_init(const char* model_path, float sample_rate,
                      float mic_gain_target_db) {
     g_last_error.clear();
 
+    if (!model_path) {
+        g_last_error = "model_path is null";
+        return VOSK_BRIDGE_ERR_MODEL_LOAD_FAILED;
+    }
+
     if (g_initialised.load(std::memory_order_acquire))
         return VOSK_BRIDGE_ERR_ALREADY_INITIALISED;
 
