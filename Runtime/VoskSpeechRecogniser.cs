@@ -16,6 +16,11 @@ namespace VoskXR
         [SerializeField] string modelRelativePath = "vosk-model-small-en-us-0.15";
         [SerializeField] float sampleRate = 16000f;
 
+        [Tooltip("AGC target audio level in dBFS. Higher values (e.g. -12) produce a louder " +
+                 "signal for VOSK; lower values (e.g. -24) are more conservative. " +
+                 "The default of -18 dBFS works well for typical speech on Quest 3.")]
+        [SerializeField] float micGainTargetDb = -18f;
+
         public event Action<string> OnPartialResult;
         public event Action<string> OnFinalResult;
         public event Action<VoskBridgeErrorCode, string> OnError;
@@ -65,7 +70,7 @@ namespace VoskXR
                 if (modelPath == null)
                     return;
 
-                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate);
+                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb);
                 CheckBridgeError(result, "Initialise");
 
                 if (result == 0)
