@@ -170,6 +170,9 @@ int vosk_bridge_init(const char* model_path, float sample_rate,
         return VOSK_BRIDGE_ERR_MODEL_LOAD_FAILED;
     }
 
+    // Include per-word confidence and timing in final results
+    vosk_recognizer_set_words(g_recognizer, 1);
+
     g_agc.Configure(mic_gain_target_db, g_sample_rate);
 
     reset_pipeline();
