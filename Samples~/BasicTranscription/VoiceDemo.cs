@@ -17,6 +17,7 @@ public class VoiceDemo : MonoBehaviour
         if (recogniser == null) return;
         recogniser.OnPartialResult += OnPartialResult;
         recogniser.OnFinalResult += OnFinalResult;
+        recogniser.OnResult += OnResult;
         recogniser.OnError += OnError;
         recogniser.StartRecognition();
     }
@@ -26,6 +27,7 @@ public class VoiceDemo : MonoBehaviour
         if (recogniser == null) return;
         recogniser.OnPartialResult -= OnPartialResult;
         recogniser.OnFinalResult -= OnFinalResult;
+        recogniser.OnResult -= OnResult;
         recogniser.OnError -= OnError;
         recogniser.StopRecognition();
     }
@@ -41,6 +43,24 @@ public class VoiceDemo : MonoBehaviour
         Debug.Log($"[VoiceDemo] Final: {text}");
         if (displayText != null)
             displayText.text = text;
+    }
+
+    void OnResult(VoskResult result)
+    {
+        if (result.Alternatives.Length > 0)
+        {
+            for (int i = 0; i < result.Alternatives.Length; i++)
+            {
+                var alt = result.Alternatives[i];
+                Debug.Log($"[VoiceDemo] Alt {i}: \"{alt.Text}\" score={alt.Confidence:F1}");
+            }
+        }
+        else
+        {
+            foreach (var word in result.Words)
+                Debug.Log($"[VoiceDemo]   \"{word.Text}\" conf={word.Confidence:F2} " +
+                          $"({word.StartTime:F2}s – {word.EndTime:F2}s)");
+        }
     }
 
     void OnError(VoskBridgeErrorCode code, string message)

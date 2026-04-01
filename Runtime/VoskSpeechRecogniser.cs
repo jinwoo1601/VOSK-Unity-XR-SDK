@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -21,8 +22,22 @@ namespace VoskXR
                  "The default of -18 dBFS works well for typical speech on Quest 3.")]
         [SerializeField] float micGainTargetDb = -18f;
 
+        [Tooltip("Number of alternative hypotheses to return per utterance. " +
+                 "0 (default) disables alternatives. When > 0, OnResult includes " +
+                 "ranked alternative transcriptions that help diagnose which words " +
+                 "VOSK is uncertain about.")]
+        [SerializeField] int maxAlternatives = 0;
+
         public event Action<string> OnPartialResult;
         public event Action<string> OnFinalResult;
+
+        /// <summary>
+        /// Raised for each final recognition result with per-word confidence scores
+        /// and timing data. Subscribe to this when you need to inspect which words
+        /// VOSK is confident about and which it is not.
+        /// </summary>
+        public event Action<VoskResult> OnResult;
+
         public event Action<VoskBridgeErrorCode, string> OnError;
         public event Action OnModelReady;
 
@@ -70,7 +85,8 @@ namespace VoskXR
                 if (modelPath == null)
                     return;
 
-                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb);
+                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb,
+                    maxAlternatives);
                 CheckBridgeError(result, "Initialise");
 
                 if (result == 0)
@@ -212,9 +228,11 @@ namespace VoskXR
 
             try
             {
+                bool hadActivity = false;
                 IntPtr ptr;
                 while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt)) != IntPtr.Zero)
                 {
+                    hadActivity = true;
                     bool isFinal = isFinalInt == 1;
                     string json = BridgeNative.MarshalResult(ptr);
 
@@ -232,13 +250,29 @@ namespace VoskXR
                     string text = ParseTextFromJson(json, isFinal);
 
                     if (isFinal)
+                    {
                         OnFinalResult?.Invoke(text);
+
+                        if (OnResult != null)
+                        {
+                            var alternatives = ParseAlternativesFromJson(json);
+                            VoskWord[] words;
+                            if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
+                                words = alternatives[0].Words;
+                            else
+                                words = ParseWordsFromJson(json);
+                            OnResult.Invoke(new VoskResult(text, words, alternatives));
+                        }
+                    }
                     else
+                    {
                         OnPartialResult?.Invoke(text);
+                    }
                 }
 
-                // Sync cached flag when native side stops (e.g. audio error)
-                if (!IsRecognising)
+                // Sync cached flag when native side stops (e.g. audio error).
+                // Only probe native when the queue had activity this frame.
+                if (hadActivity && !IsRecognising)
                     _isRecognising = false;
             }
             catch (DllNotFoundException)
@@ -299,35 +333,166 @@ namespace VoskXR
             return (VoskBridgeErrorCode)code;
         }
 
-        // VOSK returns JSON: {"text": "..."} for final, {"partial": "..."} for partial
-        static string ParseTextFromJson(string json, bool isFinal)
+        // VOSK returns JSON with word confidence when vosk_recognizer_set_words(1) is set:
+        // {"result": [{"conf":0.95,"end":0.6,"start":0.1,"word":"hello"}, ...], "text":"hello"}
+        // When there is no speech the "result" key is absent and "text" is empty.
+        internal static VoskWord[] ParseWordsFromJson(string json)
+            => ParseWordsInRange(json, 0, json.Length);
+
+        static VoskWord[] ParseWordsInRange(string json, int rangeStart, int rangeEnd)
         {
-            string key = isFinal ? "\"text\"" : "\"partial\"";
-            int keyIndex = json.IndexOf(key, StringComparison.Ordinal);
-            if (keyIndex < 0)
-                return string.Empty;
+            const string key = "\"result\"";
+            int keyIdx = json.IndexOf(key, rangeStart, rangeEnd - rangeStart, StringComparison.Ordinal);
+            if (keyIdx < 0)
+                return Array.Empty<VoskWord>();
 
-            int colonIndex = json.IndexOf(':', keyIndex + key.Length);
-            if (colonIndex < 0)
-                return string.Empty;
+            int arrayStart = json.IndexOf('[', keyIdx + key.Length);
+            if (arrayStart < 0 || arrayStart >= rangeEnd)
+                return Array.Empty<VoskWord>();
 
-            int openQuote = json.IndexOf('"', colonIndex + 1);
-            if (openQuote < 0)
-                return string.Empty;
+            int arrayEnd = json.IndexOf(']', arrayStart);
+            if (arrayEnd < 0 || arrayEnd > rangeEnd)
+                return Array.Empty<VoskWord>();
 
-            // Find closing quote, skipping escaped characters
+            // Count word objects
+            int count = 0;
+            for (int i = arrayStart; i < arrayEnd; i++)
+                if (json[i] == '{') count++;
+
+            if (count == 0)
+                return Array.Empty<VoskWord>();
+
+            var words = new VoskWord[count];
+            int wordIdx = 0;
+            int pos = arrayStart + 1;
+
+            while (wordIdx < count && pos < arrayEnd)
+            {
+                int objStart = json.IndexOf('{', pos);
+                if (objStart < 0 || objStart >= arrayEnd) break;
+
+                int objEnd = json.IndexOf('}', objStart);
+                if (objEnd < 0 || objEnd > arrayEnd) break;
+
+                float conf = ParseFloatValue(json, objStart, objEnd, "\"conf\"");
+                float start = ParseFloatValue(json, objStart, objEnd, "\"start\"");
+                float end = ParseFloatValue(json, objStart, objEnd, "\"end\"");
+                string word = ParseStringValue(json, objStart, objEnd, "\"word\"");
+
+                words[wordIdx++] = new VoskWord(word, conf, start, end);
+                pos = objEnd + 1;
+            }
+
+            return words;
+        }
+
+        // When max_alternatives > 0, VOSK wraps results in:
+        // {"alternatives": [{"confidence":123.4,"result":[...],"text":"hello"}, ...]}
+        internal static VoskAlternative[] ParseAlternativesFromJson(string json)
+        {
+            const string key = "\"alternatives\"";
+            int keyIdx = json.IndexOf(key, StringComparison.Ordinal);
+            if (keyIdx < 0)
+                return Array.Empty<VoskAlternative>();
+
+            int arrayStart = json.IndexOf('[', keyIdx + key.Length);
+            if (arrayStart < 0)
+                return Array.Empty<VoskAlternative>();
+
+            // Find matching ']' — must handle nested arrays ("result":[...])
+            int arrayEnd = FindMatchingDelimiter(json, arrayStart, '[', ']');
+            if (arrayEnd < 0)
+                return Array.Empty<VoskAlternative>();
+
+            // Alternatives contain nested "result":[{...}] arrays, so a simple '{'
+            // count would overcount. Use a List and walk depth-1 objects instead.
+            var alternatives = new System.Collections.Generic.List<VoskAlternative>();
+            int pos = arrayStart + 1;
+
+            while (pos < arrayEnd)
+            {
+                int objStart = json.IndexOf('{', pos);
+                if (objStart < 0 || objStart >= arrayEnd) break;
+
+                int objEnd = FindMatchingDelimiter(json, objStart, '{', '}');
+                if (objEnd < 0 || objEnd > arrayEnd) break;
+
+                string text = ParseStringValue(json, objStart, objEnd, "\"text\"");
+                float confidence = ParseFloatValue(json, objStart, objEnd, "\"confidence\"");
+                var words = ParseWordsInRange(json, objStart, objEnd);
+
+                alternatives.Add(new VoskAlternative(text, confidence, words));
+                pos = objEnd + 1;
+            }
+
+            return alternatives.Count > 0
+                ? alternatives.ToArray()
+                : Array.Empty<VoskAlternative>();
+        }
+
+        static int FindMatchingDelimiter(string json, int openPos, char open, char close)
+        {
+            int depth = 1;
+            for (int i = openPos + 1; i < json.Length; i++)
+            {
+                if (json[i] == open) depth++;
+                else if (json[i] == close) { depth--; if (depth == 0) return i; }
+            }
+            return -1;
+        }
+
+        static float ParseFloatValue(string json, int start, int end, string key)
+        {
+            int keyIdx = json.IndexOf(key, start, end - start, StringComparison.Ordinal);
+            if (keyIdx < 0) return 0f;
+
+            int colonIdx = json.IndexOf(':', keyIdx + key.Length);
+            if (colonIdx < 0 || colonIdx >= end) return 0f;
+
+            int valStart = colonIdx + 1;
+            while (valStart < end && json[valStart] == ' ') valStart++;
+
+            int valEnd = valStart;
+            while (valEnd < end && json[valEnd] != ',' && json[valEnd] != '}' && json[valEnd] != ' ')
+                valEnd++;
+
+            if (valEnd <= valStart) return 0f;
+
+            if (float.TryParse(json.AsSpan(valStart, valEnd - valStart),
+                NumberStyles.Float, CultureInfo.InvariantCulture, out float result))
+                return result;
+
+            return 0f;
+        }
+
+        static string ParseStringValue(string json, int start, int end, string key)
+        {
+            int keyIdx = json.IndexOf(key, start, end - start, StringComparison.Ordinal);
+            if (keyIdx < 0) return string.Empty;
+
+            int colonIdx = json.IndexOf(':', keyIdx + key.Length);
+            if (colonIdx < 0 || colonIdx >= end) return string.Empty;
+
+            int openQuote = json.IndexOf('"', colonIdx + 1);
+            if (openQuote < 0 || openQuote >= end) return string.Empty;
+
             int closeQuote = -1;
-            for (int i = openQuote + 1; i < json.Length; i++)
+            for (int i = openQuote + 1; i < end; i++)
             {
                 if (json[i] == '\\') { i++; continue; }
                 if (json[i] == '"') { closeQuote = i; break; }
             }
-            if (closeQuote < 0)
-                return string.Empty;
+            if (closeQuote < 0) return string.Empty;
 
-            return json.Substring(openQuote + 1, closeQuote - openQuote - 1)
-                .Replace("\\\"", "\"")
-                .Replace("\\\\", "\\");
+            return json.Substring(openQuote + 1, closeQuote - openQuote - 1);
+        }
+
+        static string ParseTextFromJson(string json, bool isFinal)
+        {
+            string key = isFinal ? "\"text\"" : "\"partial\"";
+            string raw = ParseStringValue(json, 0, json.Length, key);
+            if (raw.Length == 0 || raw.IndexOf('\\') < 0) return raw;
+            return raw.Replace("\\\"", "\"").Replace("\\\\", "\\");
         }
     }
 }
