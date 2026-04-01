@@ -22,6 +22,12 @@ namespace VoskXR
                  "The default of -18 dBFS works well for typical speech on Quest 3.")]
         [SerializeField] float micGainTargetDb = -18f;
 
+        [Tooltip("Number of alternative hypotheses to return per utterance. " +
+                 "0 (default) disables alternatives. When > 0, OnResult includes " +
+                 "ranked alternative transcriptions that help diagnose which words " +
+                 "VOSK is uncertain about.")]
+        [SerializeField] int maxAlternatives = 0;
+
         public event Action<string> OnPartialResult;
         public event Action<string> OnFinalResult;
 
@@ -79,7 +85,8 @@ namespace VoskXR
                 if (modelPath == null)
                     return;
 
-                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb);
+                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb,
+                    maxAlternatives);
                 CheckBridgeError(result, "Initialise");
 
                 if (result == 0)
@@ -248,8 +255,13 @@ namespace VoskXR
 
                         if (OnResult != null)
                         {
-                            var words = ParseWordsFromJson(json);
-                            OnResult.Invoke(new VoskResult(text, words));
+                            var alternatives = ParseAlternativesFromJson(json);
+                            VoskWord[] words;
+                            if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
+                                words = alternatives[0].Words;
+                            else
+                                words = ParseWordsFromJson(json);
+                            OnResult.Invoke(new VoskResult(text, words, alternatives));
                         }
                     }
                     else
@@ -325,18 +337,21 @@ namespace VoskXR
         // {"result": [{"conf":0.95,"end":0.6,"start":0.1,"word":"hello"}, ...], "text":"hello"}
         // When there is no speech the "result" key is absent and "text" is empty.
         internal static VoskWord[] ParseWordsFromJson(string json)
+            => ParseWordsInRange(json, 0, json.Length);
+
+        static VoskWord[] ParseWordsInRange(string json, int rangeStart, int rangeEnd)
         {
             const string key = "\"result\"";
-            int keyIdx = json.IndexOf(key, StringComparison.Ordinal);
+            int keyIdx = json.IndexOf(key, rangeStart, rangeEnd - rangeStart, StringComparison.Ordinal);
             if (keyIdx < 0)
                 return Array.Empty<VoskWord>();
 
             int arrayStart = json.IndexOf('[', keyIdx + key.Length);
-            if (arrayStart < 0)
+            if (arrayStart < 0 || arrayStart >= rangeEnd)
                 return Array.Empty<VoskWord>();
 
             int arrayEnd = json.IndexOf(']', arrayStart);
-            if (arrayEnd < 0)
+            if (arrayEnd < 0 || arrayEnd > rangeEnd)
                 return Array.Empty<VoskWord>();
 
             // Count word objects
@@ -369,6 +384,61 @@ namespace VoskXR
             }
 
             return words;
+        }
+
+        // When max_alternatives > 0, VOSK wraps results in:
+        // {"alternatives": [{"confidence":123.4,"result":[...],"text":"hello"}, ...]}
+        internal static VoskAlternative[] ParseAlternativesFromJson(string json)
+        {
+            const string key = "\"alternatives\"";
+            int keyIdx = json.IndexOf(key, StringComparison.Ordinal);
+            if (keyIdx < 0)
+                return Array.Empty<VoskAlternative>();
+
+            int arrayStart = json.IndexOf('[', keyIdx + key.Length);
+            if (arrayStart < 0)
+                return Array.Empty<VoskAlternative>();
+
+            // Find matching ']' — must handle nested arrays ("result":[...])
+            int arrayEnd = FindMatchingDelimiter(json, arrayStart, '[', ']');
+            if (arrayEnd < 0)
+                return Array.Empty<VoskAlternative>();
+
+            // Alternatives contain nested "result":[{...}] arrays, so a simple '{'
+            // count would overcount. Use a List and walk depth-1 objects instead.
+            var alternatives = new System.Collections.Generic.List<VoskAlternative>();
+            int pos = arrayStart + 1;
+
+            while (pos < arrayEnd)
+            {
+                int objStart = json.IndexOf('{', pos);
+                if (objStart < 0 || objStart >= arrayEnd) break;
+
+                int objEnd = FindMatchingDelimiter(json, objStart, '{', '}');
+                if (objEnd < 0 || objEnd > arrayEnd) break;
+
+                string text = ParseStringValue(json, objStart, objEnd, "\"text\"");
+                float confidence = ParseFloatValue(json, objStart, objEnd, "\"confidence\"");
+                var words = ParseWordsInRange(json, objStart, objEnd);
+
+                alternatives.Add(new VoskAlternative(text, confidence, words));
+                pos = objEnd + 1;
+            }
+
+            return alternatives.Count > 0
+                ? alternatives.ToArray()
+                : Array.Empty<VoskAlternative>();
+        }
+
+        static int FindMatchingDelimiter(string json, int openPos, char open, char close)
+        {
+            int depth = 1;
+            for (int i = openPos + 1; i < json.Length; i++)
+            {
+                if (json[i] == open) depth++;
+                else if (json[i] == close) { depth--; if (depth == 0) return i; }
+            }
+            return -1;
         }
 
         static float ParseFloatValue(string json, int start, int end, string key)

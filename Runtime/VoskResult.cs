@@ -1,3 +1,5 @@
+using System;
+
 namespace VoskXR
 {
     /// <summary>
@@ -30,7 +32,38 @@ namespace VoskXR
     }
 
     /// <summary>
-    /// A complete recognition result containing the full text and per-word confidence data.
+    /// One recognition hypothesis from VOSK's n-best list.
+    /// When <see cref="VoskSpeechRecogniser.maxAlternatives"/> is &gt; 0,
+    /// each final result contains multiple alternatives ranked by confidence.
+    /// </summary>
+    public readonly struct VoskAlternative
+    {
+        /// <summary>The recognised text for this hypothesis.</summary>
+        public readonly string Text;
+
+        /// <summary>
+        /// Acoustic model score. Higher values indicate a better match.
+        /// Only meaningful for comparing alternatives within the same result;
+        /// the scale varies between models.
+        /// </summary>
+        public readonly float Confidence;
+
+        /// <summary>Per-word confidence and timing for this hypothesis. May be empty.</summary>
+        public readonly VoskWord[] Words;
+
+        public VoskAlternative(string text, float confidence, VoskWord[] words)
+        {
+            Text = text;
+            Confidence = confidence;
+            Words = words;
+        }
+
+        public override string ToString() => $"{Text} (score {Confidence:F1})";
+    }
+
+    /// <summary>
+    /// A complete recognition result containing the full text, per-word confidence data,
+    /// and alternative hypotheses when n-best is enabled.
     /// </summary>
     public readonly struct VoskResult
     {
@@ -38,14 +71,22 @@ namespace VoskXR
         public readonly string Text;
 
         /// <summary>
-        /// Per-word confidence, timing, and text. Empty when no words were recognised.
+        /// Per-word confidence, timing, and text for the best hypothesis.
+        /// Empty when no words were recognised.
         /// </summary>
         public readonly VoskWord[] Words;
 
-        public VoskResult(string text, VoskWord[] words)
+        /// <summary>
+        /// Alternative recognition hypotheses, ranked best-first.
+        /// Empty when <see cref="VoskSpeechRecogniser.maxAlternatives"/> is 0 (the default).
+        /// </summary>
+        public readonly VoskAlternative[] Alternatives;
+
+        public VoskResult(string text, VoskWord[] words, VoskAlternative[] alternatives)
         {
             Text = text;
             Words = words;
+            Alternatives = alternatives;
         }
     }
 }

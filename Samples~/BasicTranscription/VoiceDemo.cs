@@ -47,9 +47,20 @@ public class VoiceDemo : MonoBehaviour
 
     void OnResult(VoskResult result)
     {
-        foreach (var word in result.Words)
-            Debug.Log($"[VoiceDemo]   \"{word.Text}\" conf={word.Confidence:F2} " +
-                      $"({word.StartTime:F2}s – {word.EndTime:F2}s)");
+        if (result.Alternatives.Length > 0)
+        {
+            for (int i = 0; i < result.Alternatives.Length; i++)
+            {
+                var alt = result.Alternatives[i];
+                Debug.Log($"[VoiceDemo] Alt {i}: \"{alt.Text}\" score={alt.Confidence:F1}");
+            }
+        }
+        else
+        {
+            foreach (var word in result.Words)
+                Debug.Log($"[VoiceDemo]   \"{word.Text}\" conf={word.Confidence:F2} " +
+                          $"({word.StartTime:F2}s – {word.EndTime:F2}s)");
+        }
     }
 
     void OnError(VoskBridgeErrorCode code, string message)

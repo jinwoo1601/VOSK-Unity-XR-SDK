@@ -140,7 +140,7 @@ static void recognition_loop() {
 extern "C" {
 
 int vosk_bridge_init(const char* model_path, float sample_rate,
-                     float mic_gain_target_db) {
+                     float mic_gain_target_db, int max_alternatives) {
     g_last_error.clear();
 
     if (!model_path) {
@@ -173,13 +173,16 @@ int vosk_bridge_init(const char* model_path, float sample_rate,
     // Include per-word confidence and timing in final results
     vosk_recognizer_set_words(g_recognizer, 1);
 
+    if (max_alternatives > 0)
+        vosk_recognizer_set_max_alternatives(g_recognizer, max_alternatives);
+
     g_agc.Configure(mic_gain_target_db, g_sample_rate);
 
     reset_pipeline();
 
     g_initialised.store(true, std::memory_order_release);
-    LOGI("Bridge initialised: model=%s, sample_rate=%.0f, agc_target=%.1f dB",
-         model_path, sample_rate, mic_gain_target_db);
+    LOGI("Bridge initialised: model=%s, sample_rate=%.0f, agc_target=%.1f dB, max_alts=%d",
+         model_path, sample_rate, mic_gain_target_db, max_alternatives);
     return VOSK_BRIDGE_OK;
 }
 

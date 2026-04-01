@@ -11,7 +11,7 @@ namespace VoskXR.Native
 
         [DllImport(LibraryName)] [Preserve]
         internal static extern int vosk_bridge_init(string modelPath, float sampleRate,
-            float micGainTargetDb);
+            float micGainTargetDb, int maxAlternatives);
 
         [DllImport(LibraryName)] [Preserve]
         internal static extern void vosk_bridge_destroy();
