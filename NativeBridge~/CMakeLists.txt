@@ -48,7 +48,12 @@ target_link_libraries(vosk-bridge PRIVATE
     log
 )
 
-# Catch missing symbols at link time
+# Hide internal symbols; only extern "C" exports remain visible.
+# LTO via -flto=thin (NDK uses lld, not gold, so CMake's IPO property won't work).
 set_target_properties(vosk-bridge PROPERTIES
-    LINK_FLAGS "-Wl,--no-undefined"
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    LINK_FLAGS "-Wl,--no-undefined -Wl,--strip-all"
 )
+target_compile_options(vosk-bridge PRIVATE $<$<CONFIG:Release>:-flto=thin>)
+target_link_options(vosk-bridge PRIVATE $<$<CONFIG:Release>:-flto=thin>)
