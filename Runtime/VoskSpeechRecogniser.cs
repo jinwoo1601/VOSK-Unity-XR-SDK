@@ -221,6 +221,20 @@ namespace VoskXR
             }
         }
 
+        public void SetGrammar(string grammarJson)
+        {
+            if (!_bridgeAvailable) return;
+            try
+            {
+                int result = BridgeNative.vosk_bridge_set_grammar(grammarJson);
+                CheckBridgeError(result, "SetGrammar");
+            }
+            catch (DllNotFoundException)
+            {
+                MarkBridgeUnavailable();
+            }
+        }
+
         void Update()
         {
             if (!_bridgeAvailable || !_isRecognising)
