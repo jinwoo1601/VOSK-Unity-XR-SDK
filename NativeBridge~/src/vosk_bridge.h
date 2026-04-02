@@ -28,6 +28,7 @@ VOSK_BRIDGE_EXPORT void vosk_bridge_destroy();
 VOSK_BRIDGE_EXPORT int  vosk_bridge_start();
 VOSK_BRIDGE_EXPORT void vosk_bridge_stop();
 VOSK_BRIDGE_EXPORT int  vosk_bridge_reset();
+VOSK_BRIDGE_EXPORT int  vosk_bridge_set_grammar(const char* grammar_json);
 
 // Results (polled from C# Update loop)
 VOSK_BRIDGE_EXPORT int         vosk_bridge_has_result();

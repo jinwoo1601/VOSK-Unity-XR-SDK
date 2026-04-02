@@ -28,6 +28,7 @@ static Agc               g_agc;
 static std::thread       g_recognition_thread;
 static std::atomic<bool> g_running{false};
 static std::atomic<bool> g_initialised{false};
+static int               g_max_alternatives = 0;
 
 static std::string       g_last_error;
 static std::string       g_last_partial;
@@ -173,6 +174,7 @@ int vosk_bridge_init(const char* model_path, float sample_rate,
     // Include per-word confidence and timing in final results
     vosk_recognizer_set_words(g_recognizer, 1);
 
+    g_max_alternatives = max_alternatives;
     if (max_alternatives > 0)
         vosk_recognizer_set_max_alternatives(g_recognizer, max_alternatives);
 
@@ -265,6 +267,43 @@ int vosk_bridge_reset() {
             return restart;
     }
 
+    return VOSK_BRIDGE_OK;
+}
+
+int vosk_bridge_set_grammar(const char* grammar_json) {
+    g_last_error.clear();
+
+    if (!g_initialised.load(std::memory_order_acquire))
+        return VOSK_BRIDGE_ERR_NOT_INITIALISED;
+
+    if (g_running.load(std::memory_order_acquire))
+        return VOSK_BRIDGE_ERR_ALREADY_RUNNING;
+
+    // Free existing recognizer
+    if (g_recognizer) {
+        vosk_recognizer_free(g_recognizer);
+        g_recognizer = nullptr;
+    }
+
+    // Create new recognizer with or without grammar
+    if (grammar_json && grammar_json[0] != '\0') {
+        g_recognizer = vosk_recognizer_new_grm(g_model, g_sample_rate, grammar_json);
+        // Grammar mode + alternatives produces unreliable results, skip set_max_alternatives
+    } else {
+        g_recognizer = vosk_recognizer_new(g_model, g_sample_rate);
+        if (g_recognizer && g_max_alternatives > 0)
+            vosk_recognizer_set_max_alternatives(g_recognizer, g_max_alternatives);
+    }
+
+    if (!g_recognizer) {
+        g_last_error = "vosk_recognizer_new failed during set_grammar";
+        LOGE("%s", g_last_error.c_str());
+        return VOSK_BRIDGE_ERR_MODEL_LOAD_FAILED;
+    }
+
+    vosk_recognizer_set_words(g_recognizer, 1);
+
+    LOGI("Grammar %s", (grammar_json && grammar_json[0] != '\0') ? "applied" : "cleared");
     return VOSK_BRIDGE_OK;
 }
 

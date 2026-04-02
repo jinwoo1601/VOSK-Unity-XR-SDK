@@ -37,6 +37,9 @@ namespace VoskXR.Native
         [DllImport(LibraryName)] [Preserve]
         internal static extern int vosk_bridge_get_error(byte[] buf, int bufSize);
 
+        [DllImport(LibraryName)] [Preserve]
+        internal static extern int vosk_bridge_set_grammar(string grammarJson);
+
         internal static string MarshalResult(IntPtr ptr)
         {
             if (ptr == IntPtr.Zero)
