@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-04-02
+
+### Added
+
+- Scored matching replaces binary pass/fail — normalized 0.0–1.0 score per match.
+- Sliding start position — tolerates preamble, hesitations, and false starts.
+- Optional literal tokens (`?a`, `?to`, `?the`) in patterns — consumed if present, skipped if absent.
+- Slot value aliases (`"jackals" → "jackal"`, `"a" → "one"`) on `VoskSlotDefinition`.
+- `minConfidence` and `minScore` threshold fields on `VoskCommandRecogniser` to reject low-quality matches.
+- `Score` field on `VoskCommand` for match quality inspection.
+- Definition-time validation warnings for uppercase, punctuation, and single-character slot values.
+- `GetSlot()` debug warning when called with unregistered slot name.
+- Alias and optional literal words included in generated grammar JSON.
+
+### Changed
+
+- `VoskCommandParser` now uses scored matching with sliding start instead of binary greedy matching.
+- `VoskCommand` constructor takes additional `score` and optional `registeredSlotNames` parameters.
+
 ## [0.4.0] - 2026-04-02
 
 ### Added

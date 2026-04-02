@@ -36,19 +36,29 @@ namespace VoskXR.Commands
         /// <summary>Minimum word confidence across matched tokens. 0 when word data is unavailable.</summary>
         public readonly float Confidence;
 
+        /// <summary>Match quality score (0.0–1.0). Higher is better.</summary>
+        public readonly float Score;
+
         /// <summary>The original VOSK output text.</summary>
         public readonly string RawText;
 
-        public VoskCommand(string intent, VoskSlotMatch[] slots, float confidence, string rawText)
+        /// <summary>Names of all registered slots, used for debug validation in GetSlot. Null in release builds.</summary>
+        readonly string[] _registeredSlotNames;
+
+        public VoskCommand(string intent, VoskSlotMatch[] slots, float confidence, float score,
+            string rawText, string[] registeredSlotNames = null)
         {
             Intent = intent;
             Slots = slots ?? Array.Empty<VoskSlotMatch>();
             Confidence = confidence;
+            Score = score;
             RawText = rawText;
+            _registeredSlotNames = registeredSlotNames;
         }
 
         /// <summary>
         /// Returns the value of the named slot, or <see cref="string.Empty"/> if the slot was not matched.
+        /// In debug builds, logs a warning if the name doesn't match any registered slot.
         /// </summary>
         public string GetSlot(string name)
         {
@@ -57,6 +67,27 @@ namespace VoskXR.Commands
                 if (string.Equals(Slots[i].Name, name, StringComparison.Ordinal))
                     return Slots[i].Value;
             }
+
+#if DEBUG
+            if (_registeredSlotNames != null)
+            {
+                bool found = false;
+                for (int i = 0; i < _registeredSlotNames.Length; i++)
+                {
+                    if (string.Equals(_registeredSlotNames[i], name, StringComparison.Ordinal))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    UnityEngine.Debug.LogWarning(
+                        $"[VoskCommand] GetSlot(\"{name}\") called but no slot with that name is registered. " +
+                        "Check for typos in the slot name.");
+                }
+            }
+#endif
 
             return string.Empty;
         }
@@ -75,7 +106,7 @@ namespace VoskXR.Commands
             return false;
         }
 
-        public override string ToString() => $"{Intent} ({Slots.Length} slots)";
+        public override string ToString() => $"{Intent} ({Slots.Length} slots, score={Score:F2})";
     }
 
     /// <summary>

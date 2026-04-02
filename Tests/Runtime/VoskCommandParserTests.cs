@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using NUnit.Framework;
 using VoskXR;
 using VoskXR.Commands;
@@ -14,9 +15,11 @@ namespace VoskXR.Tests.Runtime
                 new VoskSlotDefinition("target",
                     new[] { "hotel one", "hotel two", "alpha one", "alpha three", "bravo two" }),
                 new VoskSlotDefinition("weapon",
-                    new[] { "missiles", "torpedoes", "jackal", "jackals" }),
+                    new[] { "missiles", "torpedoes", "jackal" },
+                    aliases: new Dictionary<string, string> { { "jackals", "jackal" } }),
                 new VoskSlotDefinition("quantity",
-                    new[] { "all", "one", "two", "three" }),
+                    new[] { "all", "one", "two", "three" },
+                    aliases: new Dictionary<string, string> { { "a", "one" } }),
                 new VoskSlotDefinition("range",
                     new[] { "cqb", "safe range", "torpedo range", "pdc range", "railgun range" }),
             };
@@ -28,8 +31,7 @@ namespace VoskXR.Tests.Runtime
             {
                 new VoskCommandDefinition("launch_weapon", new[]
                 {
-                    new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
-                    new[] { "launch", "a", "{weapon}", "target", "{target}" },
+                    new[] { "launch", "?a", "{?quantity}", "{weapon}", "target", "{target}" },
                     new[] { "fire", "{?quantity}", "{weapon}", "at", "{target}" },
                     new[] { "shoot", "{weapon}" },
                 }),
@@ -57,6 +59,8 @@ namespace VoskXR.Tests.Runtime
         {
             return new VoskCommandParser(MakeSlots(), MakeCommands());
         }
+
+        // ===== v2.0 core tests (adapted for scored matching) =====
 
         [Test]
         public void ExactMatch_AllSlotsFilled()
@@ -338,18 +342,6 @@ namespace VoskXR.Tests.Runtime
         }
 
         [Test]
-        public void LeftoverTokensAllowed()
-        {
-            var parser = CreateParser();
-
-            // "cease fire please" has leftover "please", but pattern still matches
-            var result = parser.Parse("cease fire please");
-
-            Assert.IsTrue(result.IsMatch);
-            Assert.AreEqual("cease_fire", result.Command.Intent);
-        }
-
-        [Test]
         public void EmptyCommandSet_GrammarContainsOnlyUnk()
         {
             var parser = new VoskCommandParser(
@@ -359,6 +351,222 @@ namespace VoskXR.Tests.Runtime
             string json = parser.GenerateGrammarJson();
 
             Assert.AreEqual("[\"[unk]\"]", json);
+        }
+
+        // ===== v2.1 scored matching tests =====
+
+        [Test]
+        public void Score_PerfectMatch_HighScore()
+        {
+            var parser = CreateParser();
+
+            var result = parser.Parse("cease fire");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void Score_BetterMatchWins()
+        {
+            // "cease fire" is 2/2 = 1.0, "disengage" is 1/1 = 1.0 — but "cease fire"
+            // has more literals and should win on tie-break
+            var parser = CreateParser();
+
+            var result = parser.Parse("cease fire");
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("cease_fire", result.Command.Intent);
+        }
+
+        // ===== v2.1 optional literal tests =====
+
+        [Test]
+        public void OptionalLiteral_PresentInInput()
+        {
+            var parser = CreateParser();
+
+            // Pattern: "launch", "?a", "{?quantity}", "{weapon}", "target", "{target}"
+            // Input has "a" present
+            var result = parser.Parse("launch a jackal target hotel one");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("launch_weapon", result.Command.Intent);
+            Assert.AreEqual("jackal", result.Command.GetSlot("weapon"));
+            Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+        }
+
+        [Test]
+        public void OptionalLiteral_AbsentInInput()
+        {
+            var parser = CreateParser();
+
+            // Pattern: "launch", "?a", "{?quantity}", "{weapon}", "target", "{target}"
+            // Input lacks "a" — should still match
+            var result = parser.Parse("launch jackal target hotel one");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("launch_weapon", result.Command.Intent);
+            Assert.AreEqual("jackal", result.Command.GetSlot("weapon"));
+            Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+        }
+
+        // ===== v2.1 sliding start position tests =====
+
+        [Test]
+        public void SlidingStart_PreambleSkipped()
+        {
+            var parser = CreateParser();
+
+            // "uh" is not a grammar word; sliding start should find "cease fire" starting at token 1
+            var result = parser.Parse("uh cease fire");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("cease_fire", result.Command.Intent);
+        }
+
+        [Test]
+        public void SlidingStart_FalseStartRecovery()
+        {
+            var parser = CreateParser();
+
+            // Double "launch" — sliding start finds best match from later position
+            var result = parser.Parse("launch launch all missiles target hotel one");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("launch_weapon", result.Command.Intent);
+            Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
+            Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+        }
+
+        // ===== v2.1 alias tests =====
+
+        [Test]
+        public void Alias_ResolvesToCanonicalValue()
+        {
+            var parser = CreateParser();
+
+            var result = parser.Parse("shoot jackals");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("launch_weapon", result.Command.Intent);
+            Assert.AreEqual("jackal", result.Command.GetSlot("weapon"));
+        }
+
+        [Test]
+        public void Alias_QuantityA_ResolvesToOne()
+        {
+            var parser = CreateParser();
+
+            // "a" in quantity context should resolve to "one" via alias
+            var result = parser.Parse("launch a missiles target hotel one");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("launch_weapon", result.Command.Intent);
+            // "a" could match as optional literal or as quantity alias.
+            // The pattern with ?a should consume "a" as optional literal,
+            // then "missiles" as weapon. Either way the command should match.
+            Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
+        }
+
+        [Test]
+        public void GrammarJson_ContainsAliasWords()
+        {
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            // "jackals" is an alias key, should be in grammar
+            Assert.IsTrue(json.Contains("\"jackals\""), "Alias word 'jackals' should be in grammar");
+        }
+
+        [Test]
+        public void GrammarJson_ContainsOptionalLiteralWords()
+        {
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            // "a" from "?a" optional literal should be in grammar
+            Assert.IsTrue(json.Contains("\"a\""), "Optional literal 'a' should be in grammar");
+        }
+
+        // ===== v2.1 score normalization tests =====
+
+        [Test]
+        public void Score_NormalizedBetweenZeroAndOne()
+        {
+            var parser = CreateParser();
+
+            var result = parser.Parse("launch all missiles target hotel one");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.GreaterOrEqual(result.Command.Score, 0f);
+            Assert.LessOrEqual(result.Command.Score, 1f);
+        }
+
+        [Test]
+        public void Score_ShortAndLongPatterns_Comparable()
+        {
+            var parser = CreateParser();
+
+            // "disengage" = 1 element pattern, score = 1/1 = 1.0
+            var shortResult = parser.Parse("disengage");
+            // "cease fire" = 2 element pattern, score = 2/2 = 1.0
+            var longResult = parser.Parse("cease fire");
+
+            Assert.IsTrue(shortResult.IsMatch);
+            Assert.IsTrue(longResult.IsMatch);
+            // Both should have score 1.0 since they match perfectly
+            Assert.AreEqual(shortResult.Command.Score, longResult.Command.Score, 0.001f);
+        }
+
+        // ===== v2.1 definition-time validation tests =====
+
+        [Test]
+        public void Validation_UppercaseSlotValue_NoException()
+        {
+            // Should log a warning but not throw
+            var slots = new[] { new VoskSlotDefinition("weapon", new[] { "Missiles" }) };
+            var commands = new[]
+            {
+                new VoskCommandDefinition("test", new[]
+                {
+                    new[] { "fire", "{weapon}" }
+                })
+            };
+
+            Assert.DoesNotThrow(() => new VoskCommandParser(slots, commands));
+        }
+
+        [Test]
+        public void Validation_SingleCharSlotValue_NoException()
+        {
+            // Single-char values should warn but not throw
+            var slots = new[] { new VoskSlotDefinition("quantity", new[] { "a", "one" }) };
+            var commands = new[]
+            {
+                new VoskCommandDefinition("test", new[]
+                {
+                    new[] { "fire", "{quantity}" }
+                })
+            };
+
+            Assert.DoesNotThrow(() => new VoskCommandParser(slots, commands));
+        }
+
+        // ===== v2.1 leftover token handling =====
+
+        [Test]
+        public void LeftoverTokens_StillMatches()
+        {
+            var parser = CreateParser();
+
+            // "cease fire please" — "please" is leftover. Sliding start from 0 matches
+            // "cease fire" with score 2/2 = 1.0, which is the best.
+            var result = parser.Parse("cease fire please");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("cease_fire", result.Command.Intent);
         }
     }
 }

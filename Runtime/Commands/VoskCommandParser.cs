@@ -5,7 +5,7 @@ namespace VoskXR.Commands
 {
     /// <summary>
     /// Pure C# command parser. Matches tokenized VOSK output against registered
-    /// command patterns using greedy left-to-right matching.
+    /// command patterns using scored matching with sliding start position.
     /// </summary>
     internal class VoskCommandParser
     {
@@ -15,14 +15,18 @@ namespace VoskXR.Commands
         readonly VoskCommandDefinition[] _commands;
 
         // Per-slot lookup: first word -> list of (fullValue, wordCount), sorted longest first.
+        // Includes both canonical values and alias entries.
         readonly Dictionary<string, List<SlotValueEntry>>[] _slotLookups;
 
         // Slot name -> index into _slots
         readonly Dictionary<string, int> _slotIndex;
 
+        // Registered slot names for debug validation
+        readonly string[] _slotNames;
+
         struct SlotValueEntry
         {
-            public string FullValue;
+            public string CanonicalValue;
             public string[] Words;
             public int WordCount;
         }
@@ -37,26 +41,28 @@ namespace VoskXR.Commands
 
             // Build slot name -> index mapping
             _slotIndex = new Dictionary<string, int>(slots.Length, StringComparer.Ordinal);
+            _slotNames = new string[slots.Length];
             for (int i = 0; i < slots.Length; i++)
+            {
                 _slotIndex[slots[i].Name] = i;
+                _slotNames[i] = slots[i].Name;
+            }
 
-            // Build per-slot first-word lookup
+            // Build per-slot first-word lookup (canonical values + aliases)
             _slotLookups = new Dictionary<string, List<SlotValueEntry>>[slots.Length];
             for (int i = 0; i < slots.Length; i++)
             {
                 var lookup = new Dictionary<string, List<SlotValueEntry>>(StringComparer.Ordinal);
+
+                // Add canonical values
                 foreach (string value in slots[i].Values)
+                    AddSlotEntry(lookup, value, value);
+
+                // Add aliases (map to canonical value)
+                if (slots[i].Aliases != null)
                 {
-                    string[] words = value.Split(' ');
-                    string firstWord = words[0];
-
-                    if (!lookup.TryGetValue(firstWord, out var list))
-                    {
-                        list = new List<SlotValueEntry>();
-                        lookup[firstWord] = list;
-                    }
-
-                    list.Add(new SlotValueEntry { FullValue = value, Words = words, WordCount = words.Length });
+                    foreach (var kvp in slots[i].Aliases)
+                        AddSlotEntry(lookup, kvp.Key, kvp.Value);
                 }
 
                 // Sort each list by word count descending (longest match first)
@@ -66,7 +72,7 @@ namespace VoskXR.Commands
                 _slotLookups[i] = lookup;
             }
 
-            // Validate all slot references in patterns
+            // Validate slot references and run definition-time validation
             foreach (var command in commands)
             {
                 foreach (var pattern in command.Patterns)
@@ -82,10 +88,68 @@ namespace VoskXR.Commands
                     }
                 }
             }
+
+            // Definition-time validation warnings
+            RunValidationWarnings(slots);
+        }
+
+        static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
+            string surfaceForm, string canonicalValue)
+        {
+            string[] words = surfaceForm.Split(' ');
+            string firstWord = words[0];
+
+            if (!lookup.TryGetValue(firstWord, out var list))
+            {
+                list = new List<SlotValueEntry>();
+                lookup[firstWord] = list;
+            }
+
+            list.Add(new SlotValueEntry
+            {
+                CanonicalValue = canonicalValue,
+                Words = words,
+                WordCount = words.Length
+            });
+        }
+
+        static void RunValidationWarnings(VoskSlotDefinition[] slots)
+        {
+            foreach (var slot in slots)
+            {
+                foreach (string value in slot.Values)
+                {
+                    if (value != value.ToLowerInvariant())
+                    {
+                        UnityEngine.Debug.LogWarning(
+                            $"[VoskCommandParser] Slot '{slot.Name}' value \"{value}\" contains uppercase characters. " +
+                            "VOSK outputs lowercase — this value will never match.");
+                    }
+
+                    foreach (char c in value)
+                    {
+                        if (char.IsPunctuation(c))
+                        {
+                            UnityEngine.Debug.LogWarning(
+                                $"[VoskCommandParser] Slot '{slot.Name}' value \"{value}\" contains punctuation. " +
+                                "VOSK strips punctuation — this may not match as expected.");
+                            break;
+                        }
+                    }
+
+                    if (value.Length == 1)
+                    {
+                        UnityEngine.Debug.LogWarning(
+                            $"[VoskCommandParser] Slot '{slot.Name}' has single-character value \"{value}\". " +
+                            "Consider using an alias instead (e.g. \"a\" → \"one\").");
+                    }
+                }
+            }
         }
 
         /// <summary>
-        /// Parses input text against all registered command patterns.
+        /// Parses input text against all registered command patterns using scored matching
+        /// with sliding start position.
         /// </summary>
         public VoskCommandResult Parse(string text, VoskWord[] words)
         {
@@ -107,7 +171,7 @@ namespace VoskXR.Commands
                 }
             }
 
-            int bestScore = int.MinValue;
+            float bestScore = float.MinValue;
             int bestLiteralCount = -1;
             int bestCommandIdx = -1;
             List<VoskSlotMatch> bestSlots = null;
@@ -117,28 +181,30 @@ namespace VoskXR.Commands
                 var patterns = _commands[ci].Patterns;
                 for (int pi = 0; pi < patterns.Length; pi++)
                 {
-                    var matchResult = TryMatch(tokens, patterns[pi]);
-                    if (!matchResult.Success)
-                        continue;
-
-                    int score = matchResult.Consumed - (tokens.Length - matchResult.Consumed);
-                    int literalCount = matchResult.LiteralCount;
-
-                    if (score > bestScore ||
-                        (score == bestScore && literalCount > bestLiteralCount))
+                    // Sliding start: try matching from every token position
+                    for (int startIdx = 0; startIdx < tokens.Length; startIdx++)
                     {
-                        bestScore = score;
-                        bestLiteralCount = literalCount;
-                        bestCommandIdx = ci;
-                        bestSlots = matchResult.Slots;
+                        // Skip [unk] tokens as start positions
+                        if (tokens[startIdx] == "[unk]")
+                            continue;
+
+                        var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
+
+                        if (matchResult.Score > bestScore ||
+                            (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount))
+                        {
+                            bestScore = matchResult.Score;
+                            bestLiteralCount = matchResult.LiteralCount;
+                            bestCommandIdx = ci;
+                            bestSlots = matchResult.Slots;
+                        }
                     }
                 }
             }
 
-            if (bestCommandIdx < 0)
+            if (bestCommandIdx < 0 || bestScore <= 0f)
                 return new VoskCommandResult(text);
 
-            // Compute confidence: minimum word confidence across all matched tokens
             float confidence = ComputeConfidence(tokens, bestSlots, wordConfidence);
 
             var slotsArray = bestSlots != null && bestSlots.Count > 0
@@ -149,7 +215,9 @@ namespace VoskXR.Commands
                 _commands[bestCommandIdx].Intent,
                 slotsArray,
                 confidence,
-                text);
+                bestScore,
+                text,
+                _slotNames);
 
             return new VoskCommandResult(command);
         }
@@ -164,27 +232,30 @@ namespace VoskXR.Commands
 
         /// <summary>
         /// Generates a VOSK grammar JSON array containing all words from pattern
-        /// literals and slot values, plus [unk] for off-vocabulary fallback.
+        /// literals, slot values, aliases, and optional literals, plus [unk].
         /// </summary>
         public string GenerateGrammarJson()
         {
             var uniqueWords = new HashSet<string>(StringComparer.Ordinal);
 
-            // Collect words from pattern literals
+            // Collect words from pattern literals (including optional literals stripped of ?)
             foreach (var command in _commands)
             {
                 foreach (var pattern in command.Patterns)
                 {
                     foreach (string element in pattern)
                     {
-                        if (ExtractSlotName(element) == null)
+                        if (ExtractSlotName(element) != null)
+                            continue;
+
+                        string word = element;
+                        if (IsOptionalLiteral(element))
+                            word = element.Substring(1);
+
+                        foreach (string w in word.Split(' '))
                         {
-                            // Literal token — could be multi-word in theory, split to be safe
-                            foreach (string word in element.Split(' '))
-                            {
-                                if (word.Length > 0)
-                                    uniqueWords.Add(word);
-                            }
+                            if (w.Length > 0)
+                                uniqueWords.Add(w);
                         }
                     }
                 }
@@ -199,6 +270,19 @@ namespace VoskXR.Commands
                     {
                         if (word.Length > 0)
                             uniqueWords.Add(word);
+                    }
+                }
+
+                // Collect words from alias keys
+                if (slot.Aliases != null)
+                {
+                    foreach (var key in slot.Aliases.Keys)
+                    {
+                        foreach (string word in key.Split(' '))
+                        {
+                            if (word.Length > 0)
+                                uniqueWords.Add(word);
+                        }
                     }
                 }
             }
@@ -226,15 +310,20 @@ namespace VoskXR.Commands
 
         struct MatchResult
         {
-            public bool Success;
-            public int Consumed;
+            public float Score;
             public int LiteralCount;
             public List<VoskSlotMatch> Slots;
         }
 
-        MatchResult TryMatch(string[] tokens, string[] pattern)
+        /// <summary>
+        /// Scored matching from a given start position in the token array.
+        /// Returns normalized score (0.0–1.0) based on matched elements.
+        /// </summary>
+        MatchResult TryMatchScored(string[] tokens, int startIdx, string[] pattern)
         {
-            int tokenIdx = 0;
+            int tokenIdx = startIdx;
+            float rawScore = 0f;
+            int patternLength = pattern.Length;
             int literalCount = 0;
             List<VoskSlotMatch> slots = null;
 
@@ -242,18 +331,17 @@ namespace VoskXR.Commands
             {
                 string element = pattern[patIdx];
 
-                // Skip [unk] tokens in input before processing each pattern element
+                // Skip [unk] tokens in input
                 while (tokenIdx < tokens.Length && tokens[tokenIdx] == "[unk]")
                     tokenIdx++;
 
                 string slotName = ExtractSlotName(element);
-                bool isOptional = IsOptionalSlot(element);
-
                 if (slotName != null)
                 {
-                    // Slot reference
+                    bool isOptional = IsOptionalSlot(element);
+
                     if (!_slotIndex.TryGetValue(slotName, out int slotIdx))
-                        return default; // Should not happen (validated at construction)
+                        return default;
 
                     string matchedValue = TryMatchSlot(tokens, tokenIdx, slotIdx, out int consumed);
                     if (matchedValue != null)
@@ -262,31 +350,51 @@ namespace VoskXR.Commands
                             slots = new List<VoskSlotMatch>();
                         slots.Add(new VoskSlotMatch(slotName, matchedValue));
                         tokenIdx += consumed;
+                        rawScore += 1.0f;
                     }
-                    else if (!isOptional)
+                    else if (isOptional)
                     {
-                        return default; // Required slot failed
+                        // Optional slot not matched — no penalty
                     }
-                    // Optional slot not matched — skip pattern element, don't advance token
+                    else
+                    {
+                        rawScore -= 1.0f; // Heavy penalty for missing required slot
+                    }
+                }
+                else if (IsOptionalLiteral(element))
+                {
+                    string literal = element.Substring(1);
+                    if (tokenIdx < tokens.Length &&
+                        string.Equals(tokens[tokenIdx], literal, StringComparison.Ordinal))
+                    {
+                        rawScore += 0.5f;
+                        literalCount++;
+                        tokenIdx++;
+                    }
+                    // Absent optional literal — score 0, skip
                 }
                 else
                 {
-                    // Literal token (top-of-loop already skipped [unk] tokens)
-                    if (tokenIdx >= tokens.Length)
-                        return default;
-
-                    if (!string.Equals(tokens[tokenIdx], element, StringComparison.Ordinal))
-                        return default;
-
-                    literalCount++;
-                    tokenIdx++;
+                    // Required literal
+                    if (tokenIdx < tokens.Length &&
+                        string.Equals(tokens[tokenIdx], element, StringComparison.Ordinal))
+                    {
+                        rawScore += 1.0f;
+                        literalCount++;
+                        tokenIdx++;
+                    }
+                    else
+                    {
+                        rawScore -= 0.5f;
+                    }
                 }
             }
 
+            float normalizedScore = patternLength > 0 ? rawScore / patternLength : 0f;
+
             return new MatchResult
             {
-                Success = true,
-                Consumed = tokenIdx,
+                Score = normalizedScore,
                 LiteralCount = literalCount,
                 Slots = slots
             };
@@ -319,8 +427,6 @@ namespace VoskXR.Commands
                 string[] valueWords = entry.Words;
                 for (int w = 0; w < entry.WordCount; w++)
                 {
-                    // Skip [unk] tokens in the middle — not applicable for slot matching
-                    // (slot values must match contiguously)
                     if (!string.Equals(tokens[startIdx + w], valueWords[w], StringComparison.Ordinal))
                     {
                         match = false;
@@ -331,7 +437,7 @@ namespace VoskXR.Commands
                 if (match)
                 {
                     consumed = entry.WordCount;
-                    return entry.FullValue;
+                    return entry.CanonicalValue;
                 }
             }
 
@@ -365,7 +471,7 @@ namespace VoskXR.Commands
 
         /// <summary>
         /// Extracts the slot name from a pattern element. Returns null for literals.
-        /// Handles both {slot} (required) and {?slot} (optional).
+        /// Handles {slot} (required), {?slot} (optional), and skips ?literal.
         /// </summary>
         static string ExtractSlotName(string element)
         {
@@ -386,6 +492,15 @@ namespace VoskXR.Commands
         {
             return element.Length >= 4 && element[0] == '{' && element[1] == '?'
                 && element[element.Length - 1] == '}';
+        }
+
+        /// <summary>
+        /// Returns true if the pattern element is an optional literal (?word).
+        /// Distinguished from {?slot} by not starting with '{'.
+        /// </summary>
+        static bool IsOptionalLiteral(string element)
+        {
+            return element.Length >= 2 && element[0] == '?' && element[1] != '{';
         }
     }
 }
