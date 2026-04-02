@@ -9,20 +9,28 @@ namespace VoskXR.Commands
     /// </summary>
     internal class VoskCommandParser
     {
+        const string UnkToken = "[unk]";
+
+        const float MatchScore = 1.0f;
+        const float OptionalLiteralScore = 0.5f;
+        const float RequiredSlotMissPenalty = -1.0f;
+        const float RequiredLiteralMissPenalty = -0.5f;
+
         static readonly char[] SplitSeparator = { ' ' };
 
         readonly VoskSlotDefinition[] _slots;
         readonly VoskCommandDefinition[] _commands;
 
         // Per-slot lookup: first word -> list of (fullValue, wordCount), sorted longest first.
-        // Includes both canonical values and alias entries.
         readonly Dictionary<string, List<SlotValueEntry>>[] _slotLookups;
 
         // Slot name -> index into _slots
         readonly Dictionary<string, int> _slotIndex;
 
-        // Registered slot names for debug validation
         readonly string[] _slotNames;
+
+        // Cached stripped forms of optional literals (pattern element -> literal without '?')
+        readonly Dictionary<string, string> _optionalLiteralCache;
 
         struct SlotValueEntry
         {
@@ -89,7 +97,20 @@ namespace VoskXR.Commands
                 }
             }
 
-            // Definition-time validation warnings
+            // Cache optional literal stripped forms
+            _optionalLiteralCache = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var command in commands)
+            {
+                foreach (var pattern in command.Patterns)
+                {
+                    foreach (string element in pattern)
+                    {
+                        if (IsOptionalLiteral(element) && !_optionalLiteralCache.ContainsKey(element))
+                            _optionalLiteralCache[element] = element.Substring(1);
+                    }
+                }
+            }
+
             RunValidationWarnings(slots);
         }
 
@@ -184,8 +205,7 @@ namespace VoskXR.Commands
                     // Sliding start: try matching from every token position
                     for (int startIdx = 0; startIdx < tokens.Length; startIdx++)
                     {
-                        // Skip [unk] tokens as start positions
-                        if (tokens[startIdx] == "[unk]")
+                        if (tokens[startIdx] == UnkToken)
                             continue;
 
                         var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
@@ -287,8 +307,7 @@ namespace VoskXR.Commands
                 }
             }
 
-            // Always include [unk]
-            uniqueWords.Add("[unk]");
+            uniqueWords.Add(UnkToken);
 
             // Build JSON array
             var sorted = new List<string>(uniqueWords);
@@ -331,8 +350,7 @@ namespace VoskXR.Commands
             {
                 string element = pattern[patIdx];
 
-                // Skip [unk] tokens in input
-                while (tokenIdx < tokens.Length && tokens[tokenIdx] == "[unk]")
+                while (tokenIdx < tokens.Length && tokens[tokenIdx] == UnkToken)
                     tokenIdx++;
 
                 string slotName = ExtractSlotName(element);
@@ -350,42 +368,35 @@ namespace VoskXR.Commands
                             slots = new List<VoskSlotMatch>();
                         slots.Add(new VoskSlotMatch(slotName, matchedValue));
                         tokenIdx += consumed;
-                        rawScore += 1.0f;
+                        rawScore += MatchScore;
                     }
-                    else if (isOptional)
+                    else if (!isOptional)
                     {
-                        // Optional slot not matched — no penalty
-                    }
-                    else
-                    {
-                        rawScore -= 1.0f; // Heavy penalty for missing required slot
+                        rawScore += RequiredSlotMissPenalty;
                     }
                 }
                 else if (IsOptionalLiteral(element))
                 {
-                    string literal = element.Substring(1);
                     if (tokenIdx < tokens.Length &&
-                        string.Equals(tokens[tokenIdx], literal, StringComparison.Ordinal))
+                        string.Equals(tokens[tokenIdx], _optionalLiteralCache[element], StringComparison.Ordinal))
                     {
-                        rawScore += 0.5f;
+                        rawScore += OptionalLiteralScore;
                         literalCount++;
                         tokenIdx++;
                     }
-                    // Absent optional literal — score 0, skip
                 }
                 else
                 {
-                    // Required literal
                     if (tokenIdx < tokens.Length &&
                         string.Equals(tokens[tokenIdx], element, StringComparison.Ordinal))
                     {
-                        rawScore += 1.0f;
+                        rawScore += MatchScore;
                         literalCount++;
                         tokenIdx++;
                     }
                     else
                     {
-                        rawScore -= 0.5f;
+                        rawScore += RequiredLiteralMissPenalty;
                     }
                 }
             }
@@ -404,8 +415,7 @@ namespace VoskXR.Commands
         {
             consumed = 0;
 
-            // Skip [unk] tokens
-            while (startIdx < tokens.Length && tokens[startIdx] == "[unk]")
+            while (startIdx < tokens.Length && tokens[startIdx] == UnkToken)
                 startIdx++;
 
             if (startIdx >= tokens.Length)
@@ -455,7 +465,7 @@ namespace VoskXR.Commands
 
             foreach (string token in tokens)
             {
-                if (token == "[unk]")
+                if (token == UnkToken)
                     continue;
 
                 if (wordConfidence.TryGetValue(token, out float conf))

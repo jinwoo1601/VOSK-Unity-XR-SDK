@@ -62,25 +62,23 @@ namespace VoskXR.Commands
         /// </summary>
         public string GetSlot(string name)
         {
-            for (int i = 0; i < Slots.Length; i++)
-            {
-                if (string.Equals(Slots[i].Name, name, StringComparison.Ordinal))
-                    return Slots[i].Value;
-            }
+            int idx = FindSlotIndex(name);
+            if (idx >= 0)
+                return Slots[idx].Value;
 
 #if DEBUG
             if (_registeredSlotNames != null)
             {
-                bool found = false;
+                bool registered = false;
                 for (int i = 0; i < _registeredSlotNames.Length; i++)
                 {
                     if (string.Equals(_registeredSlotNames[i], name, StringComparison.Ordinal))
                     {
-                        found = true;
+                        registered = true;
                         break;
                     }
                 }
-                if (!found)
+                if (!registered)
                 {
                     UnityEngine.Debug.LogWarning(
                         $"[VoskCommand] GetSlot(\"{name}\") called but no slot with that name is registered. " +
@@ -95,15 +93,16 @@ namespace VoskXR.Commands
         /// <summary>
         /// Returns true if the named slot was matched.
         /// </summary>
-        public bool HasSlot(string name)
+        public bool HasSlot(string name) => FindSlotIndex(name) >= 0;
+
+        int FindSlotIndex(string name)
         {
             for (int i = 0; i < Slots.Length; i++)
             {
                 if (string.Equals(Slots[i].Name, name, StringComparison.Ordinal))
-                    return true;
+                    return i;
             }
-
-            return false;
+            return -1;
         }
 
         public override string ToString() => $"{Intent} ({Slots.Length} slots, score={Score:F2})";

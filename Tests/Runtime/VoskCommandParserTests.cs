@@ -60,8 +60,6 @@ namespace VoskXR.Tests.Runtime
             return new VoskCommandParser(MakeSlots(), MakeCommands());
         }
 
-        // ===== v2.0 core tests (adapted for scored matching) =====
-
         [Test]
         public void ExactMatch_AllSlotsFilled()
         {
@@ -353,8 +351,6 @@ namespace VoskXR.Tests.Runtime
             Assert.AreEqual("[\"[unk]\"]", json);
         }
 
-        // ===== v2.1 scored matching tests =====
-
         [Test]
         public void Score_PerfectMatch_HighScore()
         {
@@ -377,8 +373,6 @@ namespace VoskXR.Tests.Runtime
             Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("cease_fire", result.Command.Intent);
         }
-
-        // ===== v2.1 optional literal tests =====
 
         [Test]
         public void OptionalLiteral_PresentInInput()
@@ -410,8 +404,6 @@ namespace VoskXR.Tests.Runtime
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
         }
 
-        // ===== v2.1 sliding start position tests =====
-
         [Test]
         public void SlidingStart_PreambleSkipped()
         {
@@ -437,8 +429,6 @@ namespace VoskXR.Tests.Runtime
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
         }
-
-        // ===== v2.1 alias tests =====
 
         [Test]
         public void Alias_ResolvesToCanonicalValue()
@@ -490,8 +480,6 @@ namespace VoskXR.Tests.Runtime
             Assert.IsTrue(json.Contains("\"a\""), "Optional literal 'a' should be in grammar");
         }
 
-        // ===== v2.1 score normalization tests =====
-
         [Test]
         public void Score_NormalizedBetweenZeroAndOne()
         {
@@ -519,8 +507,6 @@ namespace VoskXR.Tests.Runtime
             // Both should have score 1.0 since they match perfectly
             Assert.AreEqual(shortResult.Command.Score, longResult.Command.Score, 0.001f);
         }
-
-        // ===== v2.1 definition-time validation tests =====
 
         [Test]
         public void Validation_UppercaseSlotValue_NoException()
@@ -553,8 +539,6 @@ namespace VoskXR.Tests.Runtime
 
             Assert.DoesNotThrow(() => new VoskCommandParser(slots, commands));
         }
-
-        // ===== v2.1 leftover token handling =====
 
         [Test]
         public void LeftoverTokens_StillMatches()
