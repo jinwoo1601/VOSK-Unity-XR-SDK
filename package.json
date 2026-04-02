@@ -24,6 +24,11 @@
       "displayName": "Basic Transcription",
       "description": "Demonstrates live speech-to-text with on-screen display.",
       "path": "Samples~/BasicTranscription"
+    },
+    {
+      "displayName": "Command Recognition",
+      "description": "Demonstrates grammar-constrained command parsing with intent and slot extraction.",
+      "path": "Samples~/CommandRecognition"
     }
   ]
 }

@@ -29,6 +29,9 @@
 Thumbs.db
 desktop.ini
 
+# Claude Code
+.claude/
+
 # Native bridge build output
 NativeBridge~/build/
 
