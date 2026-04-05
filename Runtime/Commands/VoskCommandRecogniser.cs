@@ -63,6 +63,7 @@ namespace VoskXR.Commands
         /// </summary>
         public void Configure(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands)
         {
+            _lastFireTime.Clear();
             _parser = new VoskCommandParser(slots, commands);
             _grammarJson = _parser.GenerateGrammarJson();
             _grammarApplied = false;
@@ -134,10 +135,7 @@ namespace VoskXR.Commands
             // Append to buffer and reset timer
             _bufferedTexts.Add(result.Text);
             if (result.Words != null && result.Words.Length > 0)
-            {
-                for (int i = 0; i < result.Words.Length; i++)
-                    _bufferedWords.Add(result.Words[i]);
-            }
+                _bufferedWords.AddRange(result.Words);
 
             _lastResultTime = Time.time;
             _bufferActive = true;
@@ -169,6 +167,7 @@ namespace VoskXR.Commands
                 return;
             }
 
+            float now = Time.time;
             var accepted = new List<VoskCommand>();
 
             for (int i = 0; i < results.Length; i++)
@@ -186,27 +185,25 @@ namespace VoskXR.Commands
                 // Per-intent debounce
                 if (commandCooldown > 0f &&
                     _lastFireTime.TryGetValue(cmd.Intent, out float lastTime) &&
-                    Time.time - lastTime < commandCooldown)
+                    now - lastTime < commandCooldown)
                     continue;
 
                 accepted.Add(cmd);
             }
 
             if (accepted.Count == 0)
-            {
-                OnUnrecognisedSpeech?.Invoke(text);
                 return;
-            }
 
             // Fire per-command events in order
             for (int i = 0; i < accepted.Count; i++)
             {
-                _lastFireTime[accepted[i].Intent] = Time.time;
+                _lastFireTime[accepted[i].Intent] = now;
                 OnCommandRecognised?.Invoke(accepted[i]);
             }
 
             // Fire batch event
-            OnCommandsRecognised?.Invoke(accepted.ToArray());
+            if (OnCommandsRecognised != null)
+                OnCommandsRecognised.Invoke(accepted.ToArray());
         }
     }
 }

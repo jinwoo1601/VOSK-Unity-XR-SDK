@@ -247,6 +247,10 @@ namespace VoskXR.Commands
                 if (bestCommandIdx < 0 || bestScore <= 0f)
                     break;
 
+                // Safety: prevent infinite loop if a match consumes no tokens
+                if (bestEndIdx <= searchStart)
+                    break;
+
                 float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
 
                 var slotsArray = bestSlots != null && bestSlots.Count > 0
