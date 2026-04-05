@@ -10,19 +10,6 @@ namespace VoskXR.Commands
     /// </summary>
     public static class VoskNumberParser
     {
-        /// <summary>
-        /// All number words recognized by the parser (~30 entries).
-        /// Used for greedy token matching and grammar generation.
-        /// </summary>
-        public static readonly HashSet<string> DigitVocabulary = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
-            "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
-            "sixteen", "seventeen", "eighteen", "nineteen",
-            "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
-            "hundred", "thousand"
-        };
-
         static readonly Dictionary<string, int> WordValues = new Dictionary<string, int>(30, StringComparer.Ordinal)
         {
             { "zero", 0 }, { "one", 1 }, { "two", 2 }, { "three", 3 }, { "four", 4 },
@@ -34,6 +21,13 @@ namespace VoskXR.Commands
             { "sixty", 60 }, { "seventy", 70 }, { "eighty", 80 }, { "ninety", 90 },
             { "hundred", 100 }, { "thousand", 1000 }
         };
+
+        /// <summary>
+        /// All number words recognized by the parser.
+        /// Derived from WordValues to maintain a single source of truth.
+        /// </summary>
+        public static readonly HashSet<string> DigitVocabulary =
+            new HashSet<string>(WordValues.Keys, StringComparer.Ordinal);
 
         static readonly char[] SplitSeparator = { ' ' };
 

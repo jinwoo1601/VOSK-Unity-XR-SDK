@@ -495,19 +495,30 @@ namespace VoskXR.Commands
             while (idx < tokens.Length && tokens[idx] == UnkToken)
                 idx++;
 
-            var matched = new List<string>();
-            while (matched.Count < maxWords && idx < tokens.Length
+            int matchStart = idx;
+            int count = 0;
+            while (count < maxWords && idx < tokens.Length
                 && VoskNumberParser.DigitVocabulary.Contains(tokens[idx]))
             {
-                matched.Add(tokens[idx]);
+                count++;
                 idx++;
             }
 
-            if (matched.Count < minWords)
+            if (count < minWords)
                 return null;
 
             consumed = idx - startIdx;
-            return string.Join(" ", matched);
+
+            if (count == 1)
+                return tokens[matchStart];
+
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < count; i++)
+            {
+                if (i > 0) sb.Append(' ');
+                sb.Append(tokens[matchStart + i]);
+            }
+            return sb.ToString();
         }
 
         float ComputeConfidence(string[] tokens, int startIdx, List<VoskSlotMatch> slots,
