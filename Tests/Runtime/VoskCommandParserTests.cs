@@ -60,14 +60,25 @@ namespace VoskXR.Tests.Runtime
             return new VoskCommandParser(MakeSlots(), MakeCommands());
         }
 
+        /// <summary>
+        /// Convenience: parse and assert exactly one match, returning that result.
+        /// </summary>
+        static VoskCommandResult ParseOne(VoskCommandParser parser, string text,
+            VoskWord[] words = null)
+        {
+            var results = words != null ? parser.Parse(text, words) : parser.Parse(text);
+            Assert.AreEqual(1, results.Length,
+                $"Expected 1 match for \"{text}\" but got {results.Length}");
+            return results[0];
+        }
+
         [Test]
         public void ExactMatch_AllSlotsFilled()
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("launch all missiles target hotel one");
+            var result = ParseOne(parser, "launch all missiles target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("all", result.Command.GetSlot("quantity"));
@@ -80,9 +91,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("launch missiles target hotel one");
+            var result = ParseOne(parser, "launch missiles target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
@@ -95,9 +105,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("fire all missiles at hotel one");
+            var result = ParseOne(parser, "fire all missiles at hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("all", result.Command.GetSlot("quantity"));
@@ -109,51 +118,49 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("launch all missiles target hotel one");
+            var result = ParseOne(parser, "launch all missiles target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
         }
 
         [Test]
-        public void NoMatch_ReturnsFalse()
+        public void NoMatch_ReturnsEmpty()
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("hello world");
+            var results = parser.Parse("hello world");
 
-            Assert.IsFalse(result.IsMatch);
-            Assert.AreEqual("hello world", result.RawText);
+            Assert.AreEqual(0, results.Length);
         }
 
         [Test]
-        public void EmptyInput_ReturnsFalse()
+        public void EmptyInput_ReturnsEmpty()
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("");
+            var results = parser.Parse("");
 
-            Assert.IsFalse(result.IsMatch);
+            Assert.AreEqual(0, results.Length);
         }
 
         [Test]
-        public void WhitespaceInput_ReturnsFalse()
+        public void WhitespaceInput_ReturnsEmpty()
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("   ");
+            var results = parser.Parse("   ");
 
-            Assert.IsFalse(result.IsMatch);
+            Assert.AreEqual(0, results.Length);
         }
 
         [Test]
-        public void NullInput_ReturnsFalse()
+        public void NullInput_ReturnsEmpty()
         {
             var parser = CreateParser();
 
-            var result = parser.Parse(null);
+            var results = parser.Parse(null);
 
-            Assert.IsFalse(result.IsMatch);
+            Assert.AreEqual(0, results.Length);
         }
 
         [Test]
@@ -161,9 +168,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("cease fire");
+            var result = ParseOne(parser, "cease fire");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("cease_fire", result.Command.Intent);
             Assert.AreEqual(0, result.Command.Slots.Length);
         }
@@ -173,9 +179,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("launch [unk] missiles target hotel one");
+            var result = ParseOne(parser, "launch [unk] missiles target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
@@ -273,9 +278,8 @@ namespace VoskXR.Tests.Runtime
                 new VoskWord("fire", 0.72f, 0.3f, 0.6f),
             };
 
-            var result = parser.Parse("cease fire", words);
+            var result = ParseOne(parser, "cease fire", words);
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual(0.72f, result.Command.Confidence, 0.001f);
         }
 
@@ -284,22 +288,19 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("cease fire");
+            var result = ParseOne(parser, "cease fire");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual(-1f, result.Command.Confidence, 0.001f);
         }
 
         [Test]
-        public void DefaultCommand_WhenNoMatch()
+        public void NoMatch_EmptyArray()
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("something random");
+            var results = parser.Parse("something random");
 
-            Assert.IsFalse(result.IsMatch);
-            Assert.AreEqual(default(VoskCommand), result.Command);
-            Assert.IsNull(result.Command.Intent);
+            Assert.AreEqual(0, results.Length);
         }
 
         [Test]
@@ -307,9 +308,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("shoot missiles");
+            var result = ParseOne(parser, "shoot missiles");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.IsFalse(result.Command.HasSlot("target"));
@@ -320,9 +320,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("set distance torpedo range target hotel two");
+            var result = ParseOne(parser, "set distance torpedo range target hotel two");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("set_distance_named", result.Command.Intent);
             Assert.AreEqual("torpedo range", result.Command.GetSlot("range"));
             Assert.AreEqual("hotel two", result.Command.GetSlot("target"));
@@ -333,9 +332,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("disengage");
+            var result = ParseOne(parser, "disengage");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("cease_fire", result.Command.Intent);
         }
 
@@ -356,9 +354,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("cease fire");
+            var result = ParseOne(parser, "cease fire");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
         }
 
@@ -369,8 +366,7 @@ namespace VoskXR.Tests.Runtime
             // has more literals and should win on tie-break
             var parser = CreateParser();
 
-            var result = parser.Parse("cease fire");
-            Assert.IsTrue(result.IsMatch);
+            var result = ParseOne(parser, "cease fire");
             Assert.AreEqual("cease_fire", result.Command.Intent);
         }
 
@@ -381,9 +377,8 @@ namespace VoskXR.Tests.Runtime
 
             // Pattern: "launch", "?a", "{?quantity}", "{weapon}", "target", "{target}"
             // Input has "a" present
-            var result = parser.Parse("launch a jackal target hotel one");
+            var result = ParseOne(parser, "launch a jackal target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("jackal", result.Command.GetSlot("weapon"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
@@ -396,9 +391,8 @@ namespace VoskXR.Tests.Runtime
 
             // Pattern: "launch", "?a", "{?quantity}", "{weapon}", "target", "{target}"
             // Input lacks "a" — should still match
-            var result = parser.Parse("launch jackal target hotel one");
+            var result = ParseOne(parser, "launch jackal target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("jackal", result.Command.GetSlot("weapon"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
@@ -410,9 +404,8 @@ namespace VoskXR.Tests.Runtime
             var parser = CreateParser();
 
             // "uh" is not a grammar word; sliding start should find "cease fire" starting at token 1
-            var result = parser.Parse("uh cease fire");
+            var result = ParseOne(parser, "uh cease fire");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("cease_fire", result.Command.Intent);
         }
 
@@ -422,9 +415,8 @@ namespace VoskXR.Tests.Runtime
             var parser = CreateParser();
 
             // Double "launch" — sliding start finds best match from later position
-            var result = parser.Parse("launch launch all missiles target hotel one");
+            var result = ParseOne(parser, "launch launch all missiles target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
@@ -435,9 +427,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("shoot jackals");
+            var result = ParseOne(parser, "shoot jackals");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             Assert.AreEqual("jackal", result.Command.GetSlot("weapon"));
         }
@@ -448,9 +439,8 @@ namespace VoskXR.Tests.Runtime
             var parser = CreateParser();
 
             // "a" in quantity context should resolve to "one" via alias
-            var result = parser.Parse("launch a missiles target hotel one");
+            var result = ParseOne(parser, "launch a missiles target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("launch_weapon", result.Command.Intent);
             // "a" could match as optional literal or as quantity alias.
             // The pattern with ?a should consume "a" as optional literal,
@@ -521,9 +511,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateNumericParser();
 
-            var result = parser.Parse("orient to heading two seven zero");
+            var result = ParseOne(parser, "orient to heading two seven zero");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("set_heading", result.Command.Intent);
             Assert.AreEqual("two seven zero", result.Command.GetSlot("heading"));
         }
@@ -533,9 +522,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateNumericParser();
 
-            var result = parser.Parse("orient to heading two seven zero mark one five");
+            var result = ParseOne(parser, "orient to heading two seven zero mark one five");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("set_heading", result.Command.Intent);
             Assert.AreEqual("two seven zero", result.Command.GetSlot("heading"));
             Assert.AreEqual("one five", result.Command.GetSlot("elevation"));
@@ -546,9 +534,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateNumericParser();
 
-            var result = parser.Parse("orient to heading five");
+            var result = ParseOne(parser, "orient to heading five");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("set_heading", result.Command.Intent);
             Assert.AreEqual("five", result.Command.GetSlot("heading"));
         }
@@ -559,9 +546,8 @@ namespace VoskXR.Tests.Runtime
             var parser = CreateNumericParser();
 
             // "mark" is not a digit word — heading should stop at 3 words
-            var result = parser.Parse("orient to heading two seven zero mark");
+            var result = ParseOne(parser, "orient to heading two seven zero mark");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("two seven zero", result.Command.GetSlot("heading"));
         }
 
@@ -571,9 +557,8 @@ namespace VoskXR.Tests.Runtime
             // elevation has maxWords=2; input has 3 digit words after "mark"
             var parser = CreateNumericParser();
 
-            var result = parser.Parse("orient to heading five mark one two three");
+            var result = ParseOne(parser, "orient to heading five mark one two three");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("five", result.Command.GetSlot("heading"));
             // elevation should consume only 2 of the 3 digits
             Assert.AreEqual("one two", result.Command.GetSlot("elevation"));
@@ -598,9 +583,9 @@ namespace VoskXR.Tests.Runtime
             var parser = new VoskCommandParser(slots, commands);
 
             // Only 1 digit word — below minWords=2, required slot fails
-            var result = parser.Parse("enter five");
+            var results = parser.Parse("enter five");
 
-            Assert.IsFalse(result.IsMatch);
+            Assert.AreEqual(0, results.Length);
         }
 
         [Test]
@@ -609,9 +594,8 @@ namespace VoskXR.Tests.Runtime
             var parser = CreateNumericParser();
 
             // "orient to heading five mark" — no digits after "mark" for optional elevation
-            var result = parser.Parse("orient to heading five mark");
+            var result = ParseOne(parser, "orient to heading five mark");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("set_heading", result.Command.Intent);
             Assert.AreEqual("five", result.Command.GetSlot("heading"));
             Assert.IsFalse(result.Command.HasSlot("elevation"));
@@ -622,9 +606,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateNumericParser();
 
-            var result = parser.Parse("close distance fifteen klicks target bravo two");
+            var result = ParseOne(parser, "close distance fifteen klicks target bravo two");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("close_distance", result.Command.Intent);
             Assert.AreEqual("fifteen", result.Command.GetSlot("heading"));
             Assert.AreEqual("bravo two", result.Command.GetSlot("target"));
@@ -664,9 +647,8 @@ namespace VoskXR.Tests.Runtime
         {
             var parser = CreateParser();
 
-            var result = parser.Parse("launch all missiles target hotel one");
+            var result = ParseOne(parser, "launch all missiles target hotel one");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.GreaterOrEqual(result.Command.Score, 0f);
             Assert.LessOrEqual(result.Command.Score, 1f);
         }
@@ -677,12 +659,10 @@ namespace VoskXR.Tests.Runtime
             var parser = CreateParser();
 
             // "disengage" = 1 element pattern, score = 1/1 = 1.0
-            var shortResult = parser.Parse("disengage");
+            var shortResult = ParseOne(parser, "disengage");
             // "cease fire" = 2 element pattern, score = 2/2 = 1.0
-            var longResult = parser.Parse("cease fire");
+            var longResult = ParseOne(parser, "cease fire");
 
-            Assert.IsTrue(shortResult.IsMatch);
-            Assert.IsTrue(longResult.IsMatch);
             // Both should have score 1.0 since they match perfectly
             Assert.AreEqual(shortResult.Command.Score, longResult.Command.Score, 0.001f);
         }
@@ -726,10 +706,121 @@ namespace VoskXR.Tests.Runtime
 
             // "cease fire please" — "please" is leftover. Sliding start from 0 matches
             // "cease fire" with score 2/2 = 1.0, which is the best.
-            var result = parser.Parse("cease fire please");
+            var result = ParseOne(parser, "cease fire please");
 
-            Assert.IsTrue(result.IsMatch);
             Assert.AreEqual("cease_fire", result.Command.Intent);
+        }
+
+        // --- Sequential command extraction tests (v2.3) ---
+
+        [Test]
+        public void Sequential_TwoCommandsInOneUtterance()
+        {
+            var parser = CreateParser();
+
+            // "cease fire" should match cease_fire, then remaining tokens match launch_weapon
+            var results = parser.Parse("cease fire launch all missiles target hotel one");
+
+            Assert.AreEqual(2, results.Length);
+            Assert.AreEqual("cease_fire", results[0].Command.Intent);
+            Assert.AreEqual("launch_weapon", results[1].Command.Intent);
+            Assert.AreEqual("missiles", results[1].Command.GetSlot("weapon"));
+            Assert.AreEqual("hotel one", results[1].Command.GetSlot("target"));
+        }
+
+        [Test]
+        public void Sequential_SingleCommandNoRemainder()
+        {
+            var parser = CreateParser();
+
+            var results = parser.Parse("launch missiles target hotel one");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("launch_weapon", results[0].Command.Intent);
+        }
+
+        [Test]
+        public void Sequential_TwoShortCommandsInOrder()
+        {
+            var parser = CreateParser();
+
+            var results = parser.Parse("cease fire resume fire");
+
+            Assert.AreEqual(2, results.Length);
+            Assert.AreEqual("cease_fire", results[0].Command.Intent);
+            Assert.AreEqual("resume_fire", results[1].Command.Intent);
+        }
+
+        [Test]
+        public void Sequential_NoisePlusSingleCommand()
+        {
+            var parser = CreateParser();
+
+            // "hello world" is noise, sliding start finds "cease fire"
+            var results = parser.Parse("hello world cease fire");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("cease_fire", results[0].Command.Intent);
+        }
+
+        [Test]
+        public void Sequential_NoiseDoesNotProduceSecondCommand()
+        {
+            var parser = CreateParser();
+
+            // After extracting "cease fire", "please" has no match
+            var results = parser.Parse("cease fire please");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("cease_fire", results[0].Command.Intent);
+        }
+
+        [Test]
+        public void Sequential_RawTextIsFullInput()
+        {
+            var parser = CreateParser();
+
+            var results = parser.Parse("cease fire resume fire");
+
+            // Both commands should carry the full original text
+            Assert.AreEqual("cease fire resume fire", results[0].Command.RawText);
+            Assert.AreEqual("cease fire resume fire", results[1].Command.RawText);
+        }
+
+        [Test]
+        public void Sequential_CommandThenWeaponCommand()
+        {
+            var parser = CreateParser();
+
+            // Reversed order: weapon command first, then cease_fire
+            var results = parser.Parse("launch missiles target hotel one cease fire");
+
+            Assert.AreEqual(2, results.Length);
+            Assert.AreEqual("launch_weapon", results[0].Command.Intent);
+            Assert.AreEqual("cease_fire", results[1].Command.Intent);
+        }
+
+        [Test]
+        public void Sequential_ConfidencePropagatedPerCommand()
+        {
+            var parser = CreateParser();
+
+            var words = new[]
+            {
+                new VoskWord("cease", 0.95f, 0.0f, 0.3f),
+                new VoskWord("fire", 0.72f, 0.3f, 0.6f),
+                new VoskWord("resume", 0.88f, 0.7f, 1.0f),
+            };
+
+            // "cease fire resume fire" — two commands
+            // "fire" appears in both; word confidence map stores first occurrence (0.72)
+            var results = parser.Parse("cease fire resume fire", words);
+
+            Assert.AreEqual(2, results.Length);
+            // First command: min(cease=0.95, fire=0.72) = 0.72
+            Assert.AreEqual(0.72f, results[0].Command.Confidence, 0.001f);
+            // Second command: min(resume=0.88, fire=0.72) = 0.72
+            Assert.AreEqual(0.72f, results[1].Command.Confidence, 0.001f);
         }
     }
 }

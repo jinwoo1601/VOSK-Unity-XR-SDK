@@ -130,7 +130,7 @@ When any `NumberSequence` slot exists, add the ~30 digit vocabulary words to the
 
 ---
 
-# v2.3 — Continuity
+# v2.3 — Continuity (Shipped)
 
 Solves the two biggest real-world command failures: mid-utterance pauses splitting a command across two VOSK results, and multiple commands spoken in a single breath where only the first is recognised.
 
