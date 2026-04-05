@@ -18,6 +18,14 @@ namespace VoskXR.Commands
                  "can see what matches and what doesn't. Disable for release builds.")]
         [SerializeField] bool freeSpeechMode = false;
 
+        [Tooltip("Reject commands where the minimum word confidence is below this threshold. " +
+                 "Prevents phantom commands from background noise.")]
+        [SerializeField] float minConfidence = 0.4f;
+
+        [Tooltip("Reject matches where the pattern score is below this threshold. " +
+                 "Prevents partial or garbled matches.")]
+        [SerializeField] float minScore = 0.6f;
+
         public event Action<VoskCommand> OnCommandRecognised;
         public event Action<string> OnUnrecognisedSpeech;
 
@@ -87,9 +95,29 @@ namespace VoskXR.Commands
             var parsed = _parser.Parse(result.Text, result.Words);
 
             if (parsed.IsMatch)
-                OnCommandRecognised?.Invoke(parsed.Command);
+            {
+                var cmd = parsed.Command;
+
+                // Reject if below score threshold
+                if (cmd.Score < minScore)
+                {
+                    OnUnrecognisedSpeech?.Invoke(parsed.RawText);
+                    return;
+                }
+
+                // Reject if below confidence threshold (skip when word data unavailable, i.e. -1)
+                if (cmd.Confidence >= 0f && cmd.Confidence < minConfidence)
+                {
+                    OnUnrecognisedSpeech?.Invoke(parsed.RawText);
+                    return;
+                }
+
+                OnCommandRecognised?.Invoke(cmd);
+            }
             else
+            {
                 OnUnrecognisedSpeech?.Invoke(parsed.RawText);
+            }
         }
     }
 }

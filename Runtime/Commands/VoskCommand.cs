@@ -33,30 +33,59 @@ namespace VoskXR.Commands
         /// <summary>Matched slot name/value pairs.</summary>
         public readonly VoskSlotMatch[] Slots;
 
-        /// <summary>Minimum word confidence across matched tokens. 0 when word data is unavailable.</summary>
+        /// <summary>Minimum word confidence across matched tokens. -1 when word data is unavailable.</summary>
         public readonly float Confidence;
+
+        /// <summary>Match quality score (0.0–1.0). Higher is better.</summary>
+        public readonly float Score;
 
         /// <summary>The original VOSK output text.</summary>
         public readonly string RawText;
 
-        public VoskCommand(string intent, VoskSlotMatch[] slots, float confidence, string rawText)
+        /// <summary>Names of all registered slots, used for debug validation in GetSlot. Null in release builds.</summary>
+        readonly string[] _registeredSlotNames;
+
+        public VoskCommand(string intent, VoskSlotMatch[] slots, float confidence, float score,
+            string rawText, string[] registeredSlotNames = null)
         {
             Intent = intent;
             Slots = slots ?? Array.Empty<VoskSlotMatch>();
             Confidence = confidence;
+            Score = score;
             RawText = rawText;
+            _registeredSlotNames = registeredSlotNames;
         }
 
         /// <summary>
         /// Returns the value of the named slot, or <see cref="string.Empty"/> if the slot was not matched.
+        /// In debug builds, logs a warning if the name doesn't match any registered slot.
         /// </summary>
         public string GetSlot(string name)
         {
-            for (int i = 0; i < Slots.Length; i++)
+            int idx = FindSlotIndex(name);
+            if (idx >= 0)
+                return Slots[idx].Value;
+
+#if DEBUG
+            if (_registeredSlotNames != null)
             {
-                if (string.Equals(Slots[i].Name, name, StringComparison.Ordinal))
-                    return Slots[i].Value;
+                bool registered = false;
+                for (int i = 0; i < _registeredSlotNames.Length; i++)
+                {
+                    if (string.Equals(_registeredSlotNames[i], name, StringComparison.Ordinal))
+                    {
+                        registered = true;
+                        break;
+                    }
+                }
+                if (!registered)
+                {
+                    UnityEngine.Debug.LogWarning(
+                        $"[VoskCommand] GetSlot(\"{name}\") called but no slot with that name is registered. " +
+                        "Check for typos in the slot name.");
+                }
             }
+#endif
 
             return string.Empty;
         }
@@ -64,18 +93,19 @@ namespace VoskXR.Commands
         /// <summary>
         /// Returns true if the named slot was matched.
         /// </summary>
-        public bool HasSlot(string name)
+        public bool HasSlot(string name) => FindSlotIndex(name) >= 0;
+
+        int FindSlotIndex(string name)
         {
             for (int i = 0; i < Slots.Length; i++)
             {
                 if (string.Equals(Slots[i].Name, name, StringComparison.Ordinal))
-                    return true;
+                    return i;
             }
-
-            return false;
+            return -1;
         }
 
-        public override string ToString() => $"{Intent} ({Slots.Length} slots)";
+        public override string ToString() => $"{Intent} ({Slots.Length} slots, score={Score:F2})";
     }
 
     /// <summary>

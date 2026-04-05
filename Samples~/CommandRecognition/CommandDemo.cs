@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using VoskXR;
 using VoskXR.Commands;
@@ -24,10 +25,18 @@ public class CommandDemo : MonoBehaviour
             new[] { "hotel one", "hotel two", "alpha one", "alpha three", "bravo two" });
 
         var weapons = new VoskSlotDefinition("weapon",
-            new[] { "missiles", "torpedoes", "jackal", "jackals" });
+            new[] { "missiles", "torpedoes", "jackal" },
+            aliases: new Dictionary<string, string>
+            {
+                { "jackals", "jackal" },
+            });
 
         var quantity = new VoskSlotDefinition("quantity",
-            new[] { "all", "one", "two", "three" });
+            new[] { "all", "one", "two", "three" },
+            aliases: new Dictionary<string, string>
+            {
+                { "a", "one" },
+            });
 
         var namedRange = new VoskSlotDefinition("range",
             new[] { "cqb", "safe range", "torpedo range", "pdc range", "railgun range" });
@@ -37,7 +46,6 @@ public class CommandDemo : MonoBehaviour
             new VoskCommandDefinition(Intents.LaunchWeapon, new[]
             {
                 new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
-                new[] { "launch", "a", "{weapon}", "target", "{target}" },
                 new[] { "fire", "{?quantity}", "{weapon}", "at", "{target}" },
                 new[] { "shoot", "{weapon}" },
             }),
@@ -97,7 +105,8 @@ public class CommandDemo : MonoBehaviour
 
     void OnCommand(VoskCommand cmd)
     {
-        Debug.Log($"[CommandDemo] Command: {cmd.Intent} (confidence={cmd.Confidence:F2})");
+        Debug.Log($"[CommandDemo] Command: {cmd.Intent} " +
+            $"(confidence={cmd.Confidence:F2}, score={cmd.Score:F2})");
 
         switch (cmd.Intent)
         {
