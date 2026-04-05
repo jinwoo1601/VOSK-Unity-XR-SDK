@@ -17,6 +17,7 @@ public class CommandDemo : MonoBehaviour
         public const string SetDistanceNamed = "set_distance_named";
         public const string ApproachTarget = "approach_target";
         public const string RetreatFromTarget = "retreat_from_target";
+        public const string SetHeading = "set_heading";
     }
 
     void Start()
@@ -40,6 +41,9 @@ public class CommandDemo : MonoBehaviour
 
         var namedRange = new VoskSlotDefinition("range",
             new[] { "cqb", "safe range", "torpedo range", "pdc range", "railgun range" });
+
+        var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
+        var elevation = VoskSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2);
 
         var commands = new[]
         {
@@ -82,10 +86,16 @@ public class CommandDemo : MonoBehaviour
                 new[] { "move", "away", "from", "target", "{target}" },
                 new[] { "open", "distance", "from", "target", "{target}" },
             }),
+            new VoskCommandDefinition(Intents.SetHeading, new[]
+            {
+                new[] { "orient", "heading", "{heading}" },
+                new[] { "orient", "heading", "{heading}", "mark", "{?elevation}" },
+                new[] { "set", "heading", "{heading}" },
+            }),
         };
 
         commandRecogniser.Configure(
-            slots: new[] { targets, weapons, quantity, namedRange },
+            slots: new[] { targets, weapons, quantity, namedRange, heading, elevation },
             commands: commands);
 
         commandRecogniser.OnCommandRecognised += OnCommand;
@@ -136,6 +146,14 @@ public class CommandDemo : MonoBehaviour
 
             case Intents.RetreatFromTarget:
                 Debug.Log($"[CommandDemo]   Retreat from {cmd.GetSlot("target")}");
+                break;
+
+            case Intents.SetHeading:
+                string hdg = cmd.GetSlot("heading");
+                int hdgVal = VoskNumberParser.ParseDigitSequence(hdg);
+                string elevStr = cmd.HasSlot("elevation") ? cmd.GetSlot("elevation") : null;
+                int elevVal = elevStr != null ? VoskNumberParser.ParseDigitSequence(elevStr) : -1;
+                Debug.Log($"[CommandDemo]   Heading={hdgVal} (raw=\"{hdg}\"), Elevation={elevVal}");
                 break;
         }
     }
