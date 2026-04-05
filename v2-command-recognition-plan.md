@@ -18,483 +18,15 @@ The command recogniser is a separate MonoBehaviour. It subscribes to `OnResult` 
 
 ---
 
-# v2.0 — Core Command Parsing
+# v2.0 — Core Command Parsing (Shipped v0.4.0)
 
-The minimum to go from VOSK text to structured commands for finite-vocabulary commands.
-
-## v2.0 Scope
-
-**Includes:**
-- Data model: `VoskSlotDefinition` (Enumerated only), `VoskCommandDefinition`, `VoskCommand`, `VoskSlotMatch`, `VoskCommandResult`
-- Shared slot registry (slots defined once, referenced by name across commands)
-- Per-pattern slot optionality (`{slot}` = required, `{?slot}` = optional)
-- Greedy left-to-right pattern matching (binary pass/fail — reliable because grammar constrains VOSK output)
-- Grammar generation + native bridge `vosk_bridge_set_grammar`
-- `VoskCommandRecogniser` component with free-speech mode toggle
-- `[unk]` skip logic
-- Parser unit tests + sample
-
-**Commands this unlocks:**
-- Launch/fire weapons at targets (finite weapon types, named target designations)
-- State commands (cease fire, resume fire, disengage, reengage)
-- Named-range distance commands (CQB, torpedo range, safe range)
-- Approach/retreat commands (close on target, fall back from target)
-
-**Cannot handle yet (deferred):**
-- "Launch a jackal" (article "a") — workaround: extra pattern
-- "Orient to heading two seven zero" (numeric sequences) — no workaround
-- False starts / hesitations — fails silently
-- Plural normalization ("jackals" → "jackal") — workaround: list both values
-
-## v2.0 Data Model
-
-All types in `VoskXR.Commands` namespace, following existing SDK patterns (readonly structs, arrays).
-
-### `VoskSlotDefinition` — defines a named slot with allowed values
-- `string Name` — e.g. "weapon"
-- `string[] Values` — e.g. ["missiles", "torpedoes", "jackal"] (lowercase, as VOSK outputs)
-
-Slot optionality is **not** on the definition — it's per-pattern via `{?slot}` syntax (see Matching Algorithm). A slot can be optional in one pattern and required in another.
-
-### `VoskCommandDefinition` — defines one intent
-- `string Intent` — e.g. "launch_weapon"
-- `string[][] Patterns` — phrase templates:
-  - Plain string = literal (must match)
-  - `{slotName}` = required slot reference
-  - `{?slotName}` = optional slot reference (command matches even if this slot has no match)
-
-Commands do **not** own slot definitions. Slots are registered separately and resolved by name.
-
-### `VoskCommand` — parsed result
-- `string Intent`
-- `VoskSlotMatch[] Slots` — array of (Name, Value) pairs
-- `float Confidence` — minimum word confidence across matched tokens
-- `string RawText` — original VOSK output
-- `string GetSlot(string name)` — returns value or empty string
-- `bool HasSlot(string name)`
-
-### `VoskSlotMatch` — one matched slot
-- `string Name`
-- `string Value`
-
-### `VoskCommandResult` — match/no-match wrapper
-- `bool IsMatch`
-- `VoskCommand Command` — `default(VoskCommand)` when `IsMatch` is false; always check `IsMatch` first
-- `string RawText`
-
-## v2.0 Matching Algorithm
-
-`VoskCommandParser` — pure C# internal class, no Unity dependencies, independently testable.
-
-**Greedy left-to-right pattern matching (binary pass/fail):**
-
-1. For each command definition, try each pattern against the tokenized input
-2. Walk tokens left-to-right against pattern elements:
-   - **Literal token**: exact match, advance both cursors. Mismatch → pattern fails.
-   - **`{slot}` (required)**: try longest matching slot value first (greedy multi-word). For "hotel one" (2 words), try consuming 2 tokens, check against slot values. Fall back to 1 token. No match → pattern fails.
-   - **`{?slot}` (optional)**: same as required, but no match → skip pattern element, don't advance input cursor.
-   - **`[unk]` token in input**: skip, don't advance pattern cursor.
-3. A pattern matches if all pattern elements are satisfied (required elements matched, optional elements matched or skipped) and the pattern cursor reaches the end. **Leftover input tokens are allowed** — the input cursor does not need to reach the end.
-4. Score: tokens consumed − leftover tokens. Ties broken by more literal matches, then definition order.
-5. Best-scoring match wins. No match → `VoskCommandResult` with `IsMatch = false`.
-6. Empty/whitespace-only input → `VoskCommandResult` with `IsMatch = false`. `VoskCommandRecogniser` does **not** fire any event (no `OnUnrecognisedSpeech` for silence).
-
-**Pre-computation**: At construction, build a lookup per slot: first-word → list of (full value, word count), sorted by word count descending (longest match first).
-
-**Why binary matching is fine for v2.0**: Grammar mode constrains VOSK to only output words from the command vocabulary. With exact vocabulary, exact matching is reliable. Scored matching becomes important in v2.1 when we want tolerance for edge cases grammar doesn't fully solve.
-
-## v2.0 Free-Speech Mode
-
-A toggle on `VoskCommandRecogniser` for on-device testing and debugging. Since the native bridge is Android-only (JNI AudioRecord, arm64 .so), all speech recognition — including free-speech testing — happens on-device, not in the Unity Editor.
-
-```csharp
-[Tooltip("Bypasses grammar constraints so VOSK recognises freely (like pre-v2.0). " +
-         "Useful for on-device testing to see what VOSK actually hears before " +
-         "grammar constrains it. The parser still runs against the output so you " +
-         "can see what matches and what doesn't. Disable for release builds.")]
-[SerializeField] bool freeSpeechMode = false;
-```
-
-**Behaviour:**
-- `freeSpeechMode = false` (default): generates grammar from command vocabulary, calls `SetGrammar()`, VOSK is constrained. Production mode.
-- `freeSpeechMode = true`: skips `SetGrammar()`, VOSK runs unconstrained like pre-v2.0. The parser still attempts to match the raw output against command patterns.
-- When `Debug.isDebugBuild` is false and `freeSpeechMode` is true, logs a warning at startup ("Free-speech mode is active in a release build — grammar constraints are disabled"). Does **not** force it off — the dev may have a reason — but makes it visible.
-- Both `OnCommandRecognised` and `OnUnrecognisedSpeech` fire normally in either mode.
-- `OnFinalResult` / `OnPartialResult` on the underlying `VoskSpeechRecogniser` continue to fire in both modes, so the developer can see the raw VOSK output via adb logcat while testing commands.
-
-**Why this matters:**
-- Lets devs deploy to Quest, say commands, and see what VOSK actually outputs without grammar ("did VOSK hear 'jackal' or 'jacket'?")
-- Lets devs test whether their patterns cover real speech variations before grammar locks in the vocabulary
-- Lets devs compare recognition accuracy with and without grammar by toggling between dev builds
-
-## v2.0 Grammar Generation
-
-`VoskCommandParser.GenerateGrammarJson()`:
-
-1. Extract all unique words from pattern literals
-2. Extract all unique words from enumerated slot values (split multi-word values into individual words)
-3. Add `[unk]` for off-vocabulary fallback
-4. Deduplicate and produce JSON array: `["launch", "fire", "all", "missiles", ...]`
-
-## v2.0 Native Bridge Changes
-
-### `vosk_bridge.h` — add declaration
-```c
-VOSK_BRIDGE_EXPORT int vosk_bridge_set_grammar(const char* grammar_json);
-```
-
-### `vosk_bridge.cpp` — add implementation
-- Add `static std::string g_grammar_json;`
-- Add `static int g_max_alternatives = 0;` — store the value passed to `vosk_bridge_init` so it can be restored when grammar is cleared
-- `vosk_bridge_set_grammar`:
-  - Requires initialised + not running. Returns `VOSK_BRIDGE_ERR_NOT_INITIALISED` or `VOSK_BRIDGE_ERR_ALREADY_RUNNING` if preconditions are violated (never crashes on wrong call order).
-  - Frees existing recognizer.
-  - If grammar is null/empty: creates recognizer with `vosk_recognizer_new()` and re-applies `g_max_alternatives` if > 0.
-  - If grammar is non-empty: creates recognizer with `vosk_recognizer_new_grm()`. Skips `set_max_alternatives` (VOSK grammar + alternatives produces unreliable results).
-  - Always re-enables `vosk_recognizer_set_words(1)`.
-- Store `max_alternatives` in `g_max_alternatives` during `vosk_bridge_init` (line ~176) so it survives recognizer recreation.
-
-### `BridgeNative.cs` — add P/Invoke
-```csharp
-[DllImport(LibraryName)] [Preserve]
-internal static extern int vosk_bridge_set_grammar(string grammarJson);
-```
-
-### `VoskSpeechRecogniser.cs` — add public method
-```csharp
-public void SetGrammar(string grammarJson)
-```
-Calls `BridgeNative.vosk_bridge_set_grammar`. Must be called after `InitialiseAsync()` completes, before `StartRecognition()`.
-
-## v2.0 `VoskCommandRecogniser` Component
-
-```csharp
-[AddComponentMenu("VOSK XR/Command Recogniser")]
-public class VoskCommandRecogniser : MonoBehaviour
-{
-    [SerializeField] VoskSpeechRecogniser speechRecogniser;
-
-    [Tooltip("Bypasses grammar constraints so VOSK recognises freely (like pre-v2.0). " +
-             "For on-device testing. Disable for release builds.")]
-    [SerializeField] bool freeSpeechMode = false;
-
-    public event Action<VoskCommand> OnCommandRecognised;
-    public event Action<string> OnUnrecognisedSpeech;
-}
-```
-
-- `Configure(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands)` — builds parser, validates slot references, stores grammar JSON. **If `speechRecogniser.IsModelReady` is already true**, calls `SetGrammar()` immediately (handles the case where the speech recogniser was initialised before the command recogniser).
-- On `OnModelReady`: calls `SetGrammar()` unless `freeSpeechMode` is active, then starts recognition. **Skipped if grammar was already set in `Configure()`** (avoids double-set).
-- On `OnResult`: runs parser against final results only (not partial results). Fires `OnCommandRecognised` or `OnUnrecognisedSpeech`. **Does not fire any event for empty/whitespace-only input** (silence).
-
-## v2.0 Developer-Facing API
-
-```csharp
-// Define shared slots (no IsOptional here — optionality is per-pattern)
-var targets = new VoskSlotDefinition("target",
-    new[] { "hotel one", "hotel two", "alpha one", "alpha three", "bravo two" });
-
-var weapons = new VoskSlotDefinition("weapon",
-    new[] { "missiles", "torpedoes", "jackal", "jackals" });
-
-var quantity = new VoskSlotDefinition("quantity",
-    new[] { "all", "one", "two", "three" });
-
-var namedRange = new VoskSlotDefinition("range",
-    new[] { "cqb", "safe range", "torpedo range", "pdc range", "railgun range" });
-
-// Define commands — {slot} = required, {?slot} = optional
-var commands = new[] {
-    new VoskCommandDefinition("launch_weapon",
-        patterns: new[] {
-            // quantity is optional here, target is required
-            new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
-            new[] { "launch", "a", "{weapon}", "target", "{target}" },
-            new[] { "fire", "{?quantity}", "{weapon}", "at", "{target}" },
-            new[] { "shoot", "{weapon}" },  // no target at all in this pattern
-        }
-    ),
-    new VoskCommandDefinition("cease_fire",
-        patterns: new[] {
-            new[] { "cease", "fire" },
-            new[] { "stop", "firing" },
-            new[] { "disengage" },
-        }
-    ),
-    new VoskCommandDefinition("resume_fire",
-        patterns: new[] {
-            new[] { "resume", "fire" },
-            new[] { "resume", "firing" },
-            new[] { "reengage" },
-        }
-    ),
-    new VoskCommandDefinition("set_distance_named",
-        patterns: new[] {
-            new[] { "close", "distance", "{range}", "target", "{target}" },
-            new[] { "set", "distance", "{range}", "target", "{target}" },
-            new[] { "make", "distance", "{range}", "target", "{target}" },
-            new[] { "open", "distance", "{range}", "target", "{target}" },
-        }
-    ),
-    new VoskCommandDefinition("approach_target",
-        patterns: new[] {
-            new[] { "close", "on", "target", "{target}" },
-            new[] { "close", "in", "on", "target", "{target}" },
-            new[] { "approach", "target", "{target}" },
-        }
-    ),
-    new VoskCommandDefinition("retreat_from_target",
-        patterns: new[] {
-            new[] { "fall", "back", "from", "target", "{target}" },
-            new[] { "pull", "back", "from", "target", "{target}" },
-            new[] { "get", "away", "from", "target", "{target}" },
-            new[] { "move", "away", "from", "target", "{target}" },
-            new[] { "open", "distance", "from", "target", "{target}" },
-        }
-    ),
-};
-
-// Configure
-commandRecogniser.Configure(
-    slots: new[] { targets, weapons, quantity, namedRange },
-    commands: commands
-);
-
-commandRecogniser.OnCommandRecognised += cmd => {
-    switch (cmd.Intent)
-    {
-        case Intents.LaunchWeapon:
-            LaunchWeapon(cmd.GetSlot("weapon"), cmd.GetSlot("quantity"), cmd.GetSlot("target"));
-            break;
-        case Intents.CeaseFire:
-            CeaseFire();
-            break;
-    }
-};
-
-// Recommended: define intent names as constants to avoid typos
-static class Intents
-{
-    public const string LaunchWeapon = "launch_weapon";
-    public const string CeaseFire = "cease_fire";
-    public const string ResumeFire = "resume_fire";
-    // ...
-}
-```
-
-## v2.0 New Files
-
-| File | Purpose |
-|------|---------|
-| `Runtime/Commands/VoskSlotDefinition.cs` | Slot definition readonly struct |
-| `Runtime/Commands/VoskCommandDefinition.cs` | Command definition (intent + patterns) |
-| `Runtime/Commands/VoskCommand.cs` | VoskCommand + VoskSlotMatch + VoskCommandResult |
-| `Runtime/Commands/VoskCommandParser.cs` | Core parser: binary matching, grammar generation |
-| `Runtime/Commands/VoskCommandRecogniser.cs` | MonoBehaviour integration + free-speech toggle |
-| `Tests/Runtime/VoskCommandParserTests.cs` | Parser unit tests (Runtime so they can run on-device too) |
-| `Samples~/CommandRecognition/CommandDemo.cs` | Usage example |
-
-## v2.0 Modified Files
-
-| File | Change |
-|------|--------|
-| `NativeBridge~/src/vosk_bridge.h` | Add `vosk_bridge_set_grammar` declaration |
-| `NativeBridge~/src/vosk_bridge.cpp` | Add `vosk_bridge_set_grammar` implementation + `g_grammar_json` + `g_max_alternatives` statics |
-| `Runtime/Native/BridgeNative.cs` | Add `vosk_bridge_set_grammar` P/Invoke |
-| `Runtime/VoskSpeechRecogniser.cs` | Add `SetGrammar()` public method |
-
-## v2.0 Implementation Order
-
-**Track A — Pure C# parser** (no native dependency, testable immediately):
-1. Data types: `VoskSlotDefinition`, `VoskCommandDefinition`, `VoskCommand`, `VoskSlotMatch`, `VoskCommandResult`
-2. `VoskCommandParser` — binary matching algorithm + grammar generation
-3. `VoskCommandParserTests` — all parser tests
-
-**Track B — Native bridge grammar** (parallel with A):
-1. `vosk_bridge.h` + `vosk_bridge.cpp` — add `vosk_bridge_set_grammar` + `g_max_alternatives`
-2. `BridgeNative.cs` — add P/Invoke
-3. `VoskSpeechRecogniser.cs` — add `SetGrammar()`
-4. Rebuild native library
-
-**Track C — Integration** (depends on A + B):
-1. `VoskCommandRecogniser` component (with free-speech toggle + already-ready handling)
-2. `CommandDemo` sample
-3. Integration test on device
-
-## v2.0 Test Plan
-
-**Parser unit tests** (NUnit, `Tests/Runtime`):
-- Exact match: "launch all missiles target hotel one" → intent=launch_weapon, all slots filled
-- Per-pattern optionality: "launch missiles target hotel one" → weapon + target filled, quantity absent (optional via `{?quantity}`)
-- Same slot required in different pattern: a pattern using `{quantity}` (required) fails when quantity word is missing
-- Synonym patterns: "fire all missiles at hotel one" → same result
-- Multi-word slot: "hotel one" extracted as single value, not "hotel"
-- No match: "hello world" → `IsMatch = false`
-- Empty input → `IsMatch = false`, no events fired
-- Command with no slots: "cease fire" → intent=cease_fire
-- `[unk]` tokens skipped: "launch [unk] missiles target hotel one" → matches
-- Ambiguous input: higher-scoring command wins
-- Grammar JSON: all words present, includes `[unk]`, valid JSON string array, no duplicates
-- Grammar JSON: empty command set → only `[unk]`
-- Confidence propagation: `VoskCommand.Confidence` = min of matched word confidences
-- Pattern referencing undefined slot → throws at construction
-- `VoskCommandResult.Command` is `default` when `IsMatch` is false
-
-**Device verification:**
-- Speak commands with grammar active, verify correct command events
-- Toggle free-speech mode, speak same commands, compare raw VOSK output vs grammar-constrained output
-- Speak off-grammar words, verify `OnUnrecognisedSpeech` fires
-- Silence → no events fired
+Pattern matching, grammar-constrained recognition, shared slots, free-speech toggle, `[unk]` skip logic, parser unit tests, and CommandDemo sample. See `CHANGELOG.md` [0.4.0] for details.
 
 ---
 
-# v2.1 — Robustness
+# v2.1 — Robustness (Shipped v0.5.1)
 
-Handles real players speaking naturally — hesitations, false starts, background noise, articles, plurals.
-
-## v2.1 Scope
-
-**Includes:**
-- Scored matching (replaces binary pass/fail)
-- Sliding start position (false starts and preamble)
-- `minConfidence` / `minScore` thresholds on `VoskCommandRecogniser`
-- Optional literal tokens (`?a`, `?to`, `?the` in patterns)
-- Slot value aliases (`"jackals" → "jackal"`, `"a" → "one"`)
-- Definition-time validation (warns on uppercase/punctuation, warns on single-char values)
-
-**Commands this additionally handles:**
-- "Launch a jackal target hotel one" — `?a` consumed as optional literal
-- "Uh... launch all missiles target hotel one" — sliding start skips preamble
-- "Launch launch all missiles target hotel one" — false start recovery
-- Background noise producing "fire fire target target" — rejected by confidence threshold
-- "Launch jackals" — alias resolves to "jackal"
-
-**Backwards compatible**: existing v2.0 command definitions work unchanged. `{?slot}` syntax is unaffected; `?word` is a new addition for optional literals.
-
-## v2.1 Changes to Matching Algorithm
-
-### Scored matching replaces binary pass/fail
-
-| Element | Token matches | Score |
-|---------|--------------|-------|
-| Literal | Exact match | +1.0 |
-| Literal | Mismatch | -0.5 |
-| `{slot}` (required) | Slot value found | +1.0 |
-| `{slot}` (required) | No match | -1.0 (heavy penalty) |
-| `{?slot}` (optional) | Slot value found | +1.0 |
-| `{?slot}` (optional) | No match | 0.0 (skip) |
-| `?literal` (optional) | Present | +0.5 |
-| `?literal` (optional) | Absent | 0.0 |
-| `[unk]` token | (any) | 0.0 (skipped) |
-
-Final score = raw score / pattern length → normalized 0.0–1.0.
-
-### Sliding start position
-
-Try matching from every token position, not just position 0. Best-scoring (start, command, pattern) triple wins, provided it exceeds `minScore` threshold.
-
-### New fields on `VoskCommandRecogniser`
-
-```csharp
-[Tooltip("Reject commands where the minimum word confidence is below this threshold. " +
-         "Prevents phantom commands from background noise.")]
-[SerializeField] float minConfidence = 0.4f;
-
-[Tooltip("Reject matches where the pattern score is below this threshold. " +
-         "Prevents partial or garbled matches.")]
-[SerializeField] float minScore = 0.6f;
-```
-
-### `VoskCommand` gains `Score` field
-
-- `float Score` — match quality (0.0–1.0), useful for developer debugging
-
-## v2.1 Changes to Data Model
-
-### `VoskSlotDefinition` gains aliases
-
-```csharp
-var weapons = new VoskSlotDefinition("weapon",
-    new[] { "missiles", "torpedoes", "jackal" },
-    aliases: new Dictionary<string, string> {
-        { "jackals", "jackal" },
-    });
-
-var quantity = new VoskSlotDefinition("quantity",
-    new[] { "all", "one", "two", "three" },
-    aliases: new Dictionary<string, string> { { "a", "one" } });
-```
-
-- `Dictionary<string, string> Aliases` — maps variant → canonical value. Copied at construction time to preserve immutability of the readonly struct.
-- Alias words are included in grammar generation
-- `VoskSlotMatch.Value` contains the canonical value after resolution
-
-### Pattern syntax gains optional literals
-
-```csharp
-// ?word = optional literal, consumed if present, skipped if absent
-// distinct from {?slot} which is an optional slot reference
-new[] { "launch", "?a", "{?quantity}", "{weapon}", "target", "{target}" }
-new[] { "orient", "?to", "heading", "{heading}" }
-```
-
-### Definition-time validation
-
-At `Configure()` time:
-- Slot values with uppercase characters → `Debug.LogWarning`
-- Slot values with punctuation → `Debug.LogWarning`
-- Pattern referencing undefined slot name → throws `ArgumentException`
-- Single-character slot values → `Debug.LogWarning` (likely an article, suggest alias instead)
-
-### `GetSlot()` debug warning
-
-In debug builds (`Debug.isDebugBuild`), `GetSlot()` called with a name that doesn't match any registered slot logs `Debug.LogWarning`. Zero cost in release builds.
-
-## v2.1 Grammar Generation Changes
-
-Additionally extract words from:
-- Alias keys (split multi-word aliases into individual words)
-- Optional literal tokens (strip `?` prefix)
-
-## v2.1 Modified Files
-
-| File | Change |
-|------|--------|
-| `Runtime/Commands/VoskSlotDefinition.cs` | Add `Aliases` dictionary |
-| `Runtime/Commands/VoskCommandParser.cs` | Scored matching, sliding start, optional literals, alias resolution, validation |
-| `Runtime/Commands/VoskCommand.cs` | Add `Score` field, `GetSlot` debug warning |
-| `Runtime/Commands/VoskCommandRecogniser.cs` | Add `minConfidence`, `minScore` fields + threshold filtering |
-
-## v2.1 Test Plan
-
-**Scored matching:**
-- Partial match below threshold → `IsMatch = false`
-- Partial match above threshold → `IsMatch = true` with lower Score
-- Better-scoring command wins over worse-scoring
-- Score normalization: short and long patterns produce comparable scores
-
-**Optional literals:**
-- "launch a jackal" matches pattern with `?a` present
-- "launch jackal" matches same pattern with `?a` absent
-
-**Sliding start position:**
-- "uh launch all missiles target hotel one" → matches starting at token 1
-- "launch launch all missiles target hotel one" → matches best from later start
-
-**Aliases:**
-- "jackals" → canonical "jackal" in result
-- "a" in quantity slot context → canonical "one"
-- Alias words appear in generated grammar JSON
-
-**Definition-time validation:**
-- Uppercase slot value → warning logged
-- Slot value with punctuation → warning logged
-- Undefined slot reference → exception thrown
-- Single-character slot value → warning logged
-
-**Confidence/score thresholds:**
-- Commands below minConfidence → rejected
-- Commands below minScore → rejected
+Scored matching, sliding start, slot aliases, optional literals, `minConfidence`/`minScore` thresholds, definition-time validation. Quest device-tested (35 tests, 33/35 pass). Bug fixes: confidence threshold bypass, single-char optional literal removed in favour of alias path, alias key validation added. See `CHANGELOG.md` [0.5.0] and [0.5.1] for details. Full test results in `v2.1-test-matrix.md`.
 
 ---
 
@@ -598,6 +130,419 @@ When any `NumberSequence` slot exists, add the ~30 digit vocabulary words to the
 
 ---
 
+# v2.3 — Continuity
+
+Solves the two biggest real-world command failures: mid-utterance pauses splitting a command across two VOSK results, and multiple commands spoken in a single breath where only the first is recognised.
+
+## v2.3 Scope
+
+**Includes:**
+- Utterance buffer that concatenates consecutive VOSK results within a time window before parsing
+- Sequential command extraction — after the best match, try matching again from the next token
+- Per-intent debounce to suppress duplicate firings from rapid repeated results
+
+**Problems this solves:**
+- "Launch all missiles" [pause] "target hotel one" — two VOSK results, neither matches alone. Buffer concatenates them → single parse succeeds.
+- "Cease fire launch all missiles target hotel one" — single VOSK result. Sequential extraction finds `cease_fire` at tokens 0–1, then `launch_weapon` at tokens 2+.
+- Player says "fire" and VOSK emits two rapid final results → debounce suppresses the duplicate.
+
+## v2.3 Utterance Buffer
+
+`VoskUtteranceBuffer` — pure C# class, sits between `VoskCommandRecogniser` and the parser. Not a MonoBehaviour — owned and ticked by `VoskCommandRecogniser`.
+
+### Behaviour
+
+1. When a final result arrives from VOSK, append its tokens to the buffer. Record the arrival timestamp.
+2. Start (or reset) a flush timer: `bufferWindow` seconds (default 1.5s, configurable via `[SerializeField]`).
+3. If another final result arrives before the timer expires, append its tokens and reset the timer.
+4. When the timer expires (no new results within the window), flush: concatenate all buffered tokens into a single string and pass to the parser.
+5. Per-word confidence: buffer also accumulates the per-word confidence arrays. When flushing, the concatenated confidence array is passed through so `VoskCommand.Confidence` (min across matched tokens) remains accurate.
+
+### Why a time window, not immediate parse
+
+If we parse immediately on each result, we're back to the current behaviour — the first half of a split command fails and is discarded before the second half arrives. The window gives the player time to finish the full command across a natural pause. 1.5s is long enough for a mid-sentence breath but short enough to feel responsive.
+
+### Tradeoff: latency
+
+The buffer adds up to `bufferWindow` latency to every command. In the worst case (single complete command, no pause), the player waits 1.5s after finishing speech before the command fires. This is acceptable for a military sim (commands are deliberate, not twitch), but the field is tunable per game.
+
+### Edge case: rapid distinct commands
+
+Player says "cease fire" [0.5s pause] "launch missiles target hotel one". Both arrive within the buffer window and get concatenated: "cease fire launch missiles target hotel one". Sequential command extraction (below) handles this — it finds both commands in the merged string.
+
+### Fields on `VoskCommandRecogniser`
+
+```csharp
+[Tooltip("Time in seconds to wait for additional speech before parsing. " +
+         "Longer values recover split commands but add latency.")]
+[SerializeField] float bufferWindow = 1.5f;
+```
+
+### Implementation notes
+
+- Buffer is flushed in `Update()` by checking `Time.time - lastResultTime >= bufferWindow` when the buffer is non-empty.
+- `VoskCommandRecogniser` already subscribes to `OnResult`. The buffer sits in the handler before the parse call.
+- If `bufferWindow` is set to 0, buffering is disabled — results are parsed immediately as in v2.2 (backwards compatible).
+
+## v2.3 Sequential Command Extraction
+
+Changes `VoskCommandParser.Parse()` return type from `VoskCommandResult` to `VoskCommandResult[]`.
+
+### Algorithm
+
+1. Run the existing scored matching + sliding start algorithm. Find the best match.
+2. If a match is found, record it. Identify the token span it consumed (start position through last consumed token).
+3. Take the remaining tokens *after* the consumed span. If non-empty, run the parser again on the remainder.
+4. Repeat until no more matches are found or tokens are exhausted.
+5. Return all matches as an array, ordered by their position in the input.
+
+### Why ordered by position, not score
+
+The player spoke commands in a specific order: "cease fire, launch missiles". The game should process them in that order. Reordering by score would produce unpredictable command sequences.
+
+### Event changes
+
+`OnCommandRecognised` fires once per extracted command, in order. Existing subscribers that handle one command at a time work unchanged. New `OnCommandsRecognised` event (plural) fires once with the full `VoskCommand[]` array for subscribers that want batch processing.
+
+```csharp
+public event Action<VoskCommand> OnCommandRecognised;       // fires per command, in order
+public event Action<VoskCommand[]> OnCommandsRecognised;    // fires once with all commands
+```
+
+### Edge case: overlapping matches
+
+Two commands share vocabulary (e.g., "fire" appears in both `launch_weapon` and `cease_fire`). The first match consumes its tokens; the remainder is what's left. If the remainder doesn't form a valid second command, it's reported via `OnUnrecognisedSpeech`. No backtracking — greedy left-to-right extraction.
+
+## v2.3 Per-Intent Debounce
+
+Simple per-intent cooldown timer on `VoskCommandRecogniser`.
+
+```csharp
+[Tooltip("Minimum seconds between firing the same intent. " +
+         "Prevents duplicate commands from rapid VOSK results.")]
+[SerializeField] float commandCooldown = 0.3f;
+```
+
+- Tracks `Dictionary<string, float>` of intent → last fire time.
+- Before firing `OnCommandRecognised`, checks if `Time.time - lastFireTime[intent] >= commandCooldown`. If not, the command is suppressed.
+- Cooldown of 0 disables debounce.
+- Different intents have independent cooldowns — "cease fire" doesn't block "launch missiles".
+
+## v2.3 Modified Files
+
+| File | Change |
+|------|--------|
+| `Runtime/Commands/VoskCommandParser.cs` | `Parse()` returns `VoskCommandResult[]`, sequential extraction loop |
+| `Runtime/Commands/VoskCommandRecogniser.cs` | Utterance buffer, `bufferWindow` field, `OnCommandsRecognised` event, debounce logic, `commandCooldown` field |
+| `Runtime/Commands/VoskCommand.cs` | No changes (result type unchanged) |
+
+## v2.3 New Files
+
+None. All changes are to existing files.
+
+## v2.3 Test Plan
+
+**Utterance buffer:**
+- Two results arriving within window → concatenated and parsed as one
+- Single result, timer expires → parsed normally
+- Three rapid results → all concatenated
+- `bufferWindow = 0` → immediate parse (v2.2 behaviour)
+- Per-word confidence arrays correctly concatenated across buffered results
+
+**Sequential command extraction:**
+- "cease fire launch all missiles target hotel one" → two commands: `cease_fire`, `launch_weapon`
+- "launch missiles target hotel one" → one command (no remainder after extraction)
+- "cease fire resume fire" → two commands in order
+- "hello world cease fire" → sliding start finds `cease_fire`, no second command, "hello world" is noise
+- Overlapping vocabulary: first match wins its span, remainder parsed independently
+
+**Debounce:**
+- Same intent fired twice within cooldown → second suppressed
+- Same intent fired after cooldown expires → both fire
+- Different intents within cooldown → both fire (independent cooldowns)
+- `commandCooldown = 0` → no suppression
+
+**Integration:**
+- Buffer + sequential extraction: "cease fire" [pause] "launch missiles target hotel one" → buffer merges, sequential extraction finds both
+- Buffer + debounce: VOSK emits "fire" twice rapidly → buffer merges to "fire fire", parser matches one `launch_weapon`, debounce irrelevant (only one match). Alternatively if both parse separately, debounce catches the duplicate.
+
+---
+
+# v2.4 — Command Sets
+
+Lets the game activate different command groups for different game states. Reduces grammar size per mode for better VOSK accuracy. Adds push-to-talk for scenarios where always-on recognition is undesirable.
+
+## v2.4 Scope
+
+**Includes:**
+- `VoskCommandSet` — named group of command definitions
+- Runtime switching between active command sets (regenerates grammar)
+- Additive sets — multiple sets active simultaneously (e.g., "common" + "weapons")
+- Push-to-talk mode — recognition starts/stops on input action
+
+**Problems this solves:**
+- Grammar contains all command words across all game modes → VOSK confuses acoustically similar words from unrelated modes. Smaller per-mode grammar = higher accuracy.
+- Player in the navigation screen hears weapon commands recognised from ambient speech. With command sets, weapon commands aren't active during navigation.
+- Some scenarios need recognition only when the player is actively commanding (push-to-talk).
+
+## v2.4 `VoskCommandSet`
+
+```csharp
+public readonly struct VoskCommandSet
+{
+    public string Name { get; }
+    public VoskCommandDefinition[] Commands { get; }
+}
+```
+
+Lightweight grouping — does not own slots. Slots remain globally registered (a target designation like "hotel one" is shared across all modes).
+
+### API on `VoskCommandRecogniser`
+
+```csharp
+// Register all sets and shared slots up front
+void Configure(VoskSlotDefinition[] slots, VoskCommandSet[] sets);
+
+// Activate one or more sets by name — regenerates grammar from active sets only
+void SetActiveSets(params string[] setNames);
+
+// Convenience: activate a single set
+void SetActiveSet(string setName);
+
+// Query
+string[] ActiveSetNames { get; }
+```
+
+### Behaviour
+
+- `Configure()` stores all sets but does not activate any. The developer must call `SetActiveSets()` to activate.
+- `SetActiveSets()` collects command definitions from the named sets, rebuilds the parser with only those commands, regenerates grammar from only the active vocabulary + shared slot values, and calls `SetGrammar()`.
+- If recognition is running, `SetActiveSets()` internally does stop → set grammar → start. The brief gap (~100ms) is acceptable for a mode switch which is an explicit player/game action.
+- Calling `SetActiveSets()` with an unknown set name throws `ArgumentException`.
+- An empty set name array is valid — disables all commands, grammar becomes `["[unk]"]` only.
+
+### Backwards compatibility
+
+The existing `Configure(slots, commands)` overload (no sets) continues to work. Internally it creates a single unnamed set containing all commands and activates it immediately. Existing code is unaffected.
+
+### Example
+
+```csharp
+var weaponsSet = new VoskCommandSet("weapons", new[] {
+    new VoskCommandDefinition("launch_weapon", ...),
+    new VoskCommandDefinition("cease_fire", ...),
+});
+
+var navigationSet = new VoskCommandSet("navigation", new[] {
+    new VoskCommandDefinition("evasive_maneuvers", ...),
+    new VoskCommandDefinition("set_heading", ...),
+});
+
+var commonSet = new VoskCommandSet("common", new[] {
+    new VoskCommandDefinition("status_report", ...),
+});
+
+commandRecogniser.Configure(slots, new[] { weaponsSet, navigationSet, commonSet });
+
+// Player enters weapons station
+commandRecogniser.SetActiveSets("weapons", "common");
+
+// Player moves to helm
+commandRecogniser.SetActiveSets("navigation", "common");
+```
+
+## v2.4 Push-to-Talk
+
+A mode on `VoskCommandRecogniser` where recognition is only active while an input is held.
+
+```csharp
+[Tooltip("When enabled, recognition only runs while pushToTalkAction is held. " +
+         "Eliminates phantom commands when the player is not actively commanding.")]
+[SerializeField] bool pushToTalkEnabled = false;
+
+[Tooltip("Input action that activates recognition. Typically a controller grip or trigger.")]
+[SerializeField] InputActionReference pushToTalkAction;
+```
+
+### Behaviour
+
+- When `pushToTalkEnabled` is true and the action is pressed: `StartRecognition()`.
+- When the action is released: waits `pushToTalkTail` seconds (default 0.5s) for the final VOSK result to arrive, then `StopRecognition()`.
+- The tail delay prevents cutting off the last word. VOSK needs a moment of silence after speech to emit the final result.
+- When `pushToTalkEnabled` is false (default): recognition runs continuously as in v2.0–v2.3.
+- Push-to-talk composes with the utterance buffer: the buffer flushes either on timer expiry or on push-to-talk release (whichever comes first), ensuring commands are processed promptly when the player lets go.
+
+### Input System dependency
+
+Uses Unity's Input System (`UnityEngine.InputSystem`). The `InputActionReference` field is nullable — if push-to-talk is enabled but no action is assigned, a warning is logged and push-to-talk is disabled at runtime.
+
+Assembly definition gains optional reference to `Unity.InputSystem`. Push-to-talk code is behind `#if ENABLE_INPUT_SYSTEM` so the package compiles without Input System installed (push-to-talk simply isn't available).
+
+## v2.4 Modified Files
+
+| File | Change |
+|------|--------|
+| `Runtime/Commands/VoskCommandRecogniser.cs` | Command sets API, `SetActiveSets()`, push-to-talk fields and logic |
+| `Runtime/Commands/VoskCommandParser.cs` | Accept filtered command list at construction (already does — no parser change needed, just constructed with fewer commands) |
+
+## v2.4 New Files
+
+| File | Purpose |
+|------|---------|
+| `Runtime/Commands/VoskCommandSet.cs` | Command set readonly struct |
+
+## v2.4 Test Plan
+
+**Command sets:**
+- Activate "weapons" set → only weapon commands match, navigation commands don't
+- Activate "weapons" + "common" → both sets' commands match
+- Switch from "weapons" to "navigation" → weapon commands stop matching, navigation commands start
+- Activate empty set list → no commands match, `OnUnrecognisedSpeech` fires for all input
+- Unknown set name → exception
+- Grammar regenerated on switch: only active vocabulary words present
+- `Configure(slots, commands)` (no sets) → all commands active, backwards compatible
+
+**Push-to-talk:**
+- Action pressed → recognition starts
+- Action released → recognition stops after tail delay
+- Speech during release tail → final result captured
+- Push-to-talk disabled → continuous recognition (v2.3 behaviour)
+- No action assigned + push-to-talk enabled → warning, falls back to continuous
+- `#if ENABLE_INPUT_SYSTEM` absent → push-to-talk fields hidden, continuous only
+
+---
+
+# v2.5 — Inspector Authoring
+
+Adds ScriptableObject-based command and slot authoring for designers who prefer the Inspector over code. Does not replace the code API — provides a parallel authoring path.
+
+## v2.5 Scope
+
+**Includes:**
+- `VoskSlotAsset` ScriptableObject for slot definitions
+- `VoskCommandAsset` ScriptableObject for command definitions with pattern editing
+- `VoskCommandSetAsset` ScriptableObject for command set grouping
+- Inspector-driven `Configure()` overloads on `VoskCommandRecogniser`
+- Serialized asset references on `VoskCommandRecogniser` for zero-code setup
+
+**Problems this solves:**
+- Designers can't author commands without writing C# — they depend on a programmer for every vocabulary change.
+- Iteration is slow: change a slot value → recompile → test. With ScriptableObjects: change a value in Inspector → enter play mode → test.
+- No visual overview of all commands and their patterns.
+
+## v2.5 `VoskSlotAsset`
+
+```csharp
+[CreateAssetMenu(menuName = "VOSK XR/Slot Definition")]
+public class VoskSlotAsset : ScriptableObject
+{
+    [Tooltip("Slot name used in pattern references {slotName}")]
+    public string slotName;
+
+    public VoskSlotType slotType = VoskSlotType.Enumerated;
+
+    [Tooltip("Allowed values (Enumerated slots only)")]
+    public string[] values;
+
+    [Tooltip("Variant → canonical mappings")]
+    public AliasEntry[] aliases;
+
+    [Header("NumberSequence Settings")]
+    public int minWords = 1;
+    public int maxWords = 3;
+
+    [System.Serializable]
+    public struct AliasEntry
+    {
+        public string variant;
+        public string canonical;
+    }
+
+    // Converts to runtime struct
+    public VoskSlotDefinition ToDefinition() { ... }
+}
+```
+
+## v2.5 `VoskCommandAsset`
+
+```csharp
+[CreateAssetMenu(menuName = "VOSK XR/Command Definition")]
+public class VoskCommandAsset : ScriptableObject
+{
+    public string intent;
+
+    [Tooltip("Each element is one pattern. Tokens separated by spaces. " +
+             "Use {slot} for required slots, {?slot} for optional, ?word for optional literals.")]
+    public string[] patterns;
+
+    // Converts to runtime struct (splits pattern strings into string[][])
+    public VoskCommandDefinition ToDefinition() { ... }
+}
+```
+
+### Pattern string format
+
+In the Inspector, patterns are authored as single strings rather than `string[][]`:
+
+```
+"launch ?a {?quantity} {weapon} target {target}"
+```
+
+`ToDefinition()` splits on whitespace to produce the `string[]` the parser expects. This is more readable in the Inspector than a nested array.
+
+## v2.5 `VoskCommandSetAsset`
+
+```csharp
+[CreateAssetMenu(menuName = "VOSK XR/Command Set")]
+public class VoskCommandSetAsset : ScriptableObject
+{
+    public string setName;
+    public VoskCommandAsset[] commands;
+
+    public VoskCommandSet ToSet() { ... }
+}
+```
+
+## v2.5 Changes to `VoskCommandRecogniser`
+
+```csharp
+[Header("Inspector Authoring (optional — ignored if Configure() is called from code)")]
+[SerializeField] VoskSlotAsset[] slotAssets;
+[SerializeField] VoskCommandSetAsset[] commandSetAssets;
+[SerializeField] string[] activeSetNames;
+```
+
+On `Awake()`, if `slotAssets` is non-empty and `Configure()` has not been called from code, auto-configure from the serialized assets. Code-based `Configure()` always takes priority.
+
+## v2.5 New Files
+
+| File | Purpose |
+|------|---------|
+| `Runtime/Commands/VoskSlotAsset.cs` | Slot ScriptableObject |
+| `Runtime/Commands/VoskCommandAsset.cs` | Command ScriptableObject |
+| `Runtime/Commands/VoskCommandSetAsset.cs` | Command set ScriptableObject |
+
+## v2.5 Modified Files
+
+| File | Change |
+|------|--------|
+| `Runtime/Commands/VoskCommandRecogniser.cs` | Asset reference fields, auto-configure from assets in `Awake()` |
+
+## v2.5 Test Plan
+
+**ScriptableObject conversion:**
+- `VoskSlotAsset.ToDefinition()` produces correct `VoskSlotDefinition` for Enumerated and NumberSequence types
+- `VoskCommandAsset.ToDefinition()` splits pattern strings into correct token arrays
+- Alias entries convert to dictionary correctly
+- Patterns with `{slot}`, `{?slot}`, `?word` tokens preserved correctly after split
+
+**Inspector authoring:**
+- Assign assets in Inspector → enter play mode → commands work without any `Configure()` call
+- Code `Configure()` call → Inspector assets ignored
+- Missing slot asset referenced by command pattern → validation warning at configure time
+
+---
+
 # Version Summary
 
 | Version | Theme | Key Additions | Commands Unlocked |
@@ -605,8 +550,35 @@ When any `NumberSequence` slot exists, add the ~30 digit vocabulary words to the
 | **v2.0** | Foundation | Pattern matching, grammar, shared slots, free-speech toggle | Weapons, targets, named ranges, state commands |
 | **v2.1** | Robustness | Scored matching, sliding start, aliases, optional literals, thresholds | Same commands, reliable with real speech |
 | **v2.2** | Numeric | NumberSequence slots, VoskNumberParser | Headings, numeric distances, coordinates |
+| **v2.3** | Continuity | Utterance buffer, sequential command extraction, debounce | Split commands recovered, chained commands extracted |
+| **v2.4** | Command Sets | Named command groups, runtime switching, push-to-talk | Mode-specific commands, reduced grammar per mode |
+| **v2.5** | Inspector Authoring | ScriptableObject slots/commands/sets, zero-code setup | Same commands, designer-friendly authoring |
 
-Native bridge change (`vosk_bridge_set_grammar`) ships in v2.0. Everything in v2.1 and v2.2 is pure C# changes on top.
+Native bridge change (`vosk_bridge_set_grammar`) ships in v2.0. Everything in v2.1–v2.5 is pure C# changes on top.
+
+---
+
+# Future Ideas (Out of Scope for v2.x)
+
+## Pattern prefix routing (wake words)
+
+Use role-specific prefix words to route commands: "Helm, evasive maneuvers", "Weapons, launch missiles". The prefix acts as both a natural speech cue and a command disambiguator. This is a pattern design convention, not a code feature — it works today by adding the prefix as a literal in the pattern. A future version could formalise it with a `prefix` field on `VoskCommandSet` that auto-prepends to all patterns, but this needs more design thought around grammar interaction and is out of scope for v2.x.
+
+## Partial result preview
+
+Parse VOSK partial results to drive a "command preview" UI showing what the system thinks the player is saying before the final result commits. Adds `OnPartialCommand` event. Requires careful UX to avoid distracting flickering.
+
+## Command confirmation callback
+
+`OnCommandPending` fires with a pending command the game can `.Confirm()` or `.Reject()`. Enables "Did you say launch missiles? Confirm." flow for high-stakes commands. Needs design around timeout and what happens when the player doesn't confirm.
+
+## Context-dependent slots
+
+Slot values that change based on game state (e.g., available weapons depend on ship class). Would require a callback or data-binding mechanism for dynamic slot population, plus grammar regeneration.
+
+## Free-text / wildcard slot type
+
+A `VoskSlotType.FreeText` that captures remaining tokens until the next literal. Useful for open-ended commands like "log note [anything]" or "send message [anything]". Requires free-speech mode or a very large grammar.
 
 ---
 
@@ -620,7 +592,9 @@ In v2.0, the parser does not require full input consumption. With grammar active
 
 VOSK's endpointer splits utterances at silence boundaries. If a player says "launch all missiles" (long pause) "target hotel one", VOSK emits two separate final results: `"launch all missiles"` and `"target hotel one"`. Neither matches the full command pattern. The command is lost.
 
-**Mitigation**: Players should speak compound commands without long pauses. This is a VOSK endpointer behavior, not a parser limitation. Future work could add a temporal buffer that concatenates consecutive utterances within N seconds, but this is not planned for v2.0–v2.2.
+**Mitigation (v2.0–v2.2)**: Players should speak compound commands without long pauses. This is a VOSK endpointer behavior, not a parser limitation.
+
+**Fixed in v2.3**: The utterance buffer concatenates consecutive results within a configurable time window before parsing, recovering split commands.
 
 ## Short utterances and phantom commands
 
@@ -628,7 +602,9 @@ With grammar active, very short sounds (coughs, "uh") may be mapped to the acous
 
 ## Multiple commands in one breath
 
-"Cease fire launch all missiles target hotel one" spoken without pause arrives as a single VOSK result. The parser matches **one** command per result (the best-scoring match). The second command is lost. This is a known limitation across all versions. If needed, a future extension could try matching from the token after the first match ends.
+"Cease fire launch all missiles target hotel one" spoken without pause arrives as a single VOSK result. The parser matches **one** command per result (the best-scoring match). The second command is lost.
+
+**Fixed in v2.3**: Sequential command extraction matches from the token after the first match's span, extracting all commands from a single utterance.
 
 ## Grammar is a flat word list, not phrase constraints
 
