@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-04-05
+
+### Fixed
+
+- Confidence threshold bypass: commands with zero confidence (from `[unk]` preamble tokens) no longer slip past `minConfidence` gate. `ComputeConfidence` now scopes to matched tokens only and returns -1 when word data is unavailable; threshold guard changed from `> 0` to `>= 0`.
+- Removed `?a` optional literal from sample launch pattern — single-character words are unreliable in VOSK grammar mode. The existing quantity alias (`"a" → "one"`) handles it via the slot path.
+- Validation now warns on single-character alias keys (previously only checked direct slot values).
+
+### Added
+
+- Quest device test matrix (`v2.1-test-matrix.md`) with 35 tests across 7 phases: scored matching, sliding start, optional literals, aliases, threshold rejection, grammar/free-speech mode, and validation warnings. Results: 33/35 pass.
+
 ## [0.5.0] - 2026-04-02
 
 ### Added
