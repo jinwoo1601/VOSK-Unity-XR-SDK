@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-05
+
+### Added
+
+- `NumberSequence` slot type for digit-word commands (e.g., "heading two seven zero" → 270).
+- `VoskNumberParser` with `ParseDigitSequence` and `ParseCardinal` for converting spoken digit words to integers.
+- `VoskSlotDefinition.NumberSequence()` factory with configurable `minWords`/`maxWords` greedy matching.
+- Digit vocabulary automatically merged into grammar JSON when NumberSequence slots are registered.
+- Sample `set_heading` command with heading + optional elevation NumberSequence slots in `CommandDemo.cs`.
+- Quest device test matrix (`v2.2-test-matrix.md`) with 40 tests across 11 phases — 31 pass, 1 fail (free speech homophone), 4 known limitations/skips.
+
+### Known Limitations
+
+- Mid-command pauses exceeding VOSK's VAD silence threshold split speech into independent utterances, preventing cross-utterance command matching (test 9.2). This is rare in grammar mode with crisp commands.
+- Free speech mode: VOSK may transcribe digit homophones incorrectly ("two" → "to", "orient" → "korean"). Grammar mode is recommended for production use.
+
 ## [0.5.1] - 2026-04-05
 
 ### Fixed

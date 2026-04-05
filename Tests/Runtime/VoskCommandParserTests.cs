@@ -280,14 +280,14 @@ namespace VoskXR.Tests.Runtime
         }
 
         [Test]
-        public void NoWordData_ConfidenceIsZero()
+        public void NoWordData_ConfidenceIsNegativeOne()
         {
             var parser = CreateParser();
 
             var result = parser.Parse("cease fire");
 
             Assert.IsTrue(result.IsMatch);
-            Assert.AreEqual(0f, result.Command.Confidence, 0.001f);
+            Assert.AreEqual(-1f, result.Command.Confidence, 0.001f);
         }
 
         [Test]
@@ -479,6 +479,185 @@ namespace VoskXR.Tests.Runtime
             // "a" from "?a" optional literal should be in grammar
             Assert.IsTrue(json.Contains("\"a\""), "Optional literal 'a' should be in grammar");
         }
+
+        // --- NumberSequence helpers ---
+
+        static VoskSlotDefinition[] MakeNumericSlots()
+        {
+            return new[]
+            {
+                new VoskSlotDefinition("target",
+                    new[] { "hotel one", "hotel two", "bravo two" }),
+                VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3),
+                VoskSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2),
+            };
+        }
+
+        static VoskCommandDefinition[] MakeNumericCommands()
+        {
+            return new[]
+            {
+                new VoskCommandDefinition("set_heading", new[]
+                {
+                    new[] { "orient", "to", "heading", "{heading}" },
+                    new[] { "orient", "to", "heading", "{heading}", "mark", "{?elevation}" },
+                }),
+                new VoskCommandDefinition("close_distance", new[]
+                {
+                    new[] { "close", "distance", "{heading}", "klicks", "target", "{target}" },
+                }),
+            };
+        }
+
+        VoskCommandParser CreateNumericParser()
+        {
+            return new VoskCommandParser(MakeNumericSlots(), MakeNumericCommands());
+        }
+
+        // --- NumberSequence tests ---
+
+        [Test]
+        public void NumberSequence_ThreeDigitWords_Match()
+        {
+            var parser = CreateNumericParser();
+
+            var result = parser.Parse("orient to heading two seven zero");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("set_heading", result.Command.Intent);
+            Assert.AreEqual("two seven zero", result.Command.GetSlot("heading"));
+        }
+
+        [Test]
+        public void NumberSequence_WithOptionalElevation()
+        {
+            var parser = CreateNumericParser();
+
+            var result = parser.Parse("orient to heading two seven zero mark one five");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("set_heading", result.Command.Intent);
+            Assert.AreEqual("two seven zero", result.Command.GetSlot("heading"));
+            Assert.AreEqual("one five", result.Command.GetSlot("elevation"));
+        }
+
+        [Test]
+        public void NumberSequence_SingleDigitWord_Match()
+        {
+            var parser = CreateNumericParser();
+
+            var result = parser.Parse("orient to heading five");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("set_heading", result.Command.Intent);
+            Assert.AreEqual("five", result.Command.GetSlot("heading"));
+        }
+
+        [Test]
+        public void NumberSequence_StopsAtNonDigitWord()
+        {
+            var parser = CreateNumericParser();
+
+            // "mark" is not a digit word — heading should stop at 3 words
+            var result = parser.Parse("orient to heading two seven zero mark");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("two seven zero", result.Command.GetSlot("heading"));
+        }
+
+        [Test]
+        public void NumberSequence_RespectsMaxWords()
+        {
+            // elevation has maxWords=2; input has 3 digit words after "mark"
+            var parser = CreateNumericParser();
+
+            var result = parser.Parse("orient to heading five mark one two three");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("five", result.Command.GetSlot("heading"));
+            // elevation should consume only 2 of the 3 digits
+            Assert.AreEqual("one two", result.Command.GetSlot("elevation"));
+        }
+
+        [Test]
+        public void NumberSequence_BelowMinWords_NoMatch()
+        {
+            // Create a slot that requires minWords=2
+            var slots = new[]
+            {
+                VoskSlotDefinition.NumberSequence("code", minWords: 2, maxWords: 4),
+            };
+            var commands = new[]
+            {
+                // Short pattern so a required slot miss brings score to <= 0
+                new VoskCommandDefinition("enter_code", new[]
+                {
+                    new[] { "enter", "{code}" },
+                }),
+            };
+            var parser = new VoskCommandParser(slots, commands);
+
+            // Only 1 digit word — below minWords=2, required slot fails
+            var result = parser.Parse("enter five");
+
+            Assert.IsFalse(result.IsMatch);
+        }
+
+        [Test]
+        public void NumberSequence_OptionalMissing_StillMatches()
+        {
+            var parser = CreateNumericParser();
+
+            // "orient to heading five mark" — no digits after "mark" for optional elevation
+            var result = parser.Parse("orient to heading five mark");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("set_heading", result.Command.Intent);
+            Assert.AreEqual("five", result.Command.GetSlot("heading"));
+            Assert.IsFalse(result.Command.HasSlot("elevation"));
+        }
+
+        [Test]
+        public void NumberSequence_MixedWithEnumerated()
+        {
+            var parser = CreateNumericParser();
+
+            var result = parser.Parse("close distance fifteen klicks target bravo two");
+
+            Assert.IsTrue(result.IsMatch);
+            Assert.AreEqual("close_distance", result.Command.Intent);
+            Assert.AreEqual("fifteen", result.Command.GetSlot("heading"));
+            Assert.AreEqual("bravo two", result.Command.GetSlot("target"));
+        }
+
+        [Test]
+        public void GrammarJson_ContainsDigitVocab_WhenNumberSequenceExists()
+        {
+            var parser = CreateNumericParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            Assert.IsTrue(json.Contains("\"zero\""), "Should contain 'zero'");
+            Assert.IsTrue(json.Contains("\"nine\""), "Should contain 'nine'");
+            Assert.IsTrue(json.Contains("\"twenty\""), "Should contain 'twenty'");
+            Assert.IsTrue(json.Contains("\"hundred\""), "Should contain 'hundred'");
+        }
+
+        [Test]
+        public void GrammarJson_NoDigitVocab_WhenNoNumberSequence()
+        {
+            // Use the standard (enumerated-only) parser
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            // "twenty", "thirty" etc. should NOT be present (no NumberSequence slots)
+            Assert.IsFalse(json.Contains("\"twenty\""), "'twenty' should not be in grammar");
+            Assert.IsFalse(json.Contains("\"thirty\""), "'thirty' should not be in grammar");
+            Assert.IsFalse(json.Contains("\"hundred\""), "'hundred' should not be in grammar");
+        }
+
+        // --- Existing score/validation tests ---
 
         [Test]
         public void Score_NormalizedBetweenZeroAndOne()
