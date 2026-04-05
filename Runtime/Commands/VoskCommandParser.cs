@@ -165,6 +165,19 @@ namespace VoskXR.Commands
                             "Consider using an alias instead (e.g. \"a\" → \"one\").");
                     }
                 }
+
+                if (slot.Aliases != null)
+                {
+                    foreach (var key in slot.Aliases.Keys)
+                    {
+                        if (key.Length == 1)
+                        {
+                            UnityEngine.Debug.LogWarning(
+                                $"[VoskCommandParser] Slot '{slot.Name}' has single-character alias \"{key}\". " +
+                                "Short words may be unreliably recognized by VOSK.");
+                        }
+                    }
+                }
             }
         }
 
@@ -195,6 +208,7 @@ namespace VoskXR.Commands
             float bestScore = float.MinValue;
             int bestLiteralCount = -1;
             int bestCommandIdx = -1;
+            int bestStartIdx = 0;
             List<VoskSlotMatch> bestSlots = null;
 
             for (int ci = 0; ci < _commands.Length; ci++)
@@ -216,6 +230,7 @@ namespace VoskXR.Commands
                             bestScore = matchResult.Score;
                             bestLiteralCount = matchResult.LiteralCount;
                             bestCommandIdx = ci;
+                            bestStartIdx = startIdx;
                             bestSlots = matchResult.Slots;
                         }
                     }
@@ -225,7 +240,7 @@ namespace VoskXR.Commands
             if (bestCommandIdx < 0 || bestScore <= 0f)
                 return new VoskCommandResult(text);
 
-            float confidence = ComputeConfidence(tokens, bestSlots, wordConfidence);
+            float confidence = ComputeConfidence(tokens, bestStartIdx, bestSlots, wordConfidence);
 
             var slotsArray = bestSlots != null && bestSlots.Count > 0
                 ? bestSlots.ToArray()
@@ -454,21 +469,21 @@ namespace VoskXR.Commands
             return null;
         }
 
-        float ComputeConfidence(string[] tokens, List<VoskSlotMatch> slots,
+        float ComputeConfidence(string[] tokens, int startIdx, List<VoskSlotMatch> slots,
             Dictionary<string, float> wordConfidence)
         {
             if (wordConfidence == null || wordConfidence.Count == 0)
-                return 0f;
+                return -1f;
 
             float minConf = float.MaxValue;
             bool anyMatch = false;
 
-            foreach (string token in tokens)
+            for (int i = startIdx; i < tokens.Length; i++)
             {
-                if (token == UnkToken)
+                if (tokens[i] == UnkToken)
                     continue;
 
-                if (wordConfidence.TryGetValue(token, out float conf))
+                if (wordConfidence.TryGetValue(tokens[i], out float conf))
                 {
                     anyMatch = true;
                     if (conf < minConf)
@@ -476,7 +491,7 @@ namespace VoskXR.Commands
                 }
             }
 
-            return anyMatch ? minConf : 0f;
+            return anyMatch ? minConf : -1f;
         }
 
         /// <summary>

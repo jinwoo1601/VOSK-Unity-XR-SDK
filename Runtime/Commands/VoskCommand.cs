@@ -33,7 +33,7 @@ namespace VoskXR.Commands
         /// <summary>Matched slot name/value pairs.</summary>
         public readonly VoskSlotMatch[] Slots;
 
-        /// <summary>Minimum word confidence across matched tokens. 0 when word data is unavailable.</summary>
+        /// <summary>Minimum word confidence across matched tokens. -1 when word data is unavailable.</summary>
         public readonly float Confidence;
 
         /// <summary>Match quality score (0.0–1.0). Higher is better.</summary>

@@ -105,8 +105,8 @@ namespace VoskXR.Commands
                     return;
                 }
 
-                // Reject if below confidence threshold (only when word data is available)
-                if (cmd.Confidence > 0f && cmd.Confidence < minConfidence)
+                // Reject if below confidence threshold (skip when word data unavailable, i.e. -1)
+                if (cmd.Confidence >= 0f && cmd.Confidence < minConfidence)
                 {
                     OnUnrecognisedSpeech?.Invoke(parsed.RawText);
                     return;

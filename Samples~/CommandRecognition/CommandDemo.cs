@@ -45,7 +45,7 @@ public class CommandDemo : MonoBehaviour
         {
             new VoskCommandDefinition(Intents.LaunchWeapon, new[]
             {
-                new[] { "launch", "?a", "{?quantity}", "{weapon}", "target", "{target}" },
+                new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
                 new[] { "fire", "{?quantity}", "{weapon}", "at", "{target}" },
                 new[] { "shoot", "{weapon}" },
             }),
