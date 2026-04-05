@@ -214,7 +214,7 @@ namespace VoskXR.Commands
                 float bestScore = float.MinValue;
                 int bestLiteralCount = -1;
                 int bestCommandIdx = -1;
-                int bestStartIdx = 0;
+                int bestStartIdx = int.MaxValue;
                 int bestEndIdx = 0;
                 List<VoskSlotMatch> bestSlots = null;
 
@@ -230,8 +230,12 @@ namespace VoskXR.Commands
 
                             var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
 
-                            if (matchResult.Score > bestScore ||
-                                (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount))
+                            if (matchResult.Score > 0f &&
+                                (bestScore <= 0f ||
+                                 startIdx < bestStartIdx ||
+                                 (startIdx == bestStartIdx &&
+                                  (matchResult.Score > bestScore ||
+                                   (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
                             {
                                 bestScore = matchResult.Score;
                                 bestLiteralCount = matchResult.LiteralCount;
