@@ -99,6 +99,7 @@ public class CommandDemo : MonoBehaviour
             commands: commands);
 
         commandRecogniser.OnCommandRecognised += OnCommand;
+        commandRecogniser.OnCommandsRecognised += OnCommandBatch;
         commandRecogniser.OnUnrecognisedSpeech += OnUnrecognised;
 
         recogniser.StartRecognition();
@@ -109,6 +110,7 @@ public class CommandDemo : MonoBehaviour
         if (commandRecogniser != null)
         {
             commandRecogniser.OnCommandRecognised -= OnCommand;
+            commandRecogniser.OnCommandsRecognised -= OnCommandBatch;
             commandRecogniser.OnUnrecognisedSpeech -= OnUnrecognised;
         }
     }
@@ -156,6 +158,13 @@ public class CommandDemo : MonoBehaviour
                 Debug.Log($"[CommandDemo]   Heading={hdgVal} (raw=\"{hdg}\"), Elevation={elevVal}");
                 break;
         }
+    }
+
+    void OnCommandBatch(VoskCommand[] commands)
+    {
+        Debug.Log($"[CommandDemo] Batch: {commands.Length} command(s) from single utterance");
+        for (int i = 0; i < commands.Length; i++)
+            Debug.Log($"[CommandDemo]   [{i}] {commands[i].Intent} (score={commands[i].Score:F2})");
     }
 
     void OnUnrecognised(string text)
