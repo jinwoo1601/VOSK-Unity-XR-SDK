@@ -322,6 +322,17 @@ namespace VoskXR.Commands
                 }
             }
 
+            // Add digit vocabulary when any NumberSequence slot exists
+            foreach (var slot in _slots)
+            {
+                if (slot.Type == VoskSlotType.NumberSequence)
+                {
+                    foreach (string word in VoskNumberParser.DigitVocabulary)
+                        uniqueWords.Add(word);
+                    break;
+                }
+            }
+
             uniqueWords.Add(UnkToken);
 
             // Build JSON array
@@ -376,7 +387,14 @@ namespace VoskXR.Commands
                     if (!_slotIndex.TryGetValue(slotName, out int slotIdx))
                         return default;
 
-                    string matchedValue = TryMatchSlot(tokens, tokenIdx, slotIdx, out int consumed);
+                    string matchedValue;
+                    int consumed;
+                    if (_slots[slotIdx].Type == VoskSlotType.NumberSequence)
+                        matchedValue = TryMatchNumberSequence(tokens, tokenIdx,
+                            _slots[slotIdx].MinWords, _slots[slotIdx].MaxWords, out consumed);
+                    else
+                        matchedValue = TryMatchSlot(tokens, tokenIdx, slotIdx, out consumed);
+
                     if (matchedValue != null)
                     {
                         if (slots == null)
@@ -467,6 +485,29 @@ namespace VoskXR.Commands
             }
 
             return null;
+        }
+
+        string TryMatchNumberSequence(string[] tokens, int startIdx, int minWords, int maxWords, out int consumed)
+        {
+            consumed = 0;
+            int idx = startIdx;
+
+            while (idx < tokens.Length && tokens[idx] == UnkToken)
+                idx++;
+
+            var matched = new List<string>();
+            while (matched.Count < maxWords && idx < tokens.Length
+                && VoskNumberParser.DigitVocabulary.Contains(tokens[idx]))
+            {
+                matched.Add(tokens[idx]);
+                idx++;
+            }
+
+            if (matched.Count < minWords)
+                return null;
+
+            consumed = idx - startIdx;
+            return string.Join(" ", matched);
         }
 
         float ComputeConfidence(string[] tokens, int startIdx, List<VoskSlotMatch> slots,
