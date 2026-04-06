@@ -56,14 +56,26 @@ namespace VoskXR.Commands
         // Per-intent debounce state
         readonly Dictionary<string, float> _lastFireTime = new Dictionary<string, float>(StringComparer.Ordinal);
 
+        // Command set state
+        VoskSlotDefinition[] _slots;
+        Dictionary<string, VoskCommandSet> _sets;
+        string[] _activeSetNames = Array.Empty<string>();
+
+        /// <summary>Names of the currently active command sets.</summary>
+        public string[] ActiveSetNames => _activeSetNames;
+
         /// <summary>
         /// Builds the command parser from the given slot and command definitions.
         /// If the speech recogniser model is already loaded and free-speech mode is off,
-        /// applies the grammar immediately.
+        /// applies the grammar immediately. All commands are active.
         /// </summary>
         public void Configure(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands)
         {
             _lastFireTime.Clear();
+            _slots = slots;
+            _sets = null;
+            _activeSetNames = Array.Empty<string>();
+
             _parser = new VoskCommandParser(slots, commands);
             _grammarJson = _parser.GenerateGrammarJson();
             _grammarApplied = false;
@@ -73,6 +85,104 @@ namespace VoskXR.Commands
                 speechRecogniser.SetGrammar(_grammarJson);
                 _grammarApplied = true;
             }
+        }
+
+        /// <summary>
+        /// Registers shared slots and named command sets. Does not activate any set —
+        /// call <see cref="SetActiveSets"/> to activate one or more sets.
+        /// </summary>
+        public void Configure(VoskSlotDefinition[] slots, VoskCommandSet[] sets)
+        {
+            if (slots == null) throw new ArgumentNullException(nameof(slots));
+            if (sets == null) throw new ArgumentNullException(nameof(sets));
+
+            _lastFireTime.Clear();
+            _slots = slots;
+            _sets = new Dictionary<string, VoskCommandSet>(sets.Length, StringComparer.Ordinal);
+
+            for (int i = 0; i < sets.Length; i++)
+            {
+                if (_sets.ContainsKey(sets[i].Name))
+                    throw new ArgumentException($"Duplicate command set name: '{sets[i].Name}'.");
+                _sets[sets[i].Name] = sets[i];
+            }
+
+            _parser = null;
+            _grammarJson = null;
+            _grammarApplied = false;
+            _activeSetNames = Array.Empty<string>();
+        }
+
+        /// <summary>
+        /// Activates the named command sets. Rebuilds the parser and grammar from
+        /// only the commands in the active sets. If recognition is running, performs
+        /// stop → set grammar → start.
+        /// </summary>
+        public void SetActiveSets(params string[] setNames)
+        {
+            if (_sets == null)
+                throw new InvalidOperationException(
+                    "Configure(slots, sets) must be called before SetActiveSets().");
+
+            if (setNames == null)
+                setNames = Array.Empty<string>();
+
+            for (int i = 0; i < setNames.Length; i++)
+            {
+                if (!_sets.ContainsKey(setNames[i]))
+                    throw new ArgumentException(
+                        $"Unknown command set name: '{setNames[i]}'.", nameof(setNames));
+            }
+
+            var commands = new List<VoskCommandDefinition>();
+            for (int i = 0; i < setNames.Length; i++)
+                commands.AddRange(_sets[setNames[i]].Commands);
+
+            _activeSetNames = setNames.Length > 0
+                ? (string[])setNames.Clone()
+                : Array.Empty<string>();
+
+            _lastFireTime.Clear();
+            RebuildParserAndGrammar(commands.Count > 0
+                ? commands.ToArray()
+                : Array.Empty<VoskCommandDefinition>());
+        }
+
+        /// <summary>
+        /// Activates a single command set by name.
+        /// </summary>
+        public void SetActiveSet(string setName)
+        {
+            SetActiveSets(setName);
+        }
+
+        void RebuildParserAndGrammar(VoskCommandDefinition[] commands)
+        {
+            // Discard stale buffered speech from the previous grammar
+            if (_bufferActive)
+            {
+                _bufferedTexts.Clear();
+                _bufferedWords.Clear();
+                _bufferActive = false;
+            }
+
+            _parser = new VoskCommandParser(_slots, commands);
+            _grammarJson = _parser.GenerateGrammarJson();
+            _grammarApplied = false;
+
+            if (freeSpeechMode || speechRecogniser == null || !speechRecogniser.IsModelReady)
+                return;
+
+            bool wasRunning = speechRecogniser.IsRecognising;
+
+            if (wasRunning)
+                speechRecogniser.StopRecognition();
+
+            speechRecogniser.SetGrammar(_grammarJson);
+            _grammarApplied = true;
+
+            if (wasRunning)
+                speechRecogniser.StartRecognition();
         }
 
         void OnEnable()

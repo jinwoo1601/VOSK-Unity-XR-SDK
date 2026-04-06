@@ -42,9 +42,9 @@ Utterance buffer (`bufferWindow`) merges split VOSK results before parsing. Sequ
 
 ---
 
-# v2.4 — Command Sets
+# v2.4 — Command Sets (Shipped v0.8.0)
 
-Lets the game activate different command groups for different game states. Reduces grammar size per mode for better VOSK accuracy.
+`VoskCommandSet` named groups, `Configure(slots, sets)` overload, `SetActiveSets()`/`SetActiveSet()` runtime switching with grammar regeneration, `ActiveSetNames` query, backwards-compatible `Configure(slots, commands)`. Utterance buffer cleared on set switch. Slot vocabulary remains globally included in grammar. See `CHANGELOG.md` [0.8.0] for details.
 
 ## v2.4 Scope
 

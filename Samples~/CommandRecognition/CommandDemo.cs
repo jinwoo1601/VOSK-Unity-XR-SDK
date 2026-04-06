@@ -45,7 +45,7 @@ public class CommandDemo : MonoBehaviour
         var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
         var elevation = VoskSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2);
 
-        var commands = new[]
+        var weaponsSet = new VoskCommandSet("weapons", new[]
         {
             new VoskCommandDefinition(Intents.LaunchWeapon, new[]
             {
@@ -65,6 +65,10 @@ public class CommandDemo : MonoBehaviour
                 new[] { "resume", "firing" },
                 new[] { "reengage" },
             }),
+        });
+
+        var navigationSet = new VoskCommandSet("navigation", new[]
+        {
             new VoskCommandDefinition(Intents.SetDistanceNamed, new[]
             {
                 new[] { "close", "distance", "{range}", "target", "{target}" },
@@ -92,11 +96,16 @@ public class CommandDemo : MonoBehaviour
                 new[] { "orient", "heading", "{heading}", "mark", "{?elevation}" },
                 new[] { "set", "heading", "{heading}" },
             }),
-        };
+        });
+
+        var commonSet = new VoskCommandSet("common", Array.Empty<VoskCommandDefinition>());
 
         commandRecogniser.Configure(
             slots: new[] { targets, weapons, quantity, namedRange, heading, elevation },
-            commands: commands);
+            sets: new[] { weaponsSet, navigationSet, commonSet });
+
+        // Activate all sets for demo — in a real game you'd activate per game state
+        commandRecogniser.SetActiveSets("weapons", "navigation", "common");
 
         commandRecogniser.OnCommandRecognised += OnCommand;
         commandRecogniser.OnCommandsRecognised += OnCommandBatch;
@@ -170,5 +179,19 @@ public class CommandDemo : MonoBehaviour
     void OnUnrecognised(string text)
     {
         Debug.Log($"[CommandDemo] Unrecognised: \"{text}\"");
+    }
+
+    // --- Mode switching examples (call from UI or game state logic) ---
+
+    public void SwitchToWeaponsMode()
+    {
+        commandRecogniser.SetActiveSets("weapons", "common");
+        Debug.Log("[CommandDemo] Switched to WEAPONS mode");
+    }
+
+    public void SwitchToNavigationMode()
+    {
+        commandRecogniser.SetActiveSets("navigation", "common");
+        Debug.Log("[CommandDemo] Switched to NAVIGATION mode");
     }
 }

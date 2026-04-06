@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-04-06
+
+### Added
+
+- `VoskCommandSet` — named groups of command definitions for mode-specific grammar. Activate different command groups per game state to reduce grammar size and improve VOSK accuracy.
+- `Configure(slots, sets)` overload on `VoskCommandRecogniser` registers shared slots and named command sets without activating any.
+- `SetActiveSets(params string[])` activates one or more sets, rebuilding the parser and grammar from only the active commands. Handles stop → set grammar → start if recognition is running.
+- `SetActiveSet(string)` convenience method for single-set activation.
+- `ActiveSetNames` property exposes currently active set names.
+- Backwards compatible: existing `Configure(slots, commands)` (no sets) continues to work unchanged.
+
 ## [0.7.0] - 2026-04-06
 
 ### Added
