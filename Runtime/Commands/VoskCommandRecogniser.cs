@@ -188,6 +188,7 @@ namespace VoskXR.Commands
                     now - lastTime < commandCooldown)
                     continue;
 
+                _lastFireTime[cmd.Intent] = now;
                 accepted.Add(cmd);
             }
 
@@ -196,10 +197,7 @@ namespace VoskXR.Commands
 
             // Fire per-command events in order
             for (int i = 0; i < accepted.Count; i++)
-            {
-                _lastFireTime[accepted[i].Intent] = now;
                 OnCommandRecognised?.Invoke(accepted[i]);
-            }
 
             // Fire batch event
             if (OnCommandsRecognised != null)
