@@ -822,5 +822,106 @@ namespace VoskXR.Tests.Runtime
             // Second command: min(resume=0.88, fire=0.72) = 0.72
             Assert.AreEqual(0.72f, results[1].Command.Confidence, 0.001f);
         }
+
+        // --- Command Set Support Tests (v2.4) ---
+
+        [Test]
+        public void FilteredCommands_OnlyMatchesSubset()
+        {
+            var slots = MakeSlots();
+            var subsetCommands = new[]
+            {
+                new VoskCommandDefinition("cease_fire", new[]
+                {
+                    new[] { "cease", "fire" },
+                    new[] { "stop", "firing" },
+                    new[] { "disengage" },
+                }),
+                new VoskCommandDefinition("resume_fire", new[]
+                {
+                    new[] { "resume", "fire" },
+                }),
+            };
+
+            var parser = new VoskCommandParser(slots, subsetCommands);
+
+            var ceaseResult = parser.Parse("cease fire");
+            Assert.AreEqual(1, ceaseResult.Length);
+            Assert.AreEqual("cease_fire", ceaseResult[0].Command.Intent);
+
+            // launch_weapon is not in the subset — should not match
+            var launchResult = parser.Parse("launch all missiles target hotel one");
+            Assert.AreEqual(0, launchResult.Length);
+        }
+
+        [Test]
+        public void FilteredCommands_GrammarExcludesRemovedLiterals()
+        {
+            var slots = MakeSlots();
+            var subsetCommands = new[]
+            {
+                new VoskCommandDefinition("cease_fire", new[]
+                {
+                    new[] { "cease", "fire" },
+                }),
+            };
+
+            var parser = new VoskCommandParser(slots, subsetCommands);
+            string json = parser.GenerateGrammarJson();
+
+            Assert.IsTrue(json.Contains("\"cease\""), "Active literal should be in grammar");
+            Assert.IsTrue(json.Contains("\"fire\""), "Active literal should be in grammar");
+            Assert.IsFalse(json.Contains("\"launch\""), "Inactive literal should not be in grammar");
+            Assert.IsFalse(json.Contains("\"shoot\""), "Inactive literal should not be in grammar");
+        }
+
+        [Test]
+        public void FilteredCommands_GrammarStillIncludesSharedSlotValues()
+        {
+            var slots = MakeSlots();
+            // Only cease_fire — doesn't reference any slots
+            var subsetCommands = new[]
+            {
+                new VoskCommandDefinition("cease_fire", new[]
+                {
+                    new[] { "cease", "fire" },
+                }),
+            };
+
+            var parser = new VoskCommandParser(slots, subsetCommands);
+            string json = parser.GenerateGrammarJson();
+
+            // Slot values are always included (slots are shared/global)
+            Assert.IsTrue(json.Contains("\"missiles\""), "Shared slot values should remain in grammar");
+            Assert.IsTrue(json.Contains("\"hotel\""), "Shared slot values should remain in grammar");
+        }
+
+        [Test]
+        public void CombinedSets_AllCommandsMatch()
+        {
+            var slots = MakeSlots();
+            // Simulate combining commands from two sets
+            var combinedCommands = new[]
+            {
+                new VoskCommandDefinition("cease_fire", new[]
+                {
+                    new[] { "cease", "fire" },
+                }),
+                new VoskCommandDefinition("launch_weapon", new[]
+                {
+                    new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
+                }),
+            };
+
+            var parser = new VoskCommandParser(slots, combinedCommands);
+
+            var ceaseResult = parser.Parse("cease fire");
+            Assert.AreEqual(1, ceaseResult.Length);
+            Assert.AreEqual("cease_fire", ceaseResult[0].Command.Intent);
+
+            var launchResult = parser.Parse("launch all missiles target hotel one");
+            Assert.AreEqual(1, launchResult.Length);
+            Assert.AreEqual("launch_weapon", launchResult[0].Command.Intent);
+        }
     }
 }

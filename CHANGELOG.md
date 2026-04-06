@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-04-06
+
+### Added
+
+- `VoskCommandSet` — named groups of command definitions for mode-specific grammar. Activate different command groups per game state to reduce grammar size and improve VOSK accuracy.
+- `Configure(slots, sets)` overload on `VoskCommandRecogniser` registers shared slots and named command sets without activating any.
+- `SetActiveSets(params string[])` activates one or more sets, rebuilding the parser and grammar from only the active commands. Handles stop → set grammar → start if recognition is running.
+- `SetActiveSet(string)` convenience method for single-set activation.
+- `ActiveSetNames` property exposes currently active set names.
+- Backwards compatible: existing `Configure(slots, commands)` (no sets) continues to work unchanged.
+- `CommandDemo` sample updated with voice-triggered mode switching (weapons mode, navigation mode, all modes, disable all with 5-second auto-restore).
+- Quest device test matrix (`v2.4-test-matrix.md`) with 58 tests across 11 phases — 57 pass, 1 known limitation.
+
+### Known Limitations
+
+- VOSK grammar bleed: out-of-grammar words adjacent to in-grammar words can corrupt slot extraction during sequential parsing (test 7.4). Accepted as a VOSK engine limitation.
+- "all modes" misrecognized as "fall modes" when navigation set is active (VOSK prefers the nav keyword "fall"). Use "enable all" as a reliable alternative.
+
 ## [0.7.0] - 2026-04-06
 
 ### Added

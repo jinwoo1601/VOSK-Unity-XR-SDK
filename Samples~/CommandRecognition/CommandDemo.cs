@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using VoskXR;
@@ -18,6 +19,10 @@ public class CommandDemo : MonoBehaviour
         public const string ApproachTarget = "approach_target";
         public const string RetreatFromTarget = "retreat_from_target";
         public const string SetHeading = "set_heading";
+        public const string ModeWeapons = "mode_weapons";
+        public const string ModeNavigation = "mode_navigation";
+        public const string ModeAll = "mode_all";
+        public const string ModeDisable = "mode_disable";
     }
 
     void Start()
@@ -45,7 +50,7 @@ public class CommandDemo : MonoBehaviour
         var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
         var elevation = VoskSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2);
 
-        var commands = new[]
+        var weaponsSet = new VoskCommandSet("weapons", new[]
         {
             new VoskCommandDefinition(Intents.LaunchWeapon, new[]
             {
@@ -65,6 +70,10 @@ public class CommandDemo : MonoBehaviour
                 new[] { "resume", "firing" },
                 new[] { "reengage" },
             }),
+        });
+
+        var navigationSet = new VoskCommandSet("navigation", new[]
+        {
             new VoskCommandDefinition(Intents.SetDistanceNamed, new[]
             {
                 new[] { "close", "distance", "{range}", "target", "{target}" },
@@ -92,11 +101,39 @@ public class CommandDemo : MonoBehaviour
                 new[] { "orient", "heading", "{heading}", "mark", "{?elevation}" },
                 new[] { "set", "heading", "{heading}" },
             }),
-        };
+        });
+
+        var commonSet = new VoskCommandSet("common", new[]
+        {
+            new VoskCommandDefinition(Intents.ModeWeapons, new[]
+            {
+                new[] { "weapons", "mode" },
+                new[] { "switch", "to", "weapons" },
+            }),
+            new VoskCommandDefinition(Intents.ModeNavigation, new[]
+            {
+                new[] { "navigation", "mode" },
+                new[] { "switch", "to", "navigation" },
+            }),
+            new VoskCommandDefinition(Intents.ModeAll, new[]
+            {
+                new[] { "all", "modes" },
+                new[] { "enable", "all" },
+            }),
+            new VoskCommandDefinition(Intents.ModeDisable, new[]
+            {
+                new[] { "disable", "all" },
+                new[] { "disable", "commands" },
+            }),
+        });
 
         commandRecogniser.Configure(
             slots: new[] { targets, weapons, quantity, namedRange, heading, elevation },
-            commands: commands);
+            sets: new[] { weaponsSet, navigationSet, commonSet });
+
+        // Activate all sets for demo — in a real game you'd activate per game state
+        commandRecogniser.SetActiveSets("weapons", "navigation", "common");
+        LogActiveSets();
 
         commandRecogniser.OnCommandRecognised += OnCommand;
         commandRecogniser.OnCommandsRecognised += OnCommandBatch;
@@ -157,6 +194,22 @@ public class CommandDemo : MonoBehaviour
                 int elevVal = elevStr != null ? VoskNumberParser.ParseDigitSequence(elevStr) : -1;
                 Debug.Log($"[CommandDemo]   Heading={hdgVal} (raw=\"{hdg}\"), Elevation={elevVal}");
                 break;
+
+            case Intents.ModeWeapons:
+                SwitchToWeaponsMode();
+                break;
+
+            case Intents.ModeNavigation:
+                SwitchToNavigationMode();
+                break;
+
+            case Intents.ModeAll:
+                SwitchToAllModes();
+                break;
+
+            case Intents.ModeDisable:
+                DisableAllModes();
+                break;
         }
     }
 
@@ -170,5 +223,50 @@ public class CommandDemo : MonoBehaviour
     void OnUnrecognised(string text)
     {
         Debug.Log($"[CommandDemo] Unrecognised: \"{text}\"");
+    }
+
+    // --- Mode switching (voice-triggered or called from UI/game logic) ---
+
+    void LogActiveSets()
+    {
+        var sets = commandRecogniser.ActiveSetNames;
+        Debug.Log($"[CommandDemo] Active sets: [{string.Join(", ", sets)}]");
+    }
+
+    public void SwitchToWeaponsMode()
+    {
+        commandRecogniser.SetActiveSets("weapons", "common");
+        LogActiveSets();
+        Debug.Log("[CommandDemo] Switched to WEAPONS mode");
+    }
+
+    public void SwitchToNavigationMode()
+    {
+        commandRecogniser.SetActiveSets("navigation", "common");
+        LogActiveSets();
+        Debug.Log("[CommandDemo] Switched to NAVIGATION mode");
+    }
+
+    public void SwitchToAllModes()
+    {
+        commandRecogniser.SetActiveSets("weapons", "navigation", "common");
+        LogActiveSets();
+        Debug.Log("[CommandDemo] Switched to ALL mode");
+    }
+
+    public void DisableAllModes()
+    {
+        commandRecogniser.SetActiveSets();
+        LogActiveSets();
+        Debug.Log("[CommandDemo] All commands DISABLED — auto-restoring in 5s");
+        StartCoroutine(RestoreAllModesAfterDelay(5f));
+    }
+
+    IEnumerator RestoreAllModesAfterDelay(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        commandRecogniser.SetActiveSets("weapons", "navigation", "common");
+        LogActiveSets();
+        Debug.Log("[CommandDemo] Auto-restored ALL mode");
     }
 }
