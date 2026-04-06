@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-04-06
+
+### Added
+
+- `VoskSlotAsset` ScriptableObject for Inspector-based slot definition authoring. Create via Assets > Create > VOSK XR > Slot Definition.
+- `VoskCommandAsset` ScriptableObject for command definitions with human-readable pattern strings (e.g. `"launch {?quantity} {weapon} target {target}"`).
+- `VoskCommandSetAsset` ScriptableObject for grouping commands into named sets.
+- Inspector authoring on `VoskCommandRecogniser`: assign slot and command set assets directly in the Inspector for zero-code setup. Code-based `Configure()` takes priority.
+- `initialActiveSetNames` field on `VoskCommandRecogniser` for selecting which sets activate on startup when using Inspector authoring.
+- Unit tests for all ScriptableObject-to-runtime-struct conversions.
+
 ## [0.8.0] - 2026-04-06
 
 ### Added

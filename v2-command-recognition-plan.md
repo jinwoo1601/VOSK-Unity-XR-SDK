@@ -50,7 +50,7 @@ Utterance buffer (`bufferWindow`) merges split VOSK results before parsing. Sequ
 
 # v2.5 — Inspector Authoring
 
-Adds ScriptableObject-based command and slot authoring for designers who prefer the Inspector over code. Does not replace the code API — provides a parallel authoring path. Also adds push-to-talk mode for scenarios where always-on recognition is undesirable.
+Adds ScriptableObject-based command and slot authoring for designers who prefer the Inspector over code. Does not replace the code API — provides a parallel authoring path.
 
 ## v2.5 Scope
 
@@ -60,13 +60,11 @@ Adds ScriptableObject-based command and slot authoring for designers who prefer 
 - `VoskCommandSetAsset` ScriptableObject for command set grouping
 - Inspector-driven `Configure()` overloads on `VoskCommandRecogniser`
 - Serialized asset references on `VoskCommandRecogniser` for zero-code setup
-- Push-to-talk mode — recognition starts/stops on input action
 
 **Problems this solves:**
 - Designers can't author commands without writing C# — they depend on a programmer for every vocabulary change.
 - Iteration is slow: change a slot value → recompile → test. With ScriptableObjects: change a value in Inspector → enter play mode → test.
 - No visual overview of all commands and their patterns.
-- Some scenarios need recognition only when the player is actively commanding (push-to-talk).
 
 ## v2.5 `VoskSlotAsset`
 
@@ -141,33 +139,6 @@ public class VoskCommandSetAsset : ScriptableObject
 }
 ```
 
-## v2.5 Push-to-Talk
-
-A mode on `VoskCommandRecogniser` where recognition is only active while an input is held.
-
-```csharp
-[Tooltip("When enabled, recognition only runs while pushToTalkAction is held. " +
-         "Eliminates phantom commands when the player is not actively commanding.")]
-[SerializeField] bool pushToTalkEnabled = false;
-
-[Tooltip("Input action that activates recognition. Typically a controller grip or trigger.")]
-[SerializeField] InputActionReference pushToTalkAction;
-```
-
-### Behaviour
-
-- When `pushToTalkEnabled` is true and the action is pressed: `StartRecognition()`.
-- When the action is released: waits `pushToTalkTail` seconds (default 0.5s) for the final VOSK result to arrive, then `StopRecognition()`.
-- The tail delay prevents cutting off the last word. VOSK needs a moment of silence after speech to emit the final result.
-- When `pushToTalkEnabled` is false (default): recognition runs continuously as in v2.0–v2.4.
-- Push-to-talk composes with the utterance buffer: the buffer flushes either on timer expiry or on push-to-talk release (whichever comes first), ensuring commands are processed promptly when the player lets go.
-
-### Input System dependency
-
-Uses Unity's Input System (`UnityEngine.InputSystem`). The `InputActionReference` field is nullable — if push-to-talk is enabled but no action is assigned, a warning is logged and push-to-talk is disabled at runtime.
-
-Assembly definition gains optional reference to `Unity.InputSystem`. Push-to-talk code is behind `#if ENABLE_INPUT_SYSTEM` so the package compiles without Input System installed (push-to-talk simply isn't available).
-
 ## v2.5 Changes to `VoskCommandRecogniser`
 
 ```csharp
@@ -191,7 +162,7 @@ On `Awake()`, if `slotAssets` is non-empty and `Configure()` has not been called
 
 | File | Change |
 |------|--------|
-| `Runtime/Commands/VoskCommandRecogniser.cs` | Asset reference fields, auto-configure from assets in `Awake()`, push-to-talk fields and logic |
+| `Runtime/Commands/VoskCommandRecogniser.cs` | Asset reference fields, auto-configure from assets in `Awake()` |
 
 ## v2.5 Test Plan
 
@@ -206,14 +177,6 @@ On `Awake()`, if `slotAssets` is non-empty and `Configure()` has not been called
 - Code `Configure()` call → Inspector assets ignored
 - Missing slot asset referenced by command pattern → validation warning at configure time
 
-**Push-to-talk:**
-- Action pressed → recognition starts
-- Action released → recognition stops after tail delay
-- Speech during release tail → final result captured
-- Push-to-talk disabled → continuous recognition (v2.4 behaviour)
-- No action assigned + push-to-talk enabled → warning, falls back to continuous
-- `#if ENABLE_INPUT_SYSTEM` absent → push-to-talk fields hidden, continuous only
-
 ---
 
 # Version Summary
@@ -225,13 +188,17 @@ On `Awake()`, if `slotAssets` is non-empty and `Configure()` has not been called
 | **v2.2** | Numeric | NumberSequence slots, VoskNumberParser | Headings, numeric distances, coordinates |
 | **v2.3** | Continuity | Utterance buffer, sequential command extraction, debounce | Split commands recovered, chained commands extracted |
 | **v2.4** | Command Sets | Named command groups, runtime switching | Mode-specific commands, reduced grammar per mode |
-| **v2.5** | Inspector Authoring | ScriptableObject slots/commands/sets, zero-code setup, push-to-talk | Same commands, designer-friendly authoring, input-gated recognition |
+| **v2.5** | Inspector Authoring | ScriptableObject slots/commands/sets, zero-code setup | Same commands, designer-friendly authoring |
 
 Native bridge change (`vosk_bridge_set_grammar`) ships in v2.0. Everything in v2.1–v2.5 is pure C# changes on top.
 
 ---
 
 # Future Ideas (Out of Scope for v2.x)
+
+## Push-to-talk mode
+
+Recognition starts/stops on input action press/release. Eliminates phantom commands when the player is not actively commanding. Requires Unity Input System (`InputActionReference`). Tail delay (e.g. 0.5s) after release prevents cutting off the last word — VOSK needs a moment of silence to emit the final result. Composes with the utterance buffer: buffer flushes on timer expiry or push-to-talk release, whichever comes first. Assembly definition gains optional reference to `Unity.InputSystem` behind `#if` so the package compiles without it.
 
 ## Pattern prefix routing (wake words)
 
