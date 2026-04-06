@@ -30,247 +30,21 @@ Scored matching, sliding start, slot aliases, optional literals, `minConfidence`
 
 ---
 
-# v2.2 — Numeric Commands
+# v2.2 — Numeric Commands (Shipped v0.6.0)
 
-Unlocks heading, distance, and coordinate commands that use variable-length digit sequences.
-
-## v2.2 Scope
-
-**Includes:**
-- `VoskSlotType` enum: `Enumerated`, `NumberSequence`
-- `VoskSlotDefinition.NumberSequence()` static factory
-- `VoskNumberParser` — digit sequence + cardinal number word conversion
-- Digit vocabulary auto-added to grammar when NumberSequence slots present
-
-**Commands this additionally handles:**
-- "Orient to heading two seven zero mark plus one five"
-- "Orient to heading two seven zero"
-- "Close distance ten klicks target hotel one"
-- "Set distance fifteen klicks target bravo two"
-- Any numeric quantity without enumerating every possible value
-
-## v2.2 Changes to Data Model
-
-### `VoskSlotType` enum (new file)
-```csharp
-public enum VoskSlotType { Enumerated, NumberSequence }
-```
-
-### `VoskSlotDefinition` gains NumberSequence mode
-
-```csharp
-// Static factory — no value enumeration needed
-var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
-var elevation = VoskSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2);
-var distance = VoskSlotDefinition.NumberSequence("distance", minWords: 1, maxWords: 3);
-```
-
-- `int MinWords`, `int MaxWords` — bounds on digit word consumption
-- Matches consecutive tokens from digit word vocabulary: "zero"–"nine", "ten"–"nineteen", "twenty"–"ninety", "hundred", "thousand" (~30 static entries)
-- Returns raw word sequence as slot value string (e.g., "two seven zero")
-
-### `VoskNumberParser` — static utility (new file)
-
-Pure C# utility, ~60 lines:
-- `int ParseDigitSequence(string words)` — "two seven zero" → 270 (each word = one digit, concatenated)
-- `int ParseCardinal(string words)` — "fifteen" → 15, "two hundred" → 200
-
-Static `Dictionary<string, int>` mapping ~30 entries.
-
-## v2.2 Changes to Matching Algorithm
-
-When the pattern cursor hits a `NumberSequence` slot:
-1. Greedily consume consecutive tokens that are in the digit word HashSet
-2. Stop when a non-digit word is encountered or `maxWords` is reached
-3. If consumed count < `minWords`, slot fails to match (required/optional per `{slot}` vs `{?slot}` syntax)
-4. Return the consumed words joined by space as the slot value
-
-## v2.2 Grammar Generation Changes
-
-When any `NumberSequence` slot exists, add the ~30 digit vocabulary words to the grammar. This is a fixed set regardless of how many NumberSequence slots are defined.
-
-## v2.2 New Files
-
-| File | Purpose |
-|------|---------|
-| `Runtime/Commands/VoskSlotType.cs` | Slot type enum |
-| `Runtime/Commands/VoskNumberParser.cs` | Digit sequence + cardinal number word conversion |
-| `Tests/Runtime/VoskNumberParserTests.cs` | Number parser unit tests |
-
-## v2.2 Modified Files
-
-| File | Change |
-|------|--------|
-| `Runtime/Commands/VoskSlotDefinition.cs` | Add `NumberSequence` factory, `MinWords`/`MaxWords`, `Type` field |
-| `Runtime/Commands/VoskCommandParser.cs` | NumberSequence matching logic, digit vocab in grammar |
-
-## v2.2 Test Plan
-
-**NumberSequence slots:**
-- "two seven zero" matches heading slot (3 digit words) → value "two seven zero"
-- "one five" matches elevation slot (2 digit words) → value "one five"
-- "fifteen" matches distance slot (1 word) → value "fifteen"
-- Stops at non-digit word: "two seven zero mark" → heading consumes 3, stops before "mark"
-- Respects maxWords: slot with maxWords=2 stops after 2 even if more digits follow
-- Below minWords: slot with minWords=2, input has 1 digit word → no match
-
-**Number parser:**
-- "two seven zero" → 270 (digit sequence)
-- "one five" → 15 (digit sequence)
-- "zero" → 0
-- "nine" → 9
-- "fifteen" → 15 (cardinal)
-- "twenty" → 20 (cardinal)
-- "two hundred" → 200 (cardinal)
-- Empty string → 0
-
-**Grammar generation:**
-- Digit vocabulary words included when at least one NumberSequence slot exists
-- Not included when no NumberSequence slots exist
+`NumberSequence` slot type, `VoskNumberParser` (digit sequence + cardinal conversion), greedy digit-word consumption with `minWords`/`maxWords` bounds, auto-generated digit vocabulary in grammar. Quest device-tested (40 tests, 31/35 pass in v2.2 matrix). See `CHANGELOG.md` [0.6.0] for details. Full test results in `v2.2-test-matrix.md`.
 
 ---
 
-# v2.3 — Continuity
+# v2.3 — Continuity (Shipped v0.7.0)
 
-Solves the two biggest real-world command failures: mid-utterance pauses splitting a command across two VOSK results, and multiple commands spoken in a single breath where only the first is recognised.
-
-## v2.3 Scope
-
-**Includes:**
-- Utterance buffer that concatenates consecutive VOSK results within a time window before parsing
-- Sequential command extraction — after the best match, try matching again from the next token
-- Per-intent debounce to suppress duplicate firings from rapid repeated results
-
-**Problems this solves:**
-- "Launch all missiles" [pause] "target hotel one" — two VOSK results, neither matches alone. Buffer concatenates them → single parse succeeds.
-- "Cease fire launch all missiles target hotel one" — single VOSK result. Sequential extraction finds `cease_fire` at tokens 0–1, then `launch_weapon` at tokens 2+.
-- Player says "fire" and VOSK emits two rapid final results → debounce suppresses the duplicate.
-
-## v2.3 Utterance Buffer
-
-`VoskUtteranceBuffer` — pure C# class, sits between `VoskCommandRecogniser` and the parser. Not a MonoBehaviour — owned and ticked by `VoskCommandRecogniser`.
-
-### Behaviour
-
-1. When a final result arrives from VOSK, append its tokens to the buffer. Record the arrival timestamp.
-2. Start (or reset) a flush timer: `bufferWindow` seconds (default 1.5s, configurable via `[SerializeField]`).
-3. If another final result arrives before the timer expires, append its tokens and reset the timer.
-4. When the timer expires (no new results within the window), flush: concatenate all buffered tokens into a single string and pass to the parser.
-5. Per-word confidence: buffer also accumulates the per-word confidence arrays. When flushing, the concatenated confidence array is passed through so `VoskCommand.Confidence` (min across matched tokens) remains accurate.
-
-### Why a time window, not immediate parse
-
-If we parse immediately on each result, we're back to the current behaviour — the first half of a split command fails and is discarded before the second half arrives. The window gives the player time to finish the full command across a natural pause. 1.5s is long enough for a mid-sentence breath but short enough to feel responsive.
-
-### Tradeoff: latency
-
-The buffer adds up to `bufferWindow` latency to every command. In the worst case (single complete command, no pause), the player waits 1.5s after finishing speech before the command fires. This is acceptable for a military sim (commands are deliberate, not twitch), but the field is tunable per game.
-
-### Edge case: rapid distinct commands
-
-Player says "cease fire" [0.5s pause] "launch missiles target hotel one". Both arrive within the buffer window and get concatenated: "cease fire launch missiles target hotel one". Sequential command extraction (below) handles this — it finds both commands in the merged string.
-
-### Fields on `VoskCommandRecogniser`
-
-```csharp
-[Tooltip("Time in seconds to wait for additional speech before parsing. " +
-         "Longer values recover split commands but add latency.")]
-[SerializeField] float bufferWindow = 1.5f;
-```
-
-### Implementation notes
-
-- Buffer is flushed in `Update()` by checking `Time.time - lastResultTime >= bufferWindow` when the buffer is non-empty.
-- `VoskCommandRecogniser` already subscribes to `OnResult`. The buffer sits in the handler before the parse call.
-- If `bufferWindow` is set to 0, buffering is disabled — results are parsed immediately as in v2.2 (backwards compatible).
-
-## v2.3 Sequential Command Extraction
-
-Changes `VoskCommandParser.Parse()` return type from `VoskCommandResult` to `VoskCommandResult[]`.
-
-### Algorithm
-
-1. Run the existing scored matching + sliding start algorithm. Find the best match.
-2. If a match is found, record it. Identify the token span it consumed (start position through last consumed token).
-3. Take the remaining tokens *after* the consumed span. If non-empty, run the parser again on the remainder.
-4. Repeat until no more matches are found or tokens are exhausted.
-5. Return all matches as an array, ordered by their position in the input.
-
-### Why ordered by position, not score
-
-The player spoke commands in a specific order: "cease fire, launch missiles". The game should process them in that order. Reordering by score would produce unpredictable command sequences.
-
-### Event changes
-
-`OnCommandRecognised` fires once per extracted command, in order. Existing subscribers that handle one command at a time work unchanged. New `OnCommandsRecognised` event (plural) fires once with the full `VoskCommand[]` array for subscribers that want batch processing.
-
-```csharp
-public event Action<VoskCommand> OnCommandRecognised;       // fires per command, in order
-public event Action<VoskCommand[]> OnCommandsRecognised;    // fires once with all commands
-```
-
-### Edge case: overlapping matches
-
-Two commands share vocabulary (e.g., "fire" appears in both `launch_weapon` and `cease_fire`). The first match consumes its tokens; the remainder is what's left. If the remainder doesn't form a valid second command, it's reported via `OnUnrecognisedSpeech`. No backtracking — greedy left-to-right extraction.
-
-## v2.3 Per-Intent Debounce
-
-Simple per-intent cooldown timer on `VoskCommandRecogniser`.
-
-```csharp
-[Tooltip("Minimum seconds between firing the same intent. " +
-         "Prevents duplicate commands from rapid VOSK results.")]
-[SerializeField] float commandCooldown = 0.3f;
-```
-
-- Tracks `Dictionary<string, float>` of intent → last fire time.
-- Before firing `OnCommandRecognised`, checks if `Time.time - lastFireTime[intent] >= commandCooldown`. If not, the command is suppressed.
-- Cooldown of 0 disables debounce.
-- Different intents have independent cooldowns — "cease fire" doesn't block "launch missiles".
-
-## v2.3 Modified Files
-
-| File | Change |
-|------|--------|
-| `Runtime/Commands/VoskCommandParser.cs` | `Parse()` returns `VoskCommandResult[]`, sequential extraction loop |
-| `Runtime/Commands/VoskCommandRecogniser.cs` | Utterance buffer, `bufferWindow` field, `OnCommandsRecognised` event, debounce logic, `commandCooldown` field |
-| `Runtime/Commands/VoskCommand.cs` | No changes (result type unchanged) |
-
-## v2.3 New Files
-
-None. All changes are to existing files.
-
-## v2.3 Test Plan
-
-**Utterance buffer:**
-- Two results arriving within window → concatenated and parsed as one
-- Single result, timer expires → parsed normally
-- Three rapid results → all concatenated
-- `bufferWindow = 0` → immediate parse (v2.2 behaviour)
-- Per-word confidence arrays correctly concatenated across buffered results
-
-**Sequential command extraction:**
-- "cease fire launch all missiles target hotel one" → two commands: `cease_fire`, `launch_weapon`
-- "launch missiles target hotel one" → one command (no remainder after extraction)
-- "cease fire resume fire" → two commands in order
-- "hello world cease fire" → sliding start finds `cease_fire`, no second command, "hello world" is noise
-- Overlapping vocabulary: first match wins its span, remainder parsed independently
-
-**Debounce:**
-- Same intent fired twice within cooldown → second suppressed
-- Same intent fired after cooldown expires → both fire
-- Different intents within cooldown → both fire (independent cooldowns)
-- `commandCooldown = 0` → no suppression
-
-**Integration:**
-- Buffer + sequential extraction: "cease fire" [pause] "launch missiles target hotel one" → buffer merges, sequential extraction finds both
-- Buffer + debounce: VOSK emits "fire" twice rapidly → buffer merges to "fire fire", parser matches one `launch_weapon`, debounce irrelevant (only one match). Alternatively if both parse separately, debounce catches the duplicate.
+Utterance buffer (`bufferWindow`) merges split VOSK results before parsing. Sequential command extraction (left-to-right greedy) finds multiple commands per utterance. Per-intent debounce (`commandCooldown`) suppresses duplicates both across results and within a single parse batch. `OnCommandsRecognised` batch event added. Quest device-tested (40 tests, 40/40 pass). See `CHANGELOG.md` [0.7.0] for details. Full test results in `v2.3-test-matrix.md`.
 
 ---
 
 # v2.4 — Command Sets
 
-Lets the game activate different command groups for different game states. Reduces grammar size per mode for better VOSK accuracy. Adds push-to-talk for scenarios where always-on recognition is undesirable.
+Lets the game activate different command groups for different game states. Reduces grammar size per mode for better VOSK accuracy.
 
 ## v2.4 Scope
 
@@ -278,12 +52,10 @@ Lets the game activate different command groups for different game states. Reduc
 - `VoskCommandSet` — named group of command definitions
 - Runtime switching between active command sets (regenerates grammar)
 - Additive sets — multiple sets active simultaneously (e.g., "common" + "weapons")
-- Push-to-talk mode — recognition starts/stops on input action
 
 **Problems this solves:**
 - Grammar contains all command words across all game modes → VOSK confuses acoustically similar words from unrelated modes. Smaller per-mode grammar = higher accuracy.
 - Player in the navigation screen hears weapon commands recognised from ambient speech. With command sets, weapon commands aren't active during navigation.
-- Some scenarios need recognition only when the player is actively commanding (push-to-talk).
 
 ## v2.4 `VoskCommandSet`
 
@@ -351,38 +123,11 @@ commandRecogniser.SetActiveSets("weapons", "common");
 commandRecogniser.SetActiveSets("navigation", "common");
 ```
 
-## v2.4 Push-to-Talk
-
-A mode on `VoskCommandRecogniser` where recognition is only active while an input is held.
-
-```csharp
-[Tooltip("When enabled, recognition only runs while pushToTalkAction is held. " +
-         "Eliminates phantom commands when the player is not actively commanding.")]
-[SerializeField] bool pushToTalkEnabled = false;
-
-[Tooltip("Input action that activates recognition. Typically a controller grip or trigger.")]
-[SerializeField] InputActionReference pushToTalkAction;
-```
-
-### Behaviour
-
-- When `pushToTalkEnabled` is true and the action is pressed: `StartRecognition()`.
-- When the action is released: waits `pushToTalkTail` seconds (default 0.5s) for the final VOSK result to arrive, then `StopRecognition()`.
-- The tail delay prevents cutting off the last word. VOSK needs a moment of silence after speech to emit the final result.
-- When `pushToTalkEnabled` is false (default): recognition runs continuously as in v2.0–v2.3.
-- Push-to-talk composes with the utterance buffer: the buffer flushes either on timer expiry or on push-to-talk release (whichever comes first), ensuring commands are processed promptly when the player lets go.
-
-### Input System dependency
-
-Uses Unity's Input System (`UnityEngine.InputSystem`). The `InputActionReference` field is nullable — if push-to-talk is enabled but no action is assigned, a warning is logged and push-to-talk is disabled at runtime.
-
-Assembly definition gains optional reference to `Unity.InputSystem`. Push-to-talk code is behind `#if ENABLE_INPUT_SYSTEM` so the package compiles without Input System installed (push-to-talk simply isn't available).
-
 ## v2.4 Modified Files
 
 | File | Change |
 |------|--------|
-| `Runtime/Commands/VoskCommandRecogniser.cs` | Command sets API, `SetActiveSets()`, push-to-talk fields and logic |
+| `Runtime/Commands/VoskCommandRecogniser.cs` | Command sets API, `SetActiveSets()` |
 | `Runtime/Commands/VoskCommandParser.cs` | Accept filtered command list at construction (already does — no parser change needed, just constructed with fewer commands) |
 
 ## v2.4 New Files
@@ -402,19 +147,11 @@ Assembly definition gains optional reference to `Unity.InputSystem`. Push-to-tal
 - Grammar regenerated on switch: only active vocabulary words present
 - `Configure(slots, commands)` (no sets) → all commands active, backwards compatible
 
-**Push-to-talk:**
-- Action pressed → recognition starts
-- Action released → recognition stops after tail delay
-- Speech during release tail → final result captured
-- Push-to-talk disabled → continuous recognition (v2.3 behaviour)
-- No action assigned + push-to-talk enabled → warning, falls back to continuous
-- `#if ENABLE_INPUT_SYSTEM` absent → push-to-talk fields hidden, continuous only
-
 ---
 
 # v2.5 — Inspector Authoring
 
-Adds ScriptableObject-based command and slot authoring for designers who prefer the Inspector over code. Does not replace the code API — provides a parallel authoring path.
+Adds ScriptableObject-based command and slot authoring for designers who prefer the Inspector over code. Does not replace the code API — provides a parallel authoring path. Also adds push-to-talk mode for scenarios where always-on recognition is undesirable.
 
 ## v2.5 Scope
 
@@ -424,11 +161,13 @@ Adds ScriptableObject-based command and slot authoring for designers who prefer 
 - `VoskCommandSetAsset` ScriptableObject for command set grouping
 - Inspector-driven `Configure()` overloads on `VoskCommandRecogniser`
 - Serialized asset references on `VoskCommandRecogniser` for zero-code setup
+- Push-to-talk mode — recognition starts/stops on input action
 
 **Problems this solves:**
 - Designers can't author commands without writing C# — they depend on a programmer for every vocabulary change.
 - Iteration is slow: change a slot value → recompile → test. With ScriptableObjects: change a value in Inspector → enter play mode → test.
 - No visual overview of all commands and their patterns.
+- Some scenarios need recognition only when the player is actively commanding (push-to-talk).
 
 ## v2.5 `VoskSlotAsset`
 
@@ -503,6 +242,33 @@ public class VoskCommandSetAsset : ScriptableObject
 }
 ```
 
+## v2.5 Push-to-Talk
+
+A mode on `VoskCommandRecogniser` where recognition is only active while an input is held.
+
+```csharp
+[Tooltip("When enabled, recognition only runs while pushToTalkAction is held. " +
+         "Eliminates phantom commands when the player is not actively commanding.")]
+[SerializeField] bool pushToTalkEnabled = false;
+
+[Tooltip("Input action that activates recognition. Typically a controller grip or trigger.")]
+[SerializeField] InputActionReference pushToTalkAction;
+```
+
+### Behaviour
+
+- When `pushToTalkEnabled` is true and the action is pressed: `StartRecognition()`.
+- When the action is released: waits `pushToTalkTail` seconds (default 0.5s) for the final VOSK result to arrive, then `StopRecognition()`.
+- The tail delay prevents cutting off the last word. VOSK needs a moment of silence after speech to emit the final result.
+- When `pushToTalkEnabled` is false (default): recognition runs continuously as in v2.0–v2.4.
+- Push-to-talk composes with the utterance buffer: the buffer flushes either on timer expiry or on push-to-talk release (whichever comes first), ensuring commands are processed promptly when the player lets go.
+
+### Input System dependency
+
+Uses Unity's Input System (`UnityEngine.InputSystem`). The `InputActionReference` field is nullable — if push-to-talk is enabled but no action is assigned, a warning is logged and push-to-talk is disabled at runtime.
+
+Assembly definition gains optional reference to `Unity.InputSystem`. Push-to-talk code is behind `#if ENABLE_INPUT_SYSTEM` so the package compiles without Input System installed (push-to-talk simply isn't available).
+
 ## v2.5 Changes to `VoskCommandRecogniser`
 
 ```csharp
@@ -526,7 +292,7 @@ On `Awake()`, if `slotAssets` is non-empty and `Configure()` has not been called
 
 | File | Change |
 |------|--------|
-| `Runtime/Commands/VoskCommandRecogniser.cs` | Asset reference fields, auto-configure from assets in `Awake()` |
+| `Runtime/Commands/VoskCommandRecogniser.cs` | Asset reference fields, auto-configure from assets in `Awake()`, push-to-talk fields and logic |
 
 ## v2.5 Test Plan
 
@@ -541,6 +307,14 @@ On `Awake()`, if `slotAssets` is non-empty and `Configure()` has not been called
 - Code `Configure()` call → Inspector assets ignored
 - Missing slot asset referenced by command pattern → validation warning at configure time
 
+**Push-to-talk:**
+- Action pressed → recognition starts
+- Action released → recognition stops after tail delay
+- Speech during release tail → final result captured
+- Push-to-talk disabled → continuous recognition (v2.4 behaviour)
+- No action assigned + push-to-talk enabled → warning, falls back to continuous
+- `#if ENABLE_INPUT_SYSTEM` absent → push-to-talk fields hidden, continuous only
+
 ---
 
 # Version Summary
@@ -551,8 +325,8 @@ On `Awake()`, if `slotAssets` is non-empty and `Configure()` has not been called
 | **v2.1** | Robustness | Scored matching, sliding start, aliases, optional literals, thresholds | Same commands, reliable with real speech |
 | **v2.2** | Numeric | NumberSequence slots, VoskNumberParser | Headings, numeric distances, coordinates |
 | **v2.3** | Continuity | Utterance buffer, sequential command extraction, debounce | Split commands recovered, chained commands extracted |
-| **v2.4** | Command Sets | Named command groups, runtime switching, push-to-talk | Mode-specific commands, reduced grammar per mode |
-| **v2.5** | Inspector Authoring | ScriptableObject slots/commands/sets, zero-code setup | Same commands, designer-friendly authoring |
+| **v2.4** | Command Sets | Named command groups, runtime switching | Mode-specific commands, reduced grammar per mode |
+| **v2.5** | Inspector Authoring | ScriptableObject slots/commands/sets, zero-code setup, push-to-talk | Same commands, designer-friendly authoring, input-gated recognition |
 
 Native bridge change (`vosk_bridge_set_grammar`) ships in v2.0. Everything in v2.1–v2.5 is pure C# changes on top.
 
@@ -583,28 +357,6 @@ A `VoskSlotType.FreeText` that captures remaining tokens until the next literal.
 ---
 
 # Known Limitations & Notes
-
-## Leftover tokens in v2.0 (free-speech mode)
-
-In v2.0, the parser does not require full input consumption. With grammar active this is fine (VOSK only outputs command vocabulary). In **free-speech mode**, input like "launch all missiles target hotel one please thank you" will match `launch_weapon` despite the trailing words "please thank you". This is a known v2.0 limitation — v2.1's scored matching penalizes leftover tokens and the `minScore` threshold can reject low-quality matches.
-
-## Mid-utterance pauses
-
-VOSK's endpointer splits utterances at silence boundaries. If a player says "launch all missiles" (long pause) "target hotel one", VOSK emits two separate final results: `"launch all missiles"` and `"target hotel one"`. Neither matches the full command pattern. The command is lost.
-
-**Mitigation (v2.0–v2.2)**: Players should speak compound commands without long pauses. This is a VOSK endpointer behavior, not a parser limitation.
-
-**Fixed in v2.3**: The utterance buffer concatenates consecutive results within a configurable time window before parsing, recovering split commands.
-
-## Short utterances and phantom commands
-
-With grammar active, very short sounds (coughs, "uh") may be mapped to the acoustically closest grammar word (e.g., a cough → "fire"). In v2.0, there is no confidence-based filtering — the parser will match if the word fits a pattern. **v2.1 adds `minConfidence` to filter these.** For v2.0, single-word commands like "disengage" are more susceptible than multi-word commands.
-
-## Multiple commands in one breath
-
-"Cease fire launch all missiles target hotel one" spoken without pause arrives as a single VOSK result. The parser matches **one** command per result (the best-scoring match). The second command is lost.
-
-**Fixed in v2.3**: Sequential command extraction matches from the token after the first match's span, extracting all commands from a single utterance.
 
 ## Grammar is a flat word list, not phrase constraints
 

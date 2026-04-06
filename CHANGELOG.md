@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-04-06
+
+### Added
+
+- Utterance buffer (`bufferWindow`) merges consecutive VOSK results split by mid-command pauses before parsing. Recommended 2.0s on Quest 3.
+- Sequential command extraction — multiple commands in a single utterance are parsed left-to-right (e.g., "cease fire launch missiles target hotel one" → `cease_fire` + `launch_weapon`).
+- `OnCommandsRecognised` batch event fires a `VoskCommand[]` array per utterance alongside per-command `OnCommandRecognised` events.
+- Per-intent debounce (`commandCooldown`) suppresses rapid duplicate intents both across VOSK results and within a single parse batch.
+- Quest device test matrix (`v2.3-test-matrix.md`) with 40 tests across 12 phases — 40/40 pass.
+
+### Fixed
+
+- Intra-batch debounce: duplicate intents found by sequential extraction within the same parse batch are now correctly suppressed. Previously debounce only applied across separate VOSK results.
+
 ## [0.6.0] - 2026-04-05
 
 ### Added

@@ -183,16 +183,17 @@ namespace VoskXR.Commands
 
         /// <summary>
         /// Parses input text against all registered command patterns using scored matching
-        /// with sliding start position.
+        /// with sliding start position. Performs sequential command extraction — after the
+        /// best match is found, remaining tokens are parsed again until no more matches exist.
         /// </summary>
-        public VoskCommandResult Parse(string text, VoskWord[] words)
+        public VoskCommandResult[] Parse(string text, VoskWord[] words)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return new VoskCommandResult(text ?? string.Empty);
+                return Array.Empty<VoskCommandResult>();
 
             string[] tokens = text.Split(SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0)
-                return new VoskCommandResult(text);
+                return Array.Empty<VoskCommandResult>();
 
             Dictionary<string, float> wordConfidence = null;
             if (words != null && words.Length > 0)
@@ -205,62 +206,80 @@ namespace VoskXR.Commands
                 }
             }
 
-            float bestScore = float.MinValue;
-            int bestLiteralCount = -1;
-            int bestCommandIdx = -1;
-            int bestStartIdx = 0;
-            List<VoskSlotMatch> bestSlots = null;
+            var results = new List<VoskCommandResult>();
+            int searchStart = 0;
 
-            for (int ci = 0; ci < _commands.Length; ci++)
+            while (searchStart < tokens.Length)
             {
-                var patterns = _commands[ci].Patterns;
-                for (int pi = 0; pi < patterns.Length; pi++)
+                float bestScore = float.MinValue;
+                int bestLiteralCount = -1;
+                int bestCommandIdx = -1;
+                int bestStartIdx = int.MaxValue;
+                int bestEndIdx = 0;
+                List<VoskSlotMatch> bestSlots = null;
+
+                for (int ci = 0; ci < _commands.Length; ci++)
                 {
-                    // Sliding start: try matching from every token position
-                    for (int startIdx = 0; startIdx < tokens.Length; startIdx++)
+                    var patterns = _commands[ci].Patterns;
+                    for (int pi = 0; pi < patterns.Length; pi++)
                     {
-                        if (tokens[startIdx] == UnkToken)
-                            continue;
-
-                        var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
-
-                        if (matchResult.Score > bestScore ||
-                            (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount))
+                        for (int startIdx = searchStart; startIdx < tokens.Length; startIdx++)
                         {
-                            bestScore = matchResult.Score;
-                            bestLiteralCount = matchResult.LiteralCount;
-                            bestCommandIdx = ci;
-                            bestStartIdx = startIdx;
-                            bestSlots = matchResult.Slots;
+                            if (tokens[startIdx] == UnkToken)
+                                continue;
+
+                            var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
+
+                            if (matchResult.Score > 0f &&
+                                (bestScore <= 0f ||
+                                 startIdx < bestStartIdx ||
+                                 (startIdx == bestStartIdx &&
+                                  (matchResult.Score > bestScore ||
+                                   (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
+                            {
+                                bestScore = matchResult.Score;
+                                bestLiteralCount = matchResult.LiteralCount;
+                                bestCommandIdx = ci;
+                                bestStartIdx = startIdx;
+                                bestEndIdx = matchResult.EndIdx;
+                                bestSlots = matchResult.Slots;
+                            }
                         }
                     }
                 }
+
+                if (bestCommandIdx < 0 || bestScore <= 0f)
+                    break;
+
+                // Safety: prevent infinite loop if a match consumes no tokens
+                if (bestEndIdx <= searchStart)
+                    break;
+
+                float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
+
+                var slotsArray = bestSlots != null && bestSlots.Count > 0
+                    ? bestSlots.ToArray()
+                    : Array.Empty<VoskSlotMatch>();
+
+                var command = new VoskCommand(
+                    _commands[bestCommandIdx].Intent,
+                    slotsArray,
+                    confidence,
+                    bestScore,
+                    text,
+                    _slotNames);
+
+                results.Add(new VoskCommandResult(command));
+                searchStart = bestEndIdx;
             }
 
-            if (bestCommandIdx < 0 || bestScore <= 0f)
-                return new VoskCommandResult(text);
-
-            float confidence = ComputeConfidence(tokens, bestStartIdx, bestSlots, wordConfidence);
-
-            var slotsArray = bestSlots != null && bestSlots.Count > 0
-                ? bestSlots.ToArray()
-                : Array.Empty<VoskSlotMatch>();
-
-            var command = new VoskCommand(
-                _commands[bestCommandIdx].Intent,
-                slotsArray,
-                confidence,
-                bestScore,
-                text,
-                _slotNames);
-
-            return new VoskCommandResult(command);
+            return results.Count > 0 ? results.ToArray() : Array.Empty<VoskCommandResult>();
         }
 
         /// <summary>
         /// Parses input text without word confidence data.
         /// </summary>
-        public VoskCommandResult Parse(string text)
+        public VoskCommandResult[] Parse(string text)
         {
             return Parse(text, Array.Empty<VoskWord>());
         }
@@ -358,6 +377,7 @@ namespace VoskXR.Commands
             public float Score;
             public int LiteralCount;
             public List<VoskSlotMatch> Slots;
+            public int EndIdx;
         }
 
         /// <summary>
@@ -440,7 +460,8 @@ namespace VoskXR.Commands
             {
                 Score = normalizedScore,
                 LiteralCount = literalCount,
-                Slots = slots
+                Slots = slots,
+                EndIdx = tokenIdx
             };
         }
 
@@ -521,7 +542,7 @@ namespace VoskXR.Commands
             return sb.ToString();
         }
 
-        float ComputeConfidence(string[] tokens, int startIdx, List<VoskSlotMatch> slots,
+        float ComputeConfidence(string[] tokens, int startIdx, int endIdx,
             Dictionary<string, float> wordConfidence)
         {
             if (wordConfidence == null || wordConfidence.Count == 0)
@@ -530,7 +551,7 @@ namespace VoskXR.Commands
             float minConf = float.MaxValue;
             bool anyMatch = false;
 
-            for (int i = startIdx; i < tokens.Length; i++)
+            for (int i = startIdx; i < endIdx; i++)
             {
                 if (tokens[i] == UnkToken)
                     continue;
