@@ -61,8 +61,8 @@ namespace VoskXR.Commands
         Dictionary<string, VoskCommandSet> _sets;
         string[] _activeSetNames = Array.Empty<string>();
 
-        /// <summary>Names of the currently active command sets.</summary>
-        public string[] ActiveSetNames => _activeSetNames;
+        /// <summary>Names of the currently active command sets (snapshot copy).</summary>
+        public string[] ActiveSetNames => (string[])_activeSetNames.Clone();
 
         /// <summary>
         /// Builds the command parser from the given slot and command definitions.
@@ -71,6 +71,9 @@ namespace VoskXR.Commands
         /// </summary>
         public void Configure(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands)
         {
+            if (slots == null) throw new ArgumentNullException(nameof(slots));
+            if (commands == null) throw new ArgumentNullException(nameof(commands));
+
             _lastFireTime.Clear();
             _slots = slots;
             _sets = null;
@@ -134,18 +137,33 @@ namespace VoskXR.Commands
                         $"Unknown command set name: '{setNames[i]}'.", nameof(setNames));
             }
 
-            var commands = new List<VoskCommandDefinition>();
+            int total = 0;
             for (int i = 0; i < setNames.Length; i++)
-                commands.AddRange(_sets[setNames[i]].Commands);
+                total += _sets[setNames[i]].Commands.Length;
+
+            VoskCommandDefinition[] commands;
+            if (total == 0)
+            {
+                commands = Array.Empty<VoskCommandDefinition>();
+            }
+            else
+            {
+                commands = new VoskCommandDefinition[total];
+                int offset = 0;
+                for (int i = 0; i < setNames.Length; i++)
+                {
+                    var c = _sets[setNames[i]].Commands;
+                    Array.Copy(c, 0, commands, offset, c.Length);
+                    offset += c.Length;
+                }
+            }
 
             _activeSetNames = setNames.Length > 0
                 ? (string[])setNames.Clone()
                 : Array.Empty<string>();
 
             _lastFireTime.Clear();
-            RebuildParserAndGrammar(commands.Count > 0
-                ? commands.ToArray()
-                : Array.Empty<VoskCommandDefinition>());
+            RebuildParserAndGrammar(commands);
         }
 
         /// <summary>
