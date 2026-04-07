@@ -1,0 +1,19 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c3f026db4e8c16a4f927d85d19678b4f, type: 3}
+  m_Name: Set_Weapons
+  m_EditorClassIdentifier:
+  setName: weapons
+  commands:
+  - {fileID: 11400000, guid: 3f5859ea77dc4f6fad4ad0f7139a7870, type: 2}
+  - {fileID: 11400000, guid: 9f21209591ac4062b7a674db78ff7c3b, type: 2}
+  - {fileID: 11400000, guid: ad77bf8a3d754aa799708bcf4b7477a2, type: 2}

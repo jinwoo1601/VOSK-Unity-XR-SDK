@@ -14,7 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VoskCommandSetAsset` ScriptableObject for grouping commands into named sets.
 - Inspector authoring on `VoskCommandRecogniser`: assign slot and command set assets directly in the Inspector for zero-code setup. Code-based `Configure()` takes priority.
 - `initialActiveSetNames` field on `VoskCommandRecogniser` for selecting which sets activate on startup when using Inspector authoring.
+- Null-guard warnings in `VoskCommandRecogniser.Awake()` and `VoskCommandSetAsset.ToSet()` so missing references in inspector arrays are skipped with a clear warning instead of throwing.
+- 20-asset Inspector authoring set under `Samples~/CommandRecognition/AssetAuthoring/` (6 slots, 11 commands, 3 sets) covering every slot type and pattern token form.
+- `useInspectorAuthoring` toggle on `CommandDemo` to switch between code-based `Configure()` and asset-driven authoring without editing the script.
 - Unit tests for all ScriptableObject-to-runtime-struct conversions.
+- `KNOWN_LIMITATIONS.md` at the project root — single place to document VOSK acoustic, voice-recognition, and architecture limitations across all versions.
+- Quest device test matrix (`v2.5-test-matrix.md`) with 44 on-device tests across 8 phases (Phase 0 editor-only) — 42 pass, 1 known limitation (4.5: VOSK "to" → "two"), 1 skipped (6.3: script execution order edge case).
+
+### Known Limitations
+
+- VOSK misrecognises "to" as "two" in `switch to weapons`. Asset tokenization is correct; this is an acoustic-model limitation. Use the `weapons mode` alternate pattern.
+- `SetActiveSets()` triggers a grammar rebuild that briefly stops/restarts AudioCapture (~50ms gap). Speech in that window is dropped at the audio layer. Pause ~500ms after a mode switch before speaking the next command.
+- See `KNOWN_LIMITATIONS.md` for full details.
 
 ## [0.8.0] - 2026-04-06
 

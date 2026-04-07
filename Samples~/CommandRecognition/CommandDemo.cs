@@ -9,6 +9,11 @@ public class CommandDemo : MonoBehaviour
     [SerializeField] VoskSpeechRecogniser recogniser;
     [SerializeField] VoskCommandRecogniser commandRecogniser;
 
+    [Tooltip("When enabled, skip the code-based Configure() call and rely on " +
+             "ScriptableObject assets wired on VoskCommandRecogniser instead. " +
+             "Used for v2.5 Inspector authoring tests.")]
+    [SerializeField] bool useInspectorAuthoring = false;
+
     // Define intent names as constants to avoid typos.
     static class Intents
     {
@@ -27,6 +32,18 @@ public class CommandDemo : MonoBehaviour
 
     void Start()
     {
+        if (useInspectorAuthoring)
+        {
+            // Slots/commands/sets came from ScriptableObject assets in Awake().
+            // Just wire events and start recognition.
+            LogActiveSets();
+            commandRecogniser.OnCommandRecognised += OnCommand;
+            commandRecogniser.OnCommandsRecognised += OnCommandBatch;
+            commandRecogniser.OnUnrecognisedSpeech += OnUnrecognised;
+            recogniser.StartRecognition();
+            return;
+        }
+
         var targets = new VoskSlotDefinition("target",
             new[] { "hotel one", "hotel two", "alpha one", "alpha three", "bravo two" });
 
