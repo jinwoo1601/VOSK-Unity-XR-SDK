@@ -93,8 +93,7 @@ namespace VoskXR.Tests.Runtime
         [Test]
         public void InjectResult_EmptyText_StillFiresEvents()
         {
-            // Mirrors real VOSK Update() at VoskSpeechRecogniser.cs:264-280, which does
-            // not short-circuit on empty text. Subscribers must handle empty themselves.
+            // The real audio path does not short-circuit on empty text, so neither does Inject.
             int finalCount = 0;
             int resultCount = 0;
             _recogniser.OnFinalResult += _ => finalCount++;

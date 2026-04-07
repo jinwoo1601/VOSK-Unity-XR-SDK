@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEngine;
@@ -63,16 +60,8 @@ namespace VoskXR.Tests.Runtime
         {
             _recogniser.Configure(MakeSlots(), MakeCommands());
             // Disable buffer and cooldown so threshold tests can assert events synchronously.
-            SetPrivateField(_recogniser, "bufferWindow", 0f);
-            SetPrivateField(_recogniser, "commandCooldown", 0f);
-        }
-
-        static void SetPrivateField<T>(T target, string field, object value) where T : class
-        {
-            var fi = typeof(T).GetField(field, BindingFlags.NonPublic | BindingFlags.Instance);
-            if (fi == null)
-                throw new ArgumentException($"Field '{field}' not found on {typeof(T).Name}");
-            fi.SetValue(target, value);
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
         }
 
         // -------- Warning / no-op cases --------
@@ -160,7 +149,6 @@ namespace VoskXR.Tests.Runtime
         public void InjectText_BelowMinConfidence_Rejected()
         {
             ConfigureWithSyncDefaults();
-            // minConfidence default is 0.4
             int recognised = 0;
             int unrecognised = 0;
             _recogniser.OnCommandRecognised += _ => recognised++;
@@ -193,8 +181,8 @@ namespace VoskXR.Tests.Runtime
         public void InjectText_RespectsCommandCooldown()
         {
             _recogniser.Configure(MakeSlots(), MakeCommands());
-            SetPrivateField(_recogniser, "bufferWindow", 0f);
-            SetPrivateField(_recogniser, "commandCooldown", 1.0f);
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 1.0f;
 
             int fireCount = 0;
             _recogniser.OnCommandRecognised += _ => fireCount++;
@@ -212,8 +200,8 @@ namespace VoskXR.Tests.Runtime
         public void InjectText_BufferedPath_QueuedUntilFlush()
         {
             _recogniser.Configure(MakeSlots(), MakeCommands());
-            SetPrivateField(_recogniser, "bufferWindow", 1.5f);
-            SetPrivateField(_recogniser, "commandCooldown", 0f);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
 
             int fireCount = 0;
             _recogniser.OnCommandRecognised += _ => fireCount++;
@@ -241,8 +229,8 @@ namespace VoskXR.Tests.Runtime
         public void InjectText_AfterFlush_DoesNotDoubleFire()
         {
             _recogniser.Configure(MakeSlots(), MakeCommands());
-            SetPrivateField(_recogniser, "bufferWindow", 1.5f);
-            SetPrivateField(_recogniser, "commandCooldown", 0f);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
 
             int fireCount = 0;
             _recogniser.OnCommandRecognised += _ => fireCount++;
@@ -264,7 +252,7 @@ namespace VoskXR.Tests.Runtime
             // If OnResult is ever renamed or unsubscribed, the isolated tests still
             // pass but this one fails.
             var speech = _go.AddComponent<VoskSpeechRecogniser>();
-            SetPrivateField(_recogniser, "speechRecogniser", speech);
+            _recogniser.SpeechRecogniser = speech;
 
             // Force OnEnable to re-run with the now-set speechRecogniser reference.
             _recogniser.enabled = false;

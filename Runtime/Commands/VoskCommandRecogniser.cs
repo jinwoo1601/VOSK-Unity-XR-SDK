@@ -182,23 +182,21 @@ namespace VoskXR.Commands
         }
 
         /// <summary>
-        /// Injects text directly into the command pipeline as if it had arrived from VOSK.
-        /// Goes through the full <see cref="HandleResult"/> path including the utterance
-        /// buffer, so injection tests exercise the same code path as real audio. Fires
-        /// <see cref="OnCommandRecognised"/>/<see cref="OnCommandsRecognised"/> or
-        /// <see cref="OnUnrecognisedSpeech"/>.
-        /// <para>If <c>bufferWindow &gt; 0</c> the result is queued and events fire later from
-        /// <see cref="Update"/>. Call <see cref="FlushPendingBuffer"/> immediately after
-        /// injection to force synchronous events.</para>
-        /// <para>Requires <see cref="Configure(VoskSlotDefinition[], VoskCommandDefinition[])"/>
-        /// or <see cref="Configure(VoskSlotDefinition[], VoskCommandSet[])"/> followed by
-        /// <see cref="SetActiveSets"/> to have been called first. Must be called from the
-        /// main thread.</para>
+        /// Injects text into the command pipeline as if it had arrived from VOSK, exercising
+        /// the same <see cref="HandleResult"/> path (parser, threshold filter, buffer, debounce)
+        /// as real audio.
+        /// When <c>bufferWindow &gt; 0</c> the result is queued and events fire later from
+        /// <see cref="Update"/>; call <see cref="FlushPendingBuffer"/> for synchronous events.
+        /// Requires one of the <c>Configure</c> overloads (and <see cref="SetActiveSets"/> when
+        /// using command sets) to have been called first. Main thread only.
         /// </summary>
         public void InjectText(string text, VoskWord[] words = null)
         {
             Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
                 "InjectText must be called from the Unity main thread.");
+
+            if (string.IsNullOrWhiteSpace(text))
+                return;
 
             if (_parser == null)
             {
@@ -214,10 +212,9 @@ namespace VoskXR.Commands
         }
 
         /// <summary>
-        /// Immediately flushes any speech currently held in the utterance buffer, firing
-        /// command/unrecognised events synchronously on the calling thread. Useful for
-        /// push-to-talk release, scene transitions, and synchronous test injection.
-        /// No-op if no buffered speech is pending. Must be called from the main thread.
+        /// Flushes any speech currently held in the utterance buffer, firing command events
+        /// synchronously. Useful for push-to-talk release and scene transitions. No-op when
+        /// the buffer is empty. Main thread only.
         /// </summary>
         public void FlushPendingBuffer()
         {
@@ -227,6 +224,11 @@ namespace VoskXR.Commands
             if (_bufferActive)
                 FlushBuffer();
         }
+
+        // Test-only setters. Production callers configure via the Inspector.
+        internal float BufferWindow { set => bufferWindow = value; }
+        internal float CommandCooldown { set => commandCooldown = value; }
+        internal VoskSpeechRecogniser SpeechRecogniser { set => speechRecogniser = value; }
 
         void RebuildParserAndGrammar(VoskCommandDefinition[] commands)
         {

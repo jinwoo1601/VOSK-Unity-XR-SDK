@@ -236,54 +236,39 @@ namespace VoskXR
         }
 
         /// <summary>
-        /// Injects a final result as if VOSK had recognised it. Fires <see cref="OnFinalResult"/>
-        /// then <see cref="OnResult"/>, in the same order as the real audio path.
-        /// Use for Editor testing, replay, and CI without a microphone or native bridge.
-        /// <para>Mirrors real VOSK behaviour: empty or null <paramref name="text"/> is passed
-        /// through to subscribers — the real audio path does not short-circuit on empty either,
-        /// so subscribers should handle it. Filter upstream if your test scenario should not
-        /// fire those.</para>
-        /// <para>Bypasses <c>_bridgeAvailable</c>, <see cref="IsModelReady"/>, and
-        /// <see cref="IsRecognising"/>. Subscribers receive events even when no recognition
-        /// session is active — gate them yourself if they assume an active session.</para>
-        /// <para>Must be called from the main thread.</para>
+        /// Injects a final result as if VOSK had recognised it.
+        /// Bypasses bridge/model/session state, so events fire even when no recognition
+        /// session is active — gate downstream code that assumes an active session.
+        /// Empty or null text is passed through to match the real audio path. Must be
+        /// called from the main thread.
         /// </summary>
         public void InjectResult(string text, VoskWord[] words = null, VoskAlternative[] alternatives = null)
         {
-            Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
-                "InjectResult must be called from the Unity main thread.");
-
-            OnFinalResult?.Invoke(text);
-
-            if (OnResult != null)
-            {
-                var result = new VoskResult(
-                    text,
-                    words ?? Array.Empty<VoskWord>(),
-                    alternatives ?? Array.Empty<VoskAlternative>());
-                OnResult.Invoke(result);
-            }
+            AssertMainThread(nameof(InjectResult));
+            DispatchFinalResult(
+                text,
+                words ?? Array.Empty<VoskWord>(),
+                alternatives ?? Array.Empty<VoskAlternative>());
         }
 
         /// <summary>
-        /// Injects a partial result as if VOSK had recognised it. Fires <see cref="OnPartialResult"/>.
-        /// Empty or null text is passed through to match the real audio path. Must be called
-        /// from the main thread.
+        /// Injects a partial result as if VOSK had recognised it. Empty or null text is
+        /// passed through to match the real audio path. Must be called from the main thread.
         /// </summary>
         public void InjectPartialResult(string text)
         {
-            Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
-                "InjectPartialResult must be called from the Unity main thread.");
-
+            AssertMainThread(nameof(InjectPartialResult));
             OnPartialResult?.Invoke(text);
         }
 
+        // ~average English word duration; used to give simulated words a plausible non-zero span.
+        const float SimulatedWordDurationSeconds = 0.3f;
+
         /// <summary>
-        /// Creates a <see cref="VoskWord"/> array from a text string with uniform confidence
-        /// and sequential 0.3-second timing. Use for testing confidence thresholds without a
-        /// real microphone.
-        /// <para>Confidence is passed through unchanged; values outside [0, 1] are valid but
-        /// may behave unexpectedly with downstream <c>minConfidence</c> filters.</para>
+        /// Synthesises a <see cref="VoskWord"/> array from a text string with uniform
+        /// confidence and sequential timing.
+        /// Confidence is passed through unchanged — values outside [0, 1] are valid but
+        /// may interact unexpectedly with downstream <c>minConfidence</c> filters.
         /// </summary>
         public static VoskWord[] CreateSimulatedWords(string text, float confidence = 1.0f)
         {
@@ -292,8 +277,26 @@ namespace VoskXR
             var tokens = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var words = new VoskWord[tokens.Length];
             for (int i = 0; i < tokens.Length; i++)
-                words[i] = new VoskWord(tokens[i], confidence, i * 0.3f, (i + 1) * 0.3f);
+                words[i] = new VoskWord(
+                    tokens[i],
+                    confidence,
+                    i * SimulatedWordDurationSeconds,
+                    (i + 1) * SimulatedWordDurationSeconds);
             return words;
+        }
+
+        void DispatchFinalResult(string text, VoskWord[] words, VoskAlternative[] alternatives)
+        {
+            OnFinalResult?.Invoke(text);
+
+            if (OnResult != null)
+                OnResult.Invoke(new VoskResult(text, words, alternatives));
+        }
+
+        static void AssertMainThread(string method)
+        {
+            Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
+                $"{method} must be called from the Unity main thread.");
         }
 
         void Update()
@@ -326,18 +329,19 @@ namespace VoskXR
 
                     if (isFinal)
                     {
-                        OnFinalResult?.Invoke(text);
+                        VoskAlternative[] alternatives = Array.Empty<VoskAlternative>();
+                        VoskWord[] words = Array.Empty<VoskWord>();
 
                         if (OnResult != null)
                         {
-                            var alternatives = ParseAlternativesFromJson(json);
-                            VoskWord[] words;
+                            alternatives = ParseAlternativesFromJson(json);
                             if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
                                 words = alternatives[0].Words;
                             else
                                 words = ParseWordsFromJson(json);
-                            OnResult.Invoke(new VoskResult(text, words, alternatives));
                         }
+
+                        DispatchFinalResult(text, words, alternatives);
                     }
                     else
                     {
