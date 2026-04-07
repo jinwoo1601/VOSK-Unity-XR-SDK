@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VoskCommandRecogniser.InjectText(text, words)` — injects text into the full command pipeline (parser, threshold filter, buffer, debounce) as if it had arrived from VOSK.
 - `VoskCommandRecogniser.FlushPendingBuffer()` — immediately flushes any speech held in the utterance buffer. Useful for push-to-talk release, scene transitions, and synchronous test injection.
 - Play Mode tests covering injection, threshold filtering, debounce, buffered-path flushing, and end-to-end speech-to-command wiring.
+- Editor test matrix (`v3-test-matrix.md`) with 9 automated suites (145 tests) and 36 manual injection rows across 8 phases — 45/45 pass, no Quest device, native bridge, or model required. Verifies every v2.0–v2.5 feature category (literals, aliases, optional slots, NumberSequence, utterance buffer, sequential extraction, debounce, threshold filtering, command sets, asset authoring) is reachable via injection.
 
 ## [0.9.0] - 2026-04-06
 
