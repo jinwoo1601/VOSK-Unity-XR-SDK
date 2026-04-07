@@ -235,6 +235,70 @@ namespace VoskXR
             }
         }
 
+        /// <summary>
+        /// Injects a final result as if VOSK had recognised it.
+        /// Bypasses bridge/model/session state, so events fire even when no recognition
+        /// session is active — gate downstream code that assumes an active session.
+        /// Empty or null text is passed through to match the real audio path. Must be
+        /// called from the main thread.
+        /// </summary>
+        public void InjectResult(string text, VoskWord[] words = null, VoskAlternative[] alternatives = null)
+        {
+            AssertMainThread(nameof(InjectResult));
+            DispatchFinalResult(
+                text,
+                words ?? Array.Empty<VoskWord>(),
+                alternatives ?? Array.Empty<VoskAlternative>());
+        }
+
+        /// <summary>
+        /// Injects a partial result as if VOSK had recognised it. Empty or null text is
+        /// passed through to match the real audio path. Must be called from the main thread.
+        /// </summary>
+        public void InjectPartialResult(string text)
+        {
+            AssertMainThread(nameof(InjectPartialResult));
+            OnPartialResult?.Invoke(text);
+        }
+
+        // ~average English word duration; used to give simulated words a plausible non-zero span.
+        const float SimulatedWordDurationSeconds = 0.3f;
+
+        /// <summary>
+        /// Synthesises a <see cref="VoskWord"/> array from a text string with uniform
+        /// confidence and sequential timing.
+        /// Confidence is passed through unchanged — values outside [0, 1] are valid but
+        /// may interact unexpectedly with downstream <c>minConfidence</c> filters.
+        /// </summary>
+        public static VoskWord[] CreateSimulatedWords(string text, float confidence = 1.0f)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return Array.Empty<VoskWord>();
+
+            var tokens = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var words = new VoskWord[tokens.Length];
+            for (int i = 0; i < tokens.Length; i++)
+                words[i] = new VoskWord(
+                    tokens[i],
+                    confidence,
+                    i * SimulatedWordDurationSeconds,
+                    (i + 1) * SimulatedWordDurationSeconds);
+            return words;
+        }
+
+        void DispatchFinalResult(string text, VoskWord[] words, VoskAlternative[] alternatives)
+        {
+            OnFinalResult?.Invoke(text);
+
+            if (OnResult != null)
+                OnResult.Invoke(new VoskResult(text, words, alternatives));
+        }
+
+        static void AssertMainThread(string method)
+        {
+            Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
+                $"{method} must be called from the Unity main thread.");
+        }
+
         void Update()
         {
             if (!_bridgeAvailable || !_isRecognising)
@@ -265,18 +329,19 @@ namespace VoskXR
 
                     if (isFinal)
                     {
-                        OnFinalResult?.Invoke(text);
+                        VoskAlternative[] alternatives = Array.Empty<VoskAlternative>();
+                        VoskWord[] words = Array.Empty<VoskWord>();
 
                         if (OnResult != null)
                         {
-                            var alternatives = ParseAlternativesFromJson(json);
-                            VoskWord[] words;
+                            alternatives = ParseAlternativesFromJson(json);
                             if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
                                 words = alternatives[0].Words;
                             else
                                 words = ParseWordsFromJson(json);
-                            OnResult.Invoke(new VoskResult(text, words, alternatives));
                         }
+
+                        DispatchFinalResult(text, words, alternatives);
                     }
                     else
                     {
