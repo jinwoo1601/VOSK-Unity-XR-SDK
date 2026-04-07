@@ -181,6 +181,53 @@ namespace VoskXR.Commands
             SetActiveSets(setName);
         }
 
+        /// <summary>
+        /// Injects text directly into the command pipeline as if it had arrived from VOSK.
+        /// Goes through the full <see cref="HandleResult"/> path including the utterance
+        /// buffer, so injection tests exercise the same code path as real audio. Fires
+        /// <see cref="OnCommandRecognised"/>/<see cref="OnCommandsRecognised"/> or
+        /// <see cref="OnUnrecognisedSpeech"/>.
+        /// <para>If <c>bufferWindow &gt; 0</c> the result is queued and events fire later from
+        /// <see cref="Update"/>. Call <see cref="FlushPendingBuffer"/> immediately after
+        /// injection to force synchronous events.</para>
+        /// <para>Requires <see cref="Configure(VoskSlotDefinition[], VoskCommandDefinition[])"/>
+        /// or <see cref="Configure(VoskSlotDefinition[], VoskCommandSet[])"/> followed by
+        /// <see cref="SetActiveSets"/> to have been called first. Must be called from the
+        /// main thread.</para>
+        /// </summary>
+        public void InjectText(string text, VoskWord[] words = null)
+        {
+            Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
+                "InjectText must be called from the Unity main thread.");
+
+            if (_parser == null)
+            {
+                Debug.LogWarning("[VoskCommandRecogniser] InjectText called before parser is ready. " +
+                    "Call Configure(slots, commands) or Configure(slots, sets) followed by SetActiveSets(...) first.");
+                return;
+            }
+
+            HandleResult(new VoskResult(
+                text,
+                words ?? Array.Empty<VoskWord>(),
+                Array.Empty<VoskAlternative>()));
+        }
+
+        /// <summary>
+        /// Immediately flushes any speech currently held in the utterance buffer, firing
+        /// command/unrecognised events synchronously on the calling thread. Useful for
+        /// push-to-talk release, scene transitions, and synchronous test injection.
+        /// No-op if no buffered speech is pending. Must be called from the main thread.
+        /// </summary>
+        public void FlushPendingBuffer()
+        {
+            Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
+                "FlushPendingBuffer must be called from the Unity main thread.");
+
+            if (_bufferActive)
+                FlushBuffer();
+        }
+
         void RebuildParserAndGrammar(VoskCommandDefinition[] commands)
         {
             // Discard stale buffered speech from the previous grammar
