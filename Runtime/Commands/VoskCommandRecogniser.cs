@@ -39,6 +39,13 @@ namespace VoskXR.Commands
                  "Set to 0 to disable debounce.")]
         [SerializeField] float commandCooldown = 0.3f;
 
+        [Header("Inspector Authoring (optional — ignored if Configure() is called from code)")]
+        [SerializeField] VoskSlotAsset[] slotAssets;
+        [SerializeField] VoskCommandSetAsset[] commandSetAssets;
+
+        [Tooltip("Command sets to activate on startup when using Inspector authoring.")]
+        [SerializeField] string[] initialActiveSetNames;
+
         public event Action<VoskCommand> OnCommandRecognised;
         public event Action<VoskCommand[]> OnCommandsRecognised;
         public event Action<string> OnUnrecognisedSpeech;
@@ -201,6 +208,47 @@ namespace VoskXR.Commands
 
             if (wasRunning)
                 speechRecogniser.StartRecognition();
+        }
+
+        void Awake()
+        {
+            // If user code already called Configure(), _slots is non-null and inspector assets are ignored.
+            if (_slots != null)
+                return;
+
+            if (slotAssets == null || slotAssets.Length == 0)
+                return;
+
+            if (commandSetAssets == null || commandSetAssets.Length == 0)
+                return;
+
+            var slotList = new List<VoskSlotDefinition>(slotAssets.Length);
+            for (int i = 0; i < slotAssets.Length; i++)
+            {
+                if (slotAssets[i] == null)
+                {
+                    Debug.LogWarning($"[VoskCommandRecogniser] slotAssets[{i}] is null — skipping.");
+                    continue;
+                }
+                slotList.Add(slotAssets[i].ToDefinition());
+            }
+
+            var setList = new List<VoskCommandSet>(commandSetAssets.Length);
+            for (int i = 0; i < commandSetAssets.Length; i++)
+            {
+                if (commandSetAssets[i] == null)
+                {
+                    Debug.LogWarning(
+                        $"[VoskCommandRecogniser] commandSetAssets[{i}] is null — skipping.");
+                    continue;
+                }
+                setList.Add(commandSetAssets[i].ToSet());
+            }
+
+            Configure(slotList.ToArray(), setList.ToArray());
+
+            if (initialActiveSetNames != null && initialActiveSetNames.Length > 0)
+                SetActiveSets(initialActiveSetNames);
         }
 
         void OnEnable()
