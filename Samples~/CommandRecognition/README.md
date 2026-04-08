@@ -45,9 +45,32 @@ switching. Demonstrates the `VoskCommandRecogniser` pipeline on top of
 
 ## Iterating in the Editor without deploying
 
-The native bridge only runs on-device, so the sample won't parse live
-audio in the Editor. To iterate on your command definitions without a
-Quest build cycle, use the **text injection API** added in v0.10.0:
+There are two complementary ways to iterate on this sample without a
+Quest build cycle.
+
+### Live microphone in the Windows Editor (v0.11.0)
+
+On the Windows Unity Editor, `VoskSpeechRecogniser.StartRecognition()`
+transparently routes audio through `UnityEngine.Microphone` and a
+desktop build of `libvosk.dll` — the sample runs end-to-end in Play
+Mode with zero code changes. Speak into your PC microphone, watch
+commands fire in the Console.
+
+Requires `libvosk.dll` (and its three MinGW runtime dependencies) to be
+present in `Runtime/Plugins/x86_64/` of the VOSK XR package. Download
+`vosk-win64-*.zip` from
+[alphacep/vosk-api releases](https://github.com/alphacep/vosk-api/releases)
+and drop the four DLLs into that folder. The plugin importer meta files
+are already configured to load them in Editor only.
+
+Editor-only scope: the live mic backend is excluded from Android,
+standalone Windows, Linux, and macOS builds. Target-platform behaviour
+on Quest is unchanged.
+
+### Text injection API (v0.10.0)
+
+For unit tests, CI, replay scenarios, and threshold-tuning without a
+mic, the text injection API remains the cleaner path:
 
 - `VoskCommandRecogniser.InjectText(text, words)` — pushes a string
   through the same parser → threshold → buffer → debounce path as real

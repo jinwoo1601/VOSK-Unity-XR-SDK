@@ -45,15 +45,23 @@ namespace VoskXR
         bool _initialising;
         bool _isRecognising;
 
+#if UNITY_EDITOR_WIN
+        EditorMicBackend _editorBackend;
+#endif
+
         public bool IsModelReady { get; private set; }
 
         public bool IsInitialised
         {
             get
             {
+#if UNITY_EDITOR_WIN
+                return _editorBackend != null && _editorBackend.IsInitialised;
+#else
                 if (!_bridgeAvailable) return false;
                 try { return BridgeNative.vosk_bridge_is_initialised() == 1; }
                 catch (DllNotFoundException) { MarkBridgeUnavailable(); return false; }
+#endif
             }
         }
 
@@ -61,9 +69,13 @@ namespace VoskXR
         {
             get
             {
+#if UNITY_EDITOR_WIN
+                return _editorBackend != null && _editorBackend.IsRunning;
+#else
                 if (!_bridgeAvailable) return false;
                 try { return BridgeNative.vosk_bridge_is_running() == 1; }
                 catch (DllNotFoundException) { MarkBridgeUnavailable(); return false; }
+#endif
             }
         }
 
@@ -85,6 +97,21 @@ namespace VoskXR
                 if (modelPath == null)
                     return;
 
+#if UNITY_EDITOR_WIN
+                _editorBackend = new EditorMicBackend();
+                bool editorOk = await _editorBackend.InitialiseAsync(
+                    modelPath, sampleRate, micGainTargetDb, maxAlternatives, FireError);
+                if (editorOk)
+                {
+                    IsModelReady = true;
+                    OnModelReady?.Invoke();
+                }
+                else
+                {
+                    _editorBackend = null;
+                }
+                return;
+#else
                 int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb,
                     maxAlternatives);
                 CheckBridgeError(result, "Initialise");
@@ -94,6 +121,7 @@ namespace VoskXR
                     IsModelReady = true;
                     OnModelReady?.Invoke();
                 }
+#endif
             }
             catch (DllNotFoundException)
             {
@@ -111,17 +139,22 @@ namespace VoskXR
 
         public void ReleaseNativeResources()
         {
-            if (!_bridgeAvailable) return;
-
-            try
+#if UNITY_EDITOR_WIN
+            _editorBackend?.Release();
+            _editorBackend = null;
+#else
+            if (_bridgeAvailable)
             {
-                BridgeNative.vosk_bridge_destroy();
+                try
+                {
+                    BridgeNative.vosk_bridge_destroy();
+                }
+                catch (DllNotFoundException)
+                {
+                    MarkBridgeUnavailable();
+                }
             }
-            catch (DllNotFoundException)
-            {
-                MarkBridgeUnavailable();
-            }
-
+#endif
             _isRecognising = false;
             IsModelReady = false;
         }
@@ -177,6 +210,10 @@ namespace VoskXR
 
         void StartRecognitionInternal()
         {
+#if UNITY_EDITOR_WIN
+            if (_editorBackend != null && _editorBackend.Start(FireError))
+                _isRecognising = true;
+#else
             try
             {
                 int result = BridgeNative.vosk_bridge_start();
@@ -189,13 +226,16 @@ namespace VoskXR
             {
                 MarkBridgeUnavailable();
             }
+#endif
         }
 
         public void StopRecognition()
         {
             _isRecognising = false;
+#if UNITY_EDITOR_WIN
+            _editorBackend?.Stop();
+#else
             if (!_bridgeAvailable) return;
-
             try
             {
                 BridgeNative.vosk_bridge_stop();
@@ -204,12 +244,15 @@ namespace VoskXR
             {
                 MarkBridgeUnavailable();
             }
+#endif
         }
 
         public void ResetRecogniser()
         {
+#if UNITY_EDITOR_WIN
+            _editorBackend?.Reset();
+#else
             if (!_bridgeAvailable) return;
-
             try
             {
                 int result = BridgeNative.vosk_bridge_reset();
@@ -219,10 +262,14 @@ namespace VoskXR
             {
                 MarkBridgeUnavailable();
             }
+#endif
         }
 
         public void SetGrammar(string grammarJson)
         {
+#if UNITY_EDITOR_WIN
+            _editorBackend?.SetGrammar(grammarJson, FireError);
+#else
             if (!_bridgeAvailable) return;
             try
             {
@@ -233,6 +280,7 @@ namespace VoskXR
             {
                 MarkBridgeUnavailable();
             }
+#endif
         }
 
         /// <summary>
@@ -301,6 +349,15 @@ namespace VoskXR
 
         void Update()
         {
+#if UNITY_EDITOR_WIN
+            if (_editorBackend != null && _isRecognising)
+            {
+                _editorBackend.Tick(FireError);
+                DrainEditorResults();
+                if (!_editorBackend.IsRunning) _isRecognising = false;
+                return;
+            }
+#endif
             if (!_bridgeAvailable || !_isRecognising)
                 return;
 
@@ -311,42 +368,8 @@ namespace VoskXR
                 while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt)) != IntPtr.Zero)
                 {
                     hadActivity = true;
-                    bool isFinal = isFinalInt == 1;
                     string json = BridgeNative.MarshalResult(ptr);
-
-                    if (json == null)
-                        continue;
-
-                    // Native side sends {"error": "...", "code": N} for errors
-                    if (json.Contains("\"error\""))
-                    {
-                        var errorCode = ParseErrorCode(json);
-                        FireError(errorCode, errorCode.ToDescription());
-                        continue;
-                    }
-
-                    string text = ParseTextFromJson(json, isFinal);
-
-                    if (isFinal)
-                    {
-                        VoskAlternative[] alternatives = Array.Empty<VoskAlternative>();
-                        VoskWord[] words = Array.Empty<VoskWord>();
-
-                        if (OnResult != null)
-                        {
-                            alternatives = ParseAlternativesFromJson(json);
-                            if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
-                                words = alternatives[0].Words;
-                            else
-                                words = ParseWordsFromJson(json);
-                        }
-
-                        DispatchFinalResult(text, words, alternatives);
-                    }
-                    else
-                    {
-                        OnPartialResult?.Invoke(text);
-                    }
+                    DispatchJsonResult(json, isFinalInt == 1);
                 }
 
                 // Sync cached flag when native side stops (e.g. audio error).
@@ -357,6 +380,52 @@ namespace VoskXR
             catch (DllNotFoundException)
             {
                 MarkBridgeUnavailable();
+            }
+        }
+
+#if UNITY_EDITOR_WIN
+        void DrainEditorResults()
+        {
+            while (_editorBackend.TryDequeueResult(out string json, out bool isFinal))
+                DispatchJsonResult(json, isFinal);
+        }
+#endif
+
+        // Parses a VOSK JSON string and fires the appropriate event(s).
+        // Shared by the Android native drain loop and the Editor backend drain.
+        void DispatchJsonResult(string json, bool isFinal)
+        {
+            if (string.IsNullOrEmpty(json))
+                return;
+
+            if (json.Contains("\"error\""))
+            {
+                var code = ParseErrorCode(json);
+                FireError(code, code.ToDescription());
+                return;
+            }
+
+            string text = ParseTextFromJson(json, isFinal);
+
+            if (isFinal)
+            {
+                VoskAlternative[] alternatives = Array.Empty<VoskAlternative>();
+                VoskWord[] words = Array.Empty<VoskWord>();
+
+                if (OnResult != null)
+                {
+                    alternatives = ParseAlternativesFromJson(json);
+                    if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
+                        words = alternatives[0].Words;
+                    else
+                        words = ParseWordsFromJson(json);
+                }
+
+                DispatchFinalResult(text, words, alternatives);
+            }
+            else
+            {
+                OnPartialResult?.Invoke(text);
             }
         }
 

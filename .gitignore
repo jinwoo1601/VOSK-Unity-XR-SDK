@@ -36,3 +36,8 @@ desktop.ini
 NativeBridge~/build/
 
 # Prebuilt native binaries are tracked — UPM packages must include all files
+# EXCEPT the upstream Windows desktop VOSK DLLs, which are large (~52 MB) and
+# editor-only. Developers download them from alphacep/vosk-api releases and
+# drop them into Runtime/Plugins/x86_64/. The .meta files ARE tracked so
+# Unity's plugin importer keeps its Editor-only Windows x86_64 configuration.
+Runtime/Plugins/x86_64/*.dll
