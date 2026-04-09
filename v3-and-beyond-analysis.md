@@ -9,12 +9,18 @@ v2.x covers the full lifecycle of **one-shot command recognition**: parse, score
 **The biggest pain point right now.** Every change requires a Quest deploy to test. This version would make the SDK usable in the Unity Editor.
 
 - **Desktop audio backend** — Use Unity's `Microphone` class (or WASAPI via a small native plugin) to capture audio in-Editor. The existing pipeline (downsample -> VOSK) works on any platform; it's only the audio capture that's Android-specific.
-- **x86_64 VOSK library** — Ship a Windows/macOS `libvosk` alongside the arm64 one. VOSK already publishes desktop builds. The bridge would need a thin platform abstraction (AAudio on Android, Unity Microphone on desktop).
+- **x86_64 VOSK library** — Ship a Windows/macOS `libvosk` alongside the arm64 one. VOSK already publishes desktop builds. The bridge would need a thin platform abstraction (AudioRecord/JNI on Android, Unity Microphone on desktop). Note: the AAudio capture backend (`audio_capture_aaudio.cpp`) was abandoned because AAudio input is broken on Quest 3 — the Android path now uses `AudioRecord` via JNI with the int16 VOSK entry point. The dead AAudio source file is still in the tree but not compiled.
 - **Editor play-mode workflow** — Speak into your headset/desktop mic, see commands fire in the Console. Eliminates the deploy-test-logcat loop entirely.
 - **Text injection API** — `commandRecogniser.InjectText("launch all missiles target hotel one")` for automated testing and CI. Bypasses audio entirely, feeds text directly to the parser. Trivial to implement, enormous for test coverage.
 - **Simulated confidence** — Text injection could accept optional per-word confidence values so threshold logic can be tested without a mic.
 
 This is probably the highest-impact version. It would cut iteration time from minutes to seconds.
+
+### Scope note — v3.1 is Editor-only, PCVR runtime deferred
+
+v3.0 shipped text injection. v3.1 adds live mic in the Editor (Unity `Microphone` API + desktop `libvosk.dll` via direct C# P/Invoke, transparent auto-routing in `VoskSpeechRecogniser.StartRecognition()`), guarded by `#if UNITY_EDITOR` so it does not affect Android or standalone builds.
+
+A wider scope was considered and explicitly deferred: expanding the guards to `#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN` would make the exact same code path serve standalone Windows PCVR builds as well. Technically it is the right backend — PCVR headsets (Quest via Link/Air Link, Valve Index, Vive Pro, Varjo, etc.) all expose their mic as a standard Windows audio input device that `UnityEngine.Microphone` enumerates directly, so the Editor mic backend *is* architecturally the PCVR runtime backend. The deferred work for a future "PCVR runtime" version is therefore polish rather than re-architecture: device selection (pick the headset mic explicitly instead of relying on Windows default), hot-plug / Link-disconnect handling, rational-ratio sample-rate resampling for 44.1 kHz edge cases, and a test matrix across real PCVR hardware.
 
 ---
 

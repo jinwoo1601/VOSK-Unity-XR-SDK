@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-04-09
+
+### Added
+
+- Live microphone capture in the Unity Editor on Windows. Developers can now test voice commands end-to-end without deploying to Quest 3. `VoskSpeechRecogniser.StartRecognition()` transparently auto-routes to a managed `EditorMicBackend` when running in the Windows Editor — existing sample scenes and user code work unchanged. No public API changes.
+- `Runtime/Dsp/Downsampler.cs` — C# port of the 15-tap FIR downsampler (48 kHz → 16 kHz) from the native bridge, with Edit Mode unit tests covering output count, silence, DC gain, reset, and phase continuity across calls.
+- `Runtime/Dsp/Agc.cs` — C# port of the asymmetric EMA automatic gain control with tanh soft limiter, with Edit Mode unit tests for silence, loud/quiet convergence, extreme-input bounding, and reset behaviour.
+- `Runtime/Native/VoskNative.cs` — P/Invoke bindings for the upstream `libvosk.dll` desktop build, bound with `CallingConvention.Cdecl` to match the MinGW GCC ABI of the alphacep/vosk-api Windows releases.
+- `Runtime/EditorMicBackend.cs` — Editor-only backend that wires `UnityEngine.Microphone` capture into the ported DSP and VOSK recognizer, fed synchronously from the main-thread `Update()` loop. `vosk_model_new` is wrapped in `Task.Run` to avoid a main-thread hitch during the 1–3 second model load.
+- `Runtime/Plugins/x86_64/` folder with plugin importer meta files for `libvosk.dll` and three MinGW runtime DLLs (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`). Meta files are configured for Editor-only loading on Windows x86_64 — explicitly excluded from Android, standalone Windows, Linux, and macOS builds.
+
+### Changed
+
+- `VoskSpeechRecogniser` lifecycle methods (`IsInitialised`, `IsRecognising`, `InitialiseAsync`, `StartRecognitionInternal`, `StopRecognition`, `ResetRecogniser`, `SetGrammar`, `ReleaseNativeResources`, `Update`) are now `#if UNITY_EDITOR_WIN` / `#else` gated so that the Windows Editor path routes exclusively through `EditorMicBackend` and other platforms continue to use the existing `BridgeNative` calls with zero behavioural change.
+
+### Notes
+
+- The Android runtime behaviour is unchanged. All 45 v3.0 tests continue to pass unmodified.
+- Standalone Windows / PCVR runtime builds remain explicitly unsupported in v3.1 — the architecture is intentionally "PCVR-ready" but scope was kept to Editor testing only. See the scope note in `v3-and-beyond-analysis.md`.
+- The binary DLLs are not checked into the repository. Maintainers and developers must download `vosk-win64-*.zip` from https://github.com/alphacep/vosk-api/releases and drop the four DLLs into `Runtime/Plugins/x86_64/`. See `v3.1-editor-mic-plan.md` for step-by-step instructions.
+
 ## [0.10.0] - 2026-04-07
 
 ### Added
