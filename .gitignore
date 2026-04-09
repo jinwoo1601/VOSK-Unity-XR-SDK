@@ -31,9 +31,14 @@ desktop.ini
 
 # Claude Code
 .claude/
+CLAUDE.md
+CLAUDE.md.meta
 
 # Native bridge build output
 NativeBridge~/build/
+
+# Internal planning docs (not shipped in public release)
+Planning~/
 
 # Prebuilt native binaries are tracked — UPM packages must include all files
 # EXCEPT the upstream Windows desktop VOSK DLLs, which are large (~52 MB) and

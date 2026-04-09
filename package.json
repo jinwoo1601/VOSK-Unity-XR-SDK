@@ -4,9 +4,9 @@
   "displayName": "VOSK XR Speech Recognition",
   "description": "Offline speech recognition for XR applications. Wraps the VOSK toolkit behind a Unity-native C# API with native audio capture via AudioRecord JNI on Android arm64, plus live microphone capture in the Unity Editor on Windows for iteration without a Quest device.",
   "unity": "6000.0",
-  "documentationUrl": "",
-  "changelogUrl": "",
-  "licensesUrl": "",
+  "documentationUrl": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK/blob/main/Documentation~/vosk-xr.md",
+  "changelogUrl": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK/blob/main/LICENSE.md",
   "keywords": [
     "vosk",
     "speech",
