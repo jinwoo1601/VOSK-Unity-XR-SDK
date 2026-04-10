@@ -49,6 +49,16 @@ namespace VoskXR
         EditorMicBackend _editorBackend;
 #endif
 
+#if UNITY_EDITOR
+        internal VoskResult EditorLastResult { get; private set; }
+#endif
+
+#if UNITY_EDITOR_WIN
+        internal float EditorPreAgcRms => _editorBackend?.PreAgcRms ?? 0f;
+        internal float EditorPostAgcRms => _editorBackend?.PostAgcRms ?? 0f;
+        internal float EditorAgcGain => _editorBackend?.AgcGain ?? 1f;
+#endif
+
         public bool IsModelReady { get; private set; }
 
         public bool IsInitialised
@@ -335,10 +345,12 @@ namespace VoskXR
 
         void DispatchFinalResult(string text, VoskWord[] words, VoskAlternative[] alternatives)
         {
+            var result = new VoskResult(text, words, alternatives);
+#if UNITY_EDITOR
+            EditorLastResult = result;
+#endif
             OnFinalResult?.Invoke(text);
-
-            if (OnResult != null)
-                OnResult.Invoke(new VoskResult(text, words, alternatives));
+            OnResult?.Invoke(result);
         }
 
         static void AssertMainThread(string method)

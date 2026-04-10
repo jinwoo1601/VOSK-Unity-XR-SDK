@@ -50,6 +50,17 @@ namespace VoskXR.Commands
         public event Action<VoskCommand[]> OnCommandsRecognised;
         public event Action<string> OnUnrecognisedSpeech;
 
+#if UNITY_EDITOR
+        /// <summary>
+        /// Diagnostic snapshot of the last utterance processed through the command pipeline.
+        /// The debug window polls this via the <see cref="VoskMatchDiagnostics.Frame"/> field.
+        /// </summary>
+        internal VoskMatchDiagnostics LastMatchDiagnostics { get; private set; }
+
+        /// <summary>Last partial result text from VOSK (updates as the user speaks).</summary>
+        internal string LastPartialResult { get; private set; }
+#endif
+
         VoskCommandParser _parser;
         string _grammarJson;
         bool _grammarApplied;
@@ -307,6 +318,9 @@ namespace VoskXR.Commands
 
             speechRecogniser.OnModelReady += HandleModelReady;
             speechRecogniser.OnResult += HandleResult;
+#if UNITY_EDITOR
+            speechRecogniser.OnPartialResult += HandlePartialResult;
+#endif
 
             if (!Debug.isDebugBuild && freeSpeechMode)
             {
@@ -322,6 +336,9 @@ namespace VoskXR.Commands
 
             speechRecogniser.OnModelReady -= HandleModelReady;
             speechRecogniser.OnResult -= HandleResult;
+#if UNITY_EDITOR
+            speechRecogniser.OnPartialResult -= HandlePartialResult;
+#endif
 
             // Flush any pending buffer on disable
             if (_bufferActive)
@@ -386,14 +403,37 @@ namespace VoskXR.Commands
         {
             var results = _parser.Parse(text, words);
 
+#if UNITY_EDITOR
+            var parseDiag = _parser.LastParseDiagnostics;
+            string[] diagTokens = text.Split(VoskCommandParser.SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
+            Dictionary<string, float> diagWordConf = null;
+            if (words != null && words.Length > 0)
+            {
+                diagWordConf = new Dictionary<string, float>(words.Length, StringComparer.Ordinal);
+                foreach (var w in words)
+                    if (!string.IsNullOrEmpty(w.Text) && !diagWordConf.ContainsKey(w.Text))
+                        diagWordConf[w.Text] = w.Confidence;
+            }
+#endif
+
             if (results.Length == 0)
             {
+#if UNITY_EDITOR
+                LastMatchDiagnostics = new VoskMatchDiagnostics(
+                    text, words,
+                    new[] { new VoskMatchAttempt(null, null, 0f, minScore, 0f, minConfidence,
+                        null, "no match", false) },
+                    Time.frameCount);
+#endif
                 OnUnrecognisedSpeech?.Invoke(text);
                 return;
             }
 
             float now = Time.time;
             var accepted = new List<VoskCommand>();
+#if UNITY_EDITOR
+            var attempts = new List<VoskMatchAttempt>(results.Length);
+#endif
 
             for (int i = 0; i < results.Length; i++)
             {
@@ -401,21 +441,47 @@ namespace VoskXR.Commands
 
                 // Reject if below score threshold
                 if (cmd.Score < minScore)
+                {
+#if UNITY_EDITOR
+                    attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                        $"score {cmd.Score:F2} < minScore {minScore:F2}", false));
+#endif
                     continue;
+                }
 
                 // Reject if below confidence threshold (skip when word data unavailable, i.e. -1)
                 if (cmd.Confidence >= 0f && cmd.Confidence < minConfidence)
+                {
+#if UNITY_EDITOR
+                    attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                        $"confidence {cmd.Confidence:F2} < minConfidence {minConfidence:F2}", false));
+#endif
                     continue;
+                }
 
                 // Per-intent debounce
                 if (commandCooldown > 0f &&
                     _lastFireTime.TryGetValue(cmd.Intent, out float lastTime) &&
                     now - lastTime < commandCooldown)
+                {
+#if UNITY_EDITOR
+                    attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                        $"debounced ({commandCooldown:F1}s cooldown)", false));
+#endif
                     continue;
+                }
 
                 _lastFireTime[cmd.Intent] = now;
                 accepted.Add(cmd);
+#if UNITY_EDITOR
+                attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf, null, true));
+#endif
             }
+
+#if UNITY_EDITOR
+            LastMatchDiagnostics = new VoskMatchDiagnostics(
+                text, words, attempts.ToArray(), Time.frameCount);
+#endif
 
             if (accepted.Count == 0)
                 return;
@@ -428,5 +494,45 @@ namespace VoskXR.Commands
             if (OnCommandsRecognised != null)
                 OnCommandsRecognised.Invoke(accepted.ToArray());
         }
+
+#if UNITY_EDITOR
+        void HandlePartialResult(string text)
+        {
+            LastPartialResult = text;
+        }
+
+        VoskMatchAttempt BuildAttempt(VoskCommand cmd,
+            VoskCommandParser.ParseDiagnosticEntry[] parseDiag, int index,
+            string[] tokens, Dictionary<string, float> wordConf,
+            string rejectReason, bool isAccepted)
+        {
+            string pattern = null;
+            VoskDiagnosticSlotMatch[] diagSlots = Array.Empty<VoskDiagnosticSlotMatch>();
+
+            if (parseDiag != null && index < parseDiag.Length)
+            {
+                pattern = parseDiag[index].PatternString;
+
+                if (cmd.Slots.Length > 0 && parseDiag[index].SlotStartWords != null)
+                {
+                    int slotCount = Math.Min(cmd.Slots.Length, parseDiag[index].SlotStartWords.Length);
+                    diagSlots = new VoskDiagnosticSlotMatch[slotCount];
+                    for (int s = 0; s < slotCount; s++)
+                    {
+                        int sw = parseDiag[index].SlotStartWords[s];
+                        int ew = parseDiag[index].SlotEndWords[s];
+                        float slotConf = VoskCommandParser.ComputeConfidence(tokens, sw, ew, wordConf);
+                        diagSlots[s] = new VoskDiagnosticSlotMatch(
+                            cmd.Slots[s].Name, cmd.Slots[s].Value, sw, ew, slotConf);
+                    }
+                }
+            }
+
+            return new VoskMatchAttempt(
+                cmd.Intent, pattern, cmd.Score, minScore,
+                cmd.Confidence, minConfidence, diagSlots,
+                rejectReason, isAccepted);
+        }
+#endif
     }
 }

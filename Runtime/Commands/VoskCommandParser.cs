@@ -9,14 +9,14 @@ namespace VoskXR.Commands
     /// </summary>
     internal class VoskCommandParser
     {
-        const string UnkToken = "[unk]";
+        internal const string UnkToken = "[unk]";
 
         const float MatchScore = 1.0f;
         const float OptionalLiteralScore = 0.5f;
         const float RequiredSlotMissPenalty = -1.0f;
         const float RequiredLiteralMissPenalty = -0.5f;
 
-        static readonly char[] SplitSeparator = { ' ' };
+        internal static readonly char[] SplitSeparator = { ' ' };
 
         readonly VoskSlotDefinition[] _slots;
         readonly VoskCommandDefinition[] _commands;
@@ -189,11 +189,21 @@ namespace VoskXR.Commands
         public VoskCommandResult[] Parse(string text, VoskWord[] words)
         {
             if (string.IsNullOrWhiteSpace(text))
+            {
+#if UNITY_EDITOR
+                LastParseDiagnostics = Array.Empty<ParseDiagnosticEntry>();
+#endif
                 return Array.Empty<VoskCommandResult>();
+            }
 
             string[] tokens = text.Split(SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0)
+            {
+#if UNITY_EDITOR
+                LastParseDiagnostics = Array.Empty<ParseDiagnosticEntry>();
+#endif
                 return Array.Empty<VoskCommandResult>();
+            }
 
             Dictionary<string, float> wordConfidence = null;
             if (words != null && words.Length > 0)
@@ -208,6 +218,9 @@ namespace VoskXR.Commands
 
             var results = new List<VoskCommandResult>();
             int searchStart = 0;
+#if UNITY_EDITOR
+            var diagnosticEntries = new List<ParseDiagnosticEntry>();
+#endif
 
             while (searchStart < tokens.Length)
             {
@@ -217,6 +230,11 @@ namespace VoskXR.Commands
                 int bestStartIdx = int.MaxValue;
                 int bestEndIdx = 0;
                 List<VoskSlotMatch> bestSlots = null;
+#if UNITY_EDITOR
+                int bestPatternIdx = -1;
+                List<int> bestSlotStartWords = null;
+                List<int> bestSlotEndWords = null;
+#endif
 
                 for (int ci = 0; ci < _commands.Length; ci++)
                 {
@@ -243,6 +261,11 @@ namespace VoskXR.Commands
                                 bestStartIdx = startIdx;
                                 bestEndIdx = matchResult.EndIdx;
                                 bestSlots = matchResult.Slots;
+#if UNITY_EDITOR
+                                bestPatternIdx = pi;
+                                bestSlotStartWords = matchResult.SlotStartWords;
+                                bestSlotEndWords = matchResult.SlotEndWords;
+#endif
                             }
                         }
                     }
@@ -270,9 +293,22 @@ namespace VoskXR.Commands
                     _slotNames);
 
                 results.Add(new VoskCommandResult(command));
+#if UNITY_EDITOR
+                diagnosticEntries.Add(new ParseDiagnosticEntry
+                {
+                    PatternString = string.Join(" ", _commands[bestCommandIdx].Patterns[bestPatternIdx]),
+                    SlotStartWords = bestSlotStartWords?.ToArray(),
+                    SlotEndWords = bestSlotEndWords?.ToArray(),
+                });
+#endif
                 searchStart = bestEndIdx;
             }
 
+#if UNITY_EDITOR
+            LastParseDiagnostics = diagnosticEntries.Count > 0
+                ? diagnosticEntries.ToArray()
+                : Array.Empty<ParseDiagnosticEntry>();
+#endif
             return results.Count > 0 ? results.ToArray() : Array.Empty<VoskCommandResult>();
         }
 
@@ -378,7 +414,22 @@ namespace VoskXR.Commands
             public int LiteralCount;
             public List<VoskSlotMatch> Slots;
             public int EndIdx;
+#if UNITY_EDITOR
+            public List<int> SlotStartWords;
+            public List<int> SlotEndWords;
+#endif
         }
+
+#if UNITY_EDITOR
+        internal struct ParseDiagnosticEntry
+        {
+            public string PatternString;
+            public int[] SlotStartWords;
+            public int[] SlotEndWords;
+        }
+
+        internal ParseDiagnosticEntry[] LastParseDiagnostics;
+#endif
 
         /// <summary>
         /// Scored matching from a given start position in the token array.
@@ -391,6 +442,10 @@ namespace VoskXR.Commands
             int patternLength = pattern.Length;
             int literalCount = 0;
             List<VoskSlotMatch> slots = null;
+#if UNITY_EDITOR
+            List<int> slotStartWords = null;
+            List<int> slotEndWords = null;
+#endif
 
             for (int patIdx = 0; patIdx < pattern.Length; patIdx++)
             {
@@ -419,6 +474,15 @@ namespace VoskXR.Commands
                     {
                         if (slots == null)
                             slots = new List<VoskSlotMatch>();
+#if UNITY_EDITOR
+                        if (slotStartWords == null)
+                        {
+                            slotStartWords = new List<int>();
+                            slotEndWords = new List<int>();
+                        }
+                        slotStartWords.Add(tokenIdx);
+                        slotEndWords.Add(tokenIdx + consumed);
+#endif
                         slots.Add(new VoskSlotMatch(slotName, matchedValue));
                         tokenIdx += consumed;
                         rawScore += MatchScore;
@@ -461,7 +525,11 @@ namespace VoskXR.Commands
                 Score = normalizedScore,
                 LiteralCount = literalCount,
                 Slots = slots,
-                EndIdx = tokenIdx
+                EndIdx = tokenIdx,
+#if UNITY_EDITOR
+                SlotStartWords = slotStartWords,
+                SlotEndWords = slotEndWords,
+#endif
             };
         }
 
@@ -542,7 +610,7 @@ namespace VoskXR.Commands
             return sb.ToString();
         }
 
-        float ComputeConfidence(string[] tokens, int startIdx, int endIdx,
+        internal static float ComputeConfidence(string[] tokens, int startIdx, int endIdx,
             Dictionary<string, float> wordConfidence)
         {
             if (wordConfidence == null || wordConfidence.Count == 0)
