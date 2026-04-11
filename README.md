@@ -31,9 +31,10 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Mix and match: Inspector authoring and code-based configuration on the same recogniser
 
 **Testing & Iteration**
+- Editor command debug window (Window > VOSK XR > Command Debug) with live audio meters, match breakdowns, and match history
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
-- 13 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, and asset conversion
+- 17 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, and asset conversion
 - Extensively tested on Quest 3 with published test matrices for every release
 
 ## Requirements
@@ -53,7 +54,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.11.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0
 ```
 
 **Via manifest.json:**
@@ -61,7 +62,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.11.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.11.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0"
   }
 }
 ```
@@ -188,6 +189,15 @@ var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords
 
 ## Editor Iteration (No Quest Required)
 
+### Command Debug Window
+
+Open **Window > VOSK XR > Command Debug** during Play Mode to inspect the full command pipeline in real time. The two-panel layout shows:
+
+- **Left panel:** Audio level meters (pre/post-AGC RMS, AGC gain), partial result, final result text, per-word confidence bars, and n-best alternatives.
+- **Right panel:** Active command sets, last match breakdown with score/confidence threshold pass/fail, slot word positions with per-slot confidence, and a scrolling match history (last 20 entries).
+
+The bottom toolbar provides text injection (type a phrase and press Enter to test without a microphone), plus pause and clear controls. Pause freezes the display so you can inspect a result without it being overwritten.
+
 ### Live Microphone (Windows Editor)
 
 On Windows, `StartRecognition()` transparently routes audio through `UnityEngine.Microphone` and a desktop `libvosk.dll`. Existing scenes work with zero code changes -- speak into your PC mic and watch commands fire in the Console.
@@ -223,7 +233,7 @@ Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
 
 ## Running Tests
 
-The package includes 13 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
+The package includes 17 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
 
 To run them in a consuming Unity project:
 
@@ -231,7 +241,7 @@ To run them in a consuming Unity project:
 2. Open **Window > General > Test Runner**.
 3. Run Edit Mode and Play Mode tests.
 
-Tests cover: command parser logic, injection API wiring, recogniser lifecycle, JSON parsing, number parsing, command sets, asset-to-runtime conversion, DSP (AGC, downsampler), model extractor validation, and error codes.
+Tests cover: command parser logic, injection API wiring, recogniser lifecycle, JSON parsing, number parsing, command sets, asset-to-runtime conversion, DSP (AGC, downsampler), model extractor validation, error codes, audio metrics, and Editor diagnostic structs.
 
 ## Architecture
 
@@ -280,6 +290,7 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
+| 0.12.0 | Editor command debug window with live diagnostics |
 | 0.11.0 | Windows Editor live microphone backend |
 | 0.10.0 | Text injection API for Editor/CI testing |
 | 0.9.0 | Inspector authoring (ScriptableObject assets) |

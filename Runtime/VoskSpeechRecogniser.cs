@@ -49,6 +49,16 @@ namespace VoskXR
         EditorMicBackend _editorBackend;
 #endif
 
+#if UNITY_EDITOR
+        internal VoskResult EditorLastResult { get; private set; }
+#endif
+
+#if UNITY_EDITOR_WIN
+        internal float EditorPreAgcRms => _editorBackend?.PreAgcRms ?? 0f;
+        internal float EditorPostAgcRms => _editorBackend?.PostAgcRms ?? 0f;
+        internal float EditorAgcGain => _editorBackend?.AgcGain ?? 1f;
+#endif
+
         public bool IsModelReady { get; private set; }
 
         public bool IsInitialised
@@ -335,10 +345,12 @@ namespace VoskXR
 
         void DispatchFinalResult(string text, VoskWord[] words, VoskAlternative[] alternatives)
         {
+            var result = new VoskResult(text, words, alternatives);
+#if UNITY_EDITOR
+            EditorLastResult = result;
+#endif
             OnFinalResult?.Invoke(text);
-
-            if (OnResult != null)
-                OnResult.Invoke(new VoskResult(text, words, alternatives));
+            OnResult?.Invoke(result);
         }
 
         static void AssertMainThread(string method)
@@ -412,7 +424,11 @@ namespace VoskXR
                 VoskAlternative[] alternatives = Array.Empty<VoskAlternative>();
                 VoskWord[] words = Array.Empty<VoskWord>();
 
-                if (OnResult != null)
+                bool needFullParse = OnResult != null;
+#if UNITY_EDITOR
+                needFullParse = true;
+#endif
+                if (needFullParse)
                 {
                     alternatives = ParseAlternativesFromJson(json);
                     if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
@@ -522,7 +538,10 @@ namespace VoskXR
                 int objEnd = json.IndexOf('}', objStart);
                 if (objEnd < 0 || objEnd > arrayEnd) break;
 
-                float conf = ParseFloatValue(json, objStart, objEnd, "\"conf\"");
+                // "conf" is absent when maxAlternatives > 0; use -1 sentinel.
+                bool hasConf = json.IndexOf("\"conf\"", objStart, objEnd - objStart,
+                    StringComparison.Ordinal) >= 0;
+                float conf = hasConf ? ParseFloatValue(json, objStart, objEnd, "\"conf\"") : -1f;
                 float start = ParseFloatValue(json, objStart, objEnd, "\"start\"");
                 float end = ParseFloatValue(json, objStart, objEnd, "\"end\"");
                 string word = ParseStringValue(json, objStart, objEnd, "\"word\"");

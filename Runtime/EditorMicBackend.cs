@@ -57,6 +57,10 @@ namespace VoskXR
         internal bool IsInitialised { get; private set; }
         internal bool IsRunning { get; private set; }
 
+        internal float PreAgcRms { get; private set; }
+        internal float PostAgcRms { get; private set; }
+        internal float AgcGain => _agc.CurrentGain;
+
         internal async Task<bool> InitialiseAsync(
             string modelPath,
             float sampleRate,
@@ -351,7 +355,10 @@ namespace VoskXR
             int dsCount = _downsampler.Process(_workBuffer, available, _downsampledBuffer);
             if (dsCount == 0) return;
 
+            PreAgcRms = ComputeRms(_downsampledBuffer, dsCount);
             _agc.Process(_downsampledBuffer, dsCount);
+            PostAgcRms = ComputeRms(_downsampledBuffer, dsCount);
+
             FloatToInt16(_downsampledBuffer, _int16Buffer, dsCount);
 
             int result = VoskNative.vosk_recognizer_accept_waveform_s(
@@ -385,6 +392,14 @@ namespace VoskXR
             var r = _resultQueue.Dequeue();
             json = r.Json; isFinal = r.IsFinal;
             return true;
+        }
+
+        internal static float ComputeRms(float[] samples, int count)
+        {
+            float sum = 0f;
+            for (int i = 0; i < count; i++)
+                sum += samples[i] * samples[i];
+            return count > 0 ? (float)Math.Sqrt(sum / count) : 0f;
         }
 
         // Float [-1, 1] → int16, with clamping. Matches vosk_bridge.cpp:44-51.

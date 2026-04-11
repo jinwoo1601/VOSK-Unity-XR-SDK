@@ -27,6 +27,7 @@
   - [Grammar Mode vs Free Speech](#grammar-mode-vs-free-speech)
 - [Inspector Authoring](#inspector-authoring)
 - [Editor Iteration](#editor-iteration)
+  - [Command Debug Window](#command-debug-window)
   - [Live Microphone (Windows Editor)](#live-microphone-windows-editor)
   - [Text Injection API](#text-injection-api)
 - [Push-to-Talk Pattern](#push-to-talk-pattern)
@@ -50,7 +51,7 @@
 To pin a specific version (recommended):
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.11.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0
 ```
 
 ### Via manifest.json
@@ -60,7 +61,7 @@ Add to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.11.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0"
   }
 }
 ```
@@ -688,7 +689,31 @@ The Command Recognition sample includes a complete set of 20 ScriptableObject as
 
 ## Editor Iteration
 
-Two complementary approaches let you iterate without deploying to Quest.
+Three complementary approaches let you iterate without deploying to Quest.
+
+### Command Debug Window
+
+Open **Window > VOSK XR > Command Debug** during Play Mode to inspect the full command pipeline in real time.
+
+**Left panel** (recognition state):
+- Audio level meters -- pre-AGC RMS, post-AGC RMS, and current AGC gain.
+- Partial result -- live VOSK partial transcript as you speak.
+- Final result -- the completed transcript text.
+- Per-word confidence bars -- each word with a colour-coded confidence bar (green > yellow > red). Shows `[n/a]` when VOSK omits per-word confidence (happens with `maxAlternatives > 0`).
+- N-best alternatives -- alternative hypotheses with confidence scores.
+
+**Right panel** (command matching):
+- Active command sets -- which sets are currently loaded.
+- Last match breakdown -- for each command definition attempted: intent, score, confidence, threshold pass/fail, and reject reason (if any). Accepted commands are highlighted in green.
+- Slot details -- matched slot word positions (start/end indices) with per-slot confidence.
+- Match history -- scrolling list of the last 20 match results with timestamps.
+
+**Bottom toolbar:**
+- **Inject field** -- type a phrase and press Enter (or click Send) to push it through the full command pipeline without a microphone. Useful for testing specific phrases or edge cases.
+- **Clear** -- clears match history and resets the display.
+- **Pause / Resume** -- freezes the display so you can inspect a result without it being overwritten by the next utterance. On resume, stale results are skipped so the display jumps to the next genuinely new result.
+
+The debug window is Editor-only (`#if UNITY_EDITOR`) and has zero cost in builds. The underlying diagnostic structs (`VoskMatchDiagnostics`, `VoskMatchAttempt`, `VoskDiagnosticSlotMatch`) are compiled out of non-Editor builds.
 
 ### Live Microphone (Windows Editor)
 
@@ -793,7 +818,7 @@ recogniser.OnError += (code, message) =>
 
 ## Running Tests
 
-The package includes 13 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
+The package includes 17 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
 
 | Suite | Mode | Covers |
 |-------|------|--------|
@@ -810,6 +835,10 @@ The package includes 13 test suites (Edit Mode and Play Mode) that run without a
 | `AgcTests` | Edit Mode | AGC convergence, silence, extreme input, reset |
 | `ModelExtractorValidationTests` | Edit Mode | Model path validation and error handling |
 | `VoskBridgeErrorCodeTests` | Edit Mode | Error code descriptions |
+| `AudioMetricTests` | Edit Mode | `ComputeRms` (silence, DC, known-amplitude sine) |
+| `VoskCommandParserDiagnosticTests` | Edit Mode | Parser diagnostic entries, matched pattern, slot positions, score |
+| `VoskCommandRecogniserDiagnosticTests` | Edit Mode | End-to-end diagnostic struct population via `InjectText`, accept/reject reasons |
+| `VoskMatchDiagnosticsTests` | Edit Mode | Diagnostic struct defaults, field storage, slot match data |
 
 To run in a consuming Unity project:
 
