@@ -23,7 +23,9 @@ namespace VoskXR.Editor
         readonly List<HistoryEntry> _history = new List<HistoryEntry>();
         int _lastDiagFrame = -1;
         bool _paused;
+        bool _resumePending;
         string _injectText = "";
+        VoskMatchDiagnostics _frozenDiag;
 
         Vector2 _leftScroll;
         Vector2 _rightScroll;
@@ -129,16 +131,22 @@ namespace VoskXR.Editor
 
         void PollDiagnostics()
         {
-            if (_paused) return;
             if (_commandRecogniser == null) return;
+            if (_paused) return;
 
             var diag = _commandRecogniser.LastMatchDiagnostics;
+
             if (diag.Frame != 0 && diag.Frame != _lastDiagFrame)
             {
                 _lastDiagFrame = diag.Frame;
+                _frozenDiag = diag;
+                _resumePending = false;
                 AddToHistory(diag);
             }
         }
+
+        VoskMatchDiagnostics CurrentDiag =>
+            (_paused || _resumePending) ? _frozenDiag : (_commandRecogniser != null ? _commandRecogniser.LastMatchDiagnostics : default);
 
         void AddToHistory(VoskMatchDiagnostics diag)
         {
@@ -230,7 +238,7 @@ namespace VoskXR.Editor
 
         void DrawPartialResult()
         {
-            string partial = _commandRecogniser?.LastPartialResult ?? "";
+            string partial = (_paused || _resumePending) ? "" : (_commandRecogniser?.LastPartialResult ?? "");
             EditorGUILayout.LabelField("Partial", EditorStyles.miniLabel);
             EditorGUILayout.SelectableLabel(
                 string.IsNullOrEmpty(partial) ? "(listening...)" : partial,
@@ -239,7 +247,7 @@ namespace VoskXR.Editor
 
         void DrawFinalResult()
         {
-            var diag = _commandRecogniser.LastMatchDiagnostics;
+            var diag = CurrentDiag;
             string text = diag.InputText ?? "(none)";
 
             EditorGUILayout.LabelField("Final Result", EditorStyles.miniLabel);
@@ -249,7 +257,7 @@ namespace VoskXR.Editor
 
         void DrawWordConfidence()
         {
-            var diag = _commandRecogniser.LastMatchDiagnostics;
+            var diag = CurrentDiag;
             if (diag.Words == null || diag.Words.Length == 0) return;
 
             EditorGUILayout.LabelField("Word Confidence", EditorStyles.miniLabel);
@@ -264,6 +272,15 @@ namespace VoskXR.Editor
 
                 // Word text
                 EditorGUI.LabelField(new Rect(rect.x, rect.y, textWidth, rect.height), word.Text);
+
+                if (word.Confidence < 0f)
+                {
+                    // Confidence unavailable (maxAlternatives > 0 omits per-word conf)
+                    EditorGUI.LabelField(
+                        new Rect(rect.x + textWidth, rect.y, confWidth + barWidth, rect.height),
+                        "[n/a]");
+                    continue;
+                }
 
                 // Confidence value
                 EditorGUI.LabelField(
@@ -330,7 +347,7 @@ namespace VoskXR.Editor
 
         void DrawLastMatchBreakdown()
         {
-            var diag = _commandRecogniser.LastMatchDiagnostics;
+            var diag = CurrentDiag;
             if (diag.Attempts == null || diag.Attempts.Length == 0)
             {
                 EditorGUILayout.LabelField("No match data yet.", EditorStyles.miniLabel);
@@ -448,11 +465,16 @@ namespace VoskXR.Editor
 
             // Inject text field
             EditorGUILayout.LabelField("Inject:", GUILayout.Width(42));
-            _injectText = EditorGUILayout.TextField(_injectText);
+            GUI.SetNextControlName("VoskInjectField");
 
+            // Check for Enter BEFORE TextField — IMGUI TextField consumes the Return KeyDown event
             bool enterPressed = Event.current.type == EventType.KeyDown
-                && Event.current.keyCode == KeyCode.Return
+                && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter)
+                && GUI.GetNameOfFocusedControl() == "VoskInjectField"
                 && !string.IsNullOrWhiteSpace(_injectText);
+            if (enterPressed) Event.current.Use();
+
+            _injectText = EditorGUILayout.TextField(_injectText);
 
             if ((GUILayout.Button("Send", GUILayout.Width(50)) || enterPressed)
                 && !string.IsNullOrWhiteSpace(_injectText)
@@ -461,20 +483,32 @@ namespace VoskXR.Editor
                 _commandRecogniser.InjectText(_injectText);
                 _injectText = "";
                 GUI.FocusControl(null);
-                if (enterPressed) Event.current.Use();
             }
 
-            // Clear history
+            // Clear all
             if (GUILayout.Button("Clear", GUILayout.Width(50)))
             {
                 _history.Clear();
-                _lastDiagFrame = -1;
+                _frozenDiag = default;
+                // Sync to current frame so PollDiagnostics doesn't re-add the last entry
+                if (_commandRecogniser != null)
+                    _lastDiagFrame = _commandRecogniser.LastMatchDiagnostics.Frame;
+                _resumePending = true;
             }
 
             // Pause/resume
             string pauseLabel = _paused ? "Resume" : "Pause";
             if (GUILayout.Button(pauseLabel, GUILayout.Width(60)))
+            {
                 _paused = !_paused;
+                // On resume, skip anything that arrived while paused
+                // and keep showing frozen display until a genuinely new result arrives
+                if (!_paused && _commandRecogniser != null)
+                {
+                    _lastDiagFrame = _commandRecogniser.LastMatchDiagnostics.Frame;
+                    _resumePending = true;
+                }
+            }
 
             EditorGUILayout.EndHorizontal();
         }

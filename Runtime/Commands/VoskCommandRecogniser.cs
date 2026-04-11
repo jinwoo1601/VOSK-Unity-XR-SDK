@@ -239,7 +239,34 @@ namespace VoskXR.Commands
         // Test-only setters. Production callers configure via the Inspector.
         internal float BufferWindow { set => bufferWindow = value; }
         internal float CommandCooldown { set => commandCooldown = value; }
-        internal VoskSpeechRecogniser SpeechRecogniser { set => speechRecogniser = value; }
+        internal VoskSpeechRecogniser SpeechRecogniser
+        {
+            set
+            {
+                // Unsubscribe from the old recogniser if any.
+                if (speechRecogniser != null)
+                {
+                    speechRecogniser.OnModelReady -= HandleModelReady;
+                    speechRecogniser.OnResult -= HandleResult;
+#if UNITY_EDITOR
+                    speechRecogniser.OnPartialResult -= HandlePartialResult;
+#endif
+                }
+
+                speechRecogniser = value;
+
+                // Subscribe immediately when the component is already active
+                // (Edit Mode tests may not re-trigger OnEnable after SetActive).
+                if (value != null && isActiveAndEnabled)
+                {
+                    value.OnModelReady += HandleModelReady;
+                    value.OnResult += HandleResult;
+#if UNITY_EDITOR
+                    value.OnPartialResult += HandlePartialResult;
+#endif
+                }
+            }
+        }
 
         void RebuildParserAndGrammar(VoskCommandDefinition[] commands)
         {

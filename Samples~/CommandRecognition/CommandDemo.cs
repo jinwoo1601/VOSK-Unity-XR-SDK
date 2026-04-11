@@ -36,7 +36,6 @@ public class CommandDemo : MonoBehaviour
         {
             // Slots/commands/sets came from ScriptableObject assets in Awake().
             // Just wire events and start recognition.
-            LogActiveSets();
             commandRecogniser.OnCommandRecognised += OnCommand;
             commandRecogniser.OnCommandsRecognised += OnCommandBatch;
             commandRecogniser.OnUnrecognisedSpeech += OnUnrecognised;
@@ -150,7 +149,6 @@ public class CommandDemo : MonoBehaviour
 
         // Activate all sets for demo — in a real game you'd activate per game state
         commandRecogniser.SetActiveSets("weapons", "navigation", "common");
-        LogActiveSets();
 
         commandRecogniser.OnCommandRecognised += OnCommand;
         commandRecogniser.OnCommandsRecognised += OnCommandBatch;
@@ -171,47 +169,8 @@ public class CommandDemo : MonoBehaviour
 
     void OnCommand(VoskCommand cmd)
     {
-        Debug.Log($"[CommandDemo] Command: {cmd.Intent} " +
-            $"(confidence={cmd.Confidence:F2}, score={cmd.Score:F2})");
-
         switch (cmd.Intent)
         {
-            case Intents.LaunchWeapon:
-                string weapon = cmd.GetSlot("weapon");
-                string qty = cmd.HasSlot("quantity") ? cmd.GetSlot("quantity") : "1";
-                string target = cmd.GetSlot("target");
-                Debug.Log($"[CommandDemo]   Launch {qty} {weapon} at {target}");
-                break;
-
-            case Intents.CeaseFire:
-                Debug.Log("[CommandDemo]   Cease fire!");
-                break;
-
-            case Intents.ResumeFire:
-                Debug.Log("[CommandDemo]   Resume fire!");
-                break;
-
-            case Intents.SetDistanceNamed:
-                Debug.Log($"[CommandDemo]   Set distance {cmd.GetSlot("range")} " +
-                    $"from {cmd.GetSlot("target")}");
-                break;
-
-            case Intents.ApproachTarget:
-                Debug.Log($"[CommandDemo]   Approach {cmd.GetSlot("target")}");
-                break;
-
-            case Intents.RetreatFromTarget:
-                Debug.Log($"[CommandDemo]   Retreat from {cmd.GetSlot("target")}");
-                break;
-
-            case Intents.SetHeading:
-                string hdg = cmd.GetSlot("heading");
-                int hdgVal = VoskNumberParser.ParseDigitSequence(hdg);
-                string elevStr = cmd.HasSlot("elevation") ? cmd.GetSlot("elevation") : null;
-                int elevVal = elevStr != null ? VoskNumberParser.ParseDigitSequence(elevStr) : -1;
-                Debug.Log($"[CommandDemo]   Heading={hdgVal} (raw=\"{hdg}\"), Elevation={elevVal}");
-                break;
-
             case Intents.ModeWeapons:
                 SwitchToWeaponsMode();
                 break;
@@ -230,52 +189,30 @@ public class CommandDemo : MonoBehaviour
         }
     }
 
-    void OnCommandBatch(VoskCommand[] commands)
-    {
-        Debug.Log($"[CommandDemo] Batch: {commands.Length} command(s) from single utterance");
-        for (int i = 0; i < commands.Length; i++)
-            Debug.Log($"[CommandDemo]   [{i}] {commands[i].Intent} (score={commands[i].Score:F2})");
-    }
+    void OnCommandBatch(VoskCommand[] commands) { }
 
-    void OnUnrecognised(string text)
-    {
-        Debug.Log($"[CommandDemo] Unrecognised: \"{text}\"");
-    }
+    void OnUnrecognised(string text) { }
 
     // --- Mode switching (voice-triggered or called from UI/game logic) ---
-
-    void LogActiveSets()
-    {
-        var sets = commandRecogniser.ActiveSetNames;
-        Debug.Log($"[CommandDemo] Active sets: [{string.Join(", ", sets)}]");
-    }
 
     public void SwitchToWeaponsMode()
     {
         commandRecogniser.SetActiveSets("weapons", "common");
-        LogActiveSets();
-        Debug.Log("[CommandDemo] Switched to WEAPONS mode");
     }
 
     public void SwitchToNavigationMode()
     {
         commandRecogniser.SetActiveSets("navigation", "common");
-        LogActiveSets();
-        Debug.Log("[CommandDemo] Switched to NAVIGATION mode");
     }
 
     public void SwitchToAllModes()
     {
         commandRecogniser.SetActiveSets("weapons", "navigation", "common");
-        LogActiveSets();
-        Debug.Log("[CommandDemo] Switched to ALL mode");
     }
 
     public void DisableAllModes()
     {
         commandRecogniser.SetActiveSets();
-        LogActiveSets();
-        Debug.Log("[CommandDemo] All commands DISABLED — auto-restoring in 5s");
         StartCoroutine(RestoreAllModesAfterDelay(5f));
     }
 
@@ -283,7 +220,5 @@ public class CommandDemo : MonoBehaviour
     {
         yield return new WaitForSeconds(delay);
         commandRecogniser.SetActiveSets("weapons", "navigation", "common");
-        LogActiveSets();
-        Debug.Log("[CommandDemo] Auto-restored ALL mode");
     }
 }

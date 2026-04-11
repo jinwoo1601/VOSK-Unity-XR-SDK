@@ -394,7 +394,7 @@ namespace VoskXR
             return true;
         }
 
-        static float ComputeRms(float[] samples, int count)
+        internal static float ComputeRms(float[] samples, int count)
         {
             float sum = 0f;
             for (int i = 0; i < count; i++)
