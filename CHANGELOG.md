@@ -19,6 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VoskCommandRecogniser` builds a `VoskMatchDiagnostics` snapshot at the end of each parse cycle with per-attempt accept/reject reasons (score, confidence, debounce). Subscribes to `OnPartialResult` in Editor for live partial text display.
 - `EditorMicBackend` exposes `PreAgcRms`, `PostAgcRms`, and `AgcGain` properties for the debug window's audio level meters.
 - `VoskSpeechRecogniser` exposes `EditorLastResult` (Editor-only) and audio level forwarding properties (`EditorPreAgcRms`, `EditorPostAgcRms`, `EditorAgcGain` — Windows Editor only).
+- `VoskCommandRecogniser.SpeechRecogniser` internal setter now manages event subscriptions (unsubscribes from old recogniser, subscribes to new) for Edit Mode test support.
+- `EditorMicBackend.ComputeRms` visibility widened from `private` to `internal` for test access.
+- `CommandDemo` sample stripped of verbose `Debug.Log` calls — event handlers are now minimal stubs.
+
+### Fixed
+
+- Debug window pause/resume now freezes the display with a snapshot and skips stale results on resume instead of jumping to the latest frame.
+- Enter-key text injection works reliably — event is consumed before `TextField`, and `KeypadEnter` is accepted alongside `Return`.
+- Word confidence column shows `[n/a]` when VOSK omits per-word `conf` (happens with `maxAlternatives > 0`) instead of a misleading 0% bar.
+- `VoskSpeechRecogniser` now always parses full result JSON in Editor builds even when `OnResult` has no subscribers, so the debug window receives word and alternative data.
+- `ParseWordsFromJson` handles absent `"conf"` field with a -1 sentinel instead of defaulting to 0.
+
+### Added (tests)
+
+- `AudioMetricTests` — Edit Mode tests for `ComputeRms` (silence, DC, known-amplitude sine).
+- `VoskCommandParserDiagnosticTests` — verifies parser populates `DiagnosticEntries` with matched pattern, slot positions, and score.
+- `VoskCommandRecogniserDiagnosticTests` — end-to-end diagnostic struct population via `InjectText`, covering accept/reject reasons and slot match data.
+- `VoskMatchDiagnosticsTests` — struct-level tests for `VoskMatchDiagnostics`, `VoskMatchAttempt`, and `VoskDiagnosticSlotMatch` defaults and field storage.
 
 ## [0.11.0] - 2026-04-09
 
