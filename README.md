@@ -321,6 +321,7 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
+| 0.13.0 | Batch test runner for regression-testing command definitions |
 | 0.12.0 | Editor command debug window with live diagnostics |
 | 0.11.0 | Windows Editor live microphone backend |
 | 0.10.0 | Text injection API for Editor/CI testing |

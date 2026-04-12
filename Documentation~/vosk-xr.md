@@ -30,6 +30,7 @@
   - [Command Debug Window](#command-debug-window)
   - [Live Microphone (Windows Editor)](#live-microphone-windows-editor)
   - [Text Injection API](#text-injection-api)
+  - [Batch Test Runner](#batch-test-runner)
 - [Push-to-Talk Pattern](#push-to-talk-pattern)
 - [Error Handling](#error-handling)
 - [Running Tests](#running-tests)
@@ -51,7 +52,7 @@
 To pin a specific version (recommended):
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0
 ```
 
 ### Via manifest.json
@@ -61,7 +62,7 @@ Add to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0"
   }
 }
 ```
@@ -464,6 +465,33 @@ For zero-code Inspector authoring. Create via **Assets > Create > VOSK XR**.
 | Method | Description |
 |--------|-------------|
 | `ToSet()` | Converts to runtime `VoskCommandSet` struct. Skips null entries with a warning. |
+
+### VoskTestSuiteAsset
+
+`public class VoskTestSuiteAsset : ScriptableObject` -- Create via **Assets > Create > VOSK XR > Test Suite**.
+
+A collection of test cases for regression-testing command definitions with the [Batch Test Runner](#batch-test-runner).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `suiteName` | `string` | Human-readable name for this test suite |
+| `cases` | `List<VoskTestCase>` | Test cases to run |
+
+| Method | Description |
+|--------|-------------|
+| `ToArray()` | Returns `cases` as a `VoskTestCase[]` for `VoskBatchTestRunner.RunAll()`. |
+| `ToJson()` | Serializes all cases to a JSON string for portability and version control. |
+| `FromJson(string json)` | Replaces `cases` from a JSON string. |
+
+**VoskTestCase** (serializable struct):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input` | `string` | Text to feed through the command parser |
+| `expectedIntent` | `string` | Expected intent name. Empty = expect rejection. |
+| `expectedSlots` | `ExpectedSlot[]` | Array of `{name, value}` pairs. Omit to skip slot verification. |
+| `wordConfidence` | `float` | Simulated uniform word confidence (0--1). `-1` = omit word data. |
+| `description` | `string` | Human-readable description for the results table |
 
 ---
 
