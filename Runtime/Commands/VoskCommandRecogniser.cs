@@ -648,7 +648,10 @@ namespace VoskXR.Commands
 #endif
 
             if (accepted.Count == 0)
+            {
+                OnUnrecognisedSpeech?.Invoke(text);
                 return;
+            }
 
             // Fire per-command events in order
             for (int i = 0; i < accepted.Count; i++)
