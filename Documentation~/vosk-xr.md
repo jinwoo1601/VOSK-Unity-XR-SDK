@@ -30,6 +30,7 @@
   - [Command Debug Window](#command-debug-window)
   - [Live Microphone (Windows Editor)](#live-microphone-windows-editor)
   - [Text Injection API](#text-injection-api)
+  - [Batch Test Runner](#batch-test-runner)
 - [Push-to-Talk Pattern](#push-to-talk-pattern)
 - [Error Handling](#error-handling)
 - [Running Tests](#running-tests)
@@ -51,7 +52,7 @@
 To pin a specific version (recommended):
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0
 ```
 
 ### Via manifest.json
@@ -61,7 +62,7 @@ Add to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0"
   }
 }
 ```
@@ -465,6 +466,33 @@ For zero-code Inspector authoring. Create via **Assets > Create > VOSK XR**.
 |--------|-------------|
 | `ToSet()` | Converts to runtime `VoskCommandSet` struct. Skips null entries with a warning. |
 
+### VoskTestSuiteAsset
+
+`public class VoskTestSuiteAsset : ScriptableObject` -- Create via **Assets > Create > VOSK XR > Test Suite**.
+
+A collection of test cases for regression-testing command definitions with the [Batch Test Runner](#batch-test-runner).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `suiteName` | `string` | Human-readable name for this test suite |
+| `cases` | `List<VoskTestCase>` | Test cases to run |
+
+| Method | Description |
+|--------|-------------|
+| `ToArray()` | Returns `cases` as a `VoskTestCase[]` for `VoskBatchTestRunner.RunAll()`. |
+| `ToJson()` | Serializes all cases to a JSON string for portability and version control. |
+| `FromJson(string json)` | Replaces `cases` from a JSON string. |
+
+**VoskTestCase** (serializable struct):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input` | `string` | Text to feed through the command parser |
+| `expectedIntent` | `string` | Expected intent name. Empty = expect rejection. |
+| `expectedSlots` | `ExpectedSlot[]` | Array of `{name, value}` pairs. Omit to skip slot verification. |
+| `wordConfidence` | `float` | Simulated uniform word confidence (0--1). `-1` = omit word data. |
+| `description` | `string` | Human-readable description for the results table |
+
 ---
 
 ## API Reference: VoskNumberParser
@@ -755,6 +783,79 @@ All injection methods are main-thread only. They fire the same events as real re
 
 See `Tests/Runtime/VoskCommandRecogniserInjectionTests.cs` and `VoskSpeechRecogniserInjectionTests.cs` for executable usage examples.
 
+### Batch Test Runner
+
+Regression-test command definitions after changing thresholds, aliases, or slot values. Feeds a list of test cases through the command parser, applies threshold filtering, and compares against expected intents and slots.
+
+**Visual UI:** Window > VOSK XR > Batch Test Runner. Assign slot/command assets and a `VoskTestSuiteAsset`, then click Run All. Results appear in a table with per-row expansion for diagnostics. Export results as CSV for diffing across runs.
+
+**Programmatic API (Edit Mode tests / CI):**
+
+```csharp
+using VoskXR.Commands;
+using VoskXR.Testing;
+
+var runner = new VoskBatchTestRunner(slots, commands, minScore: 0.6f, minConfidence: 0.4f);
+var results = runner.RunAll(testCases);
+Assert.IsTrue(results.AllPassed, results.FailureSummary);
+```
+
+`VoskBatchTestRunner` is pure C# — no MonoBehaviour dependency, works in Edit Mode without Play Mode or audio hardware. It instantiates a `VoskCommandParser` directly (the same path that `InjectText` uses internally).
+
+**Test case authoring:**
+
+Create a `VoskTestSuiteAsset` via Assets > Create > VOSK XR > Test Suite and author test cases in the Inspector. Or import/export as JSON for portability:
+
+```json
+{
+    "cases": [
+        {
+            "input": "launch all missiles target hotel one",
+            "expectedIntent": "launch_weapon",
+            "expectedSlots": [{"name": "target", "value": "hotel one"}],
+            "wordConfidence": -1,
+            "description": "Full launch command with target"
+        },
+        {
+            "input": "hello world",
+            "expectedIntent": "",
+            "description": "Out-of-grammar phrase should be rejected"
+        },
+        {
+            "input": "cease fire",
+            "expectedIntent": "",
+            "wordConfidence": 0.3,
+            "description": "Low confidence should be rejected by threshold"
+        }
+    ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `input` | Text to feed through the command parser. |
+| `expectedIntent` | Expected intent name. Empty/null = expect rejection (no match or below threshold). |
+| `expectedSlots` | Array of `{name, value}` pairs. Omit to skip slot verification. |
+| `wordConfidence` | Simulated uniform word confidence (0–1). Set to -1 to omit word data. |
+| `description` | Human-readable description for the results table. |
+
+**API Reference:**
+
+| Method | Description |
+|--------|-------------|
+| `VoskBatchTestRunner(slots, commands, minScore, minConfidence)` | Constructor. All commands active. |
+| `VoskBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence)` | Constructor with named command sets. |
+| `RunAll(VoskTestCase[])` | Returns `VoskBatchResults` with per-case pass/fail. |
+| `Run(VoskTestCase)` | Returns a single `VoskTestResult`. |
+| `ToCsv(VoskBatchResults)` | Static. Exports results as a CSV string. |
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `VoskBatchResults.AllPassed` | `bool` | True when every test case passed. |
+| `VoskBatchResults.FailureSummary` | `string` | Multi-line summary of all failures for NUnit assertion messages. |
+| `VoskBatchResults.PassCount` | `int` | Number of passing test cases. |
+| `VoskBatchResults.FailCount` | `int` | Number of failing test cases. |
+
 ---
 
 ## Push-to-Talk Pattern
@@ -818,7 +919,7 @@ recogniser.OnError += (code, message) =>
 
 ## Running Tests
 
-The package includes 17 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
+The package includes 18 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
 
 | Suite | Mode | Covers |
 |-------|------|--------|
@@ -839,6 +940,7 @@ The package includes 17 test suites (Edit Mode and Play Mode) that run without a
 | `VoskCommandParserDiagnosticTests` | Edit Mode | Parser diagnostic entries, matched pattern, slot positions, score |
 | `VoskCommandRecogniserDiagnosticTests` | Edit Mode | End-to-end diagnostic struct population via `InjectText`, accept/reject reasons |
 | `VoskMatchDiagnosticsTests` | Edit Mode | Diagnostic struct defaults, field storage, slot match data |
+| `VoskBatchTestRunnerTests` | Edit Mode | Batch runner pass/fail reporting, threshold filtering, slot checks, CSV export |
 
 To run in a consuming Unity project:
 

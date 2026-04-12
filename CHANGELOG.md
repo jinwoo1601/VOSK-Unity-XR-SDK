@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-04-11
+
+### Added
+
+- Batch test runner for regression-testing command definitions after changes. Two interfaces:
+  - `VoskBatchTestRunner` — pure C# runner that instantiates a `VoskCommandParser`, feeds test cases, applies threshold filtering, and compares against expected intents and slots. Works in Edit Mode without Play Mode or audio hardware; CI-safe.
+  - `VoskBatchTestWindow` Editor window (Window > VOSK XR > Batch Test Runner) — visual table with input/expected/actual/score/status columns, Run All and Re-run Failed buttons, per-row diagnostics expansion, CSV export, and JSON import/export.
+- `VoskTestCase` data class for test case authoring: input text, expected intent, expected slots, optional simulated word confidence, and description.
+- `VoskTestResult` and `VoskBatchResults` result classes — per-case pass/fail with failure reason, plus `AllPassed` and `FailureSummary` for NUnit assertion integration.
+- `VoskTestSuiteAsset` ScriptableObject (Assets > Create > VOSK XR > Test Suite) for Inspector-based test case authoring with JSON import/export for portability.
+- `VoskBatchTestRunnerTests` — Edit Mode meta-tests verifying the runner correctly reports pass/fail for matching commands, intent mismatches, slot mismatches, threshold rejection, command sets, CSV export, and edge cases.
+
 ## [0.12.0] - 2026-04-10
 
 ### Added

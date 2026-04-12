@@ -32,9 +32,10 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 **Testing & Iteration**
 - Editor command debug window (Window > VOSK XR > Command Debug) with live audio meters, match breakdowns, and match history
+- Batch test runner (Window > VOSK XR > Batch Test Runner) for regression-testing command definitions -- visual results table, CSV export, CI-safe Edit Mode API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
-- 17 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, and asset conversion
+- 18 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, and asset conversion
 - Extensively tested on Quest 3 with published test matrices for every release
 
 ## Requirements
@@ -54,7 +55,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0
 ```
 
 **Via manifest.json:**
@@ -62,7 +63,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.12.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0"
   }
 }
 ```
@@ -222,6 +223,36 @@ recogniser.InjectResult("hello world");
 recogniser.InjectPartialResult("hel");
 ```
 
+### Batch Test Runner
+
+Regression-test command definitions after changing thresholds, aliases, or slot values. Visual UI via **Window > VOSK XR > Batch Test Runner**, or programmatic for CI:
+
+```csharp
+var runner = new VoskBatchTestRunner(slots, commands, minScore: 0.6f, minConfidence: 0.4f);
+var results = runner.RunAll(testCases);
+Assert.IsTrue(results.AllPassed, results.FailureSummary);
+```
+
+Test cases can be authored as `VoskTestSuiteAsset` ScriptableObjects in the Inspector or imported/exported as JSON:
+
+```json
+{
+    "cases": [
+        {
+            "input": "launch all missiles target hotel one",
+            "expectedIntent": "launch_weapon",
+            "expectedSlots": [{"name": "target", "value": "hotel one"}],
+            "description": "Full launch command with target"
+        },
+        {
+            "input": "hello world",
+            "expectedIntent": "",
+            "description": "Out-of-grammar phrase should be rejected"
+        }
+    ]
+}
+```
+
 ## Samples
 
 Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
@@ -233,7 +264,7 @@ Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
 
 ## Running Tests
 
-The package includes 17 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
+The package includes 18 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
 
 To run them in a consuming Unity project:
 
@@ -241,7 +272,7 @@ To run them in a consuming Unity project:
 2. Open **Window > General > Test Runner**.
 3. Run Edit Mode and Play Mode tests.
 
-Tests cover: command parser logic, injection API wiring, recogniser lifecycle, JSON parsing, number parsing, command sets, asset-to-runtime conversion, DSP (AGC, downsampler), model extractor validation, error codes, audio metrics, and Editor diagnostic structs.
+Tests cover: command parser logic, injection API wiring, recogniser lifecycle, JSON parsing, number parsing, command sets, asset-to-runtime conversion, DSP (AGC, downsampler), model extractor validation, error codes, audio metrics, Editor diagnostic structs, and batch test runner pass/fail reporting.
 
 ## Architecture
 
@@ -290,6 +321,7 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
+| 0.13.0 | Batch test runner for regression-testing command definitions |
 | 0.12.0 | Editor command debug window with live diagnostics |
 | 0.11.0 | Windows Editor live microphone backend |
 | 0.10.0 | Text injection API for Editor/CI testing |
