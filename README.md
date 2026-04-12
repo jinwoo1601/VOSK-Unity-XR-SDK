@@ -14,7 +14,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Structured error codes for all failure modes
 
 **Command Recognition**
-- Grammar-constrained VOSK parsing for high-accuracy command matching
+- Grammar-constrained VOSK parsing for high-accuracy command match
 - Intent and slot extraction with scored matching (0.0--1.0 confidence)
 - Optional slots, multi-word slot values, slot value aliases
 - `NumberSequence` slot type for spoken digit commands (e.g. "heading two seven zero" -> 270)
@@ -31,8 +31,8 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Mix and match: Inspector authoring and code-based configuration on the same recogniser
 
 **Testing & Iteration**
-- Editor command debug window (Window > VOSK XR > Command Debug) with live audio meters, match breakdowns, and match history
-- Batch test runner (Window > VOSK XR > Batch Test Runner) for regression-testing command definitions -- visual results table, CSV export, CI-safe Edit Mode API
+- Editor command debug window with live audio meters, match breakdowns, and match history
+- Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe Edit Mode API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
 - 18 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, and asset conversion
@@ -95,7 +95,7 @@ public class VoiceDemo : MonoBehaviour
         recogniser.OnResult += result =>
         {
             foreach (var word in result.Words)
-                Debug.Log($"  {word.Word} conf={word.Confidence:F2} [{word.Start:F2}-{word.End:F2}]");
+                Debug.Log($"  {word.Text} conf={word.Confidence:F2} [{word.StartTime:F2}-{word.EndTime:F2}]");
         };
         recogniser.OnError += (code, msg) => Debug.LogError($"VOSK [{code}]: {msg}");
         recogniser.StartRecognition();
@@ -111,8 +111,10 @@ public class VoiceDemo : MonoBehaviour
 ## Quick Start -- Command Recognition
 
 ```csharp
+using System.Collections.Generic;
 using UnityEngine;
 using VoskXR;
+using VoskXR.Commands;
 
 public class CommandDemo : MonoBehaviour
 {
@@ -124,16 +126,17 @@ public class CommandDemo : MonoBehaviour
         // Define slots
         var targets = VoskSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
         var weapons = VoskSlotDefinition.OneOf("weapon", "missiles", "torpedoes");
-        var quantity = VoskSlotDefinition.OneOf("quantity", "one", "two", "three", "all");
-        quantity.AddAliases("quantity", ("a", "one"));
+        var quantity = new VoskSlotDefinition("quantity",
+            new[] { "one", "two", "three", "all" },
+            new Dictionary<string, string> { { "a", "one" } });
 
         // Define commands
         var commands = new[]
         {
             new VoskCommandDefinition("launch_weapon",
-                new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" }),
+                new[] { new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" } }),
             new VoskCommandDefinition("cease_fire",
-                new[] { "cease", "fire" }),
+                new[] { new[] { "cease", "fire" } }),
         };
 
         // Configure and start
@@ -150,108 +153,18 @@ public class CommandDemo : MonoBehaviour
 }
 ```
 
-## Command Sets (Runtime Mode Switching)
+## Documentation
 
-Group commands into named sets and swap the active grammar at runtime:
+For full documentation, see the [documentation index](Documentation~/index.md).
 
-```csharp
-var weaponsSet = new VoskCommandSet("weapons", weaponCommands);
-var navigationSet = new VoskCommandSet("navigation", navCommands);
-var commonSet = new VoskCommandSet("common", modeCommands);
-
-commandRecogniser.Configure(slots, new[] { weaponsSet, navigationSet, commonSet });
-commandRecogniser.SetActiveSets("weapons", "common"); // Only weapons + common are active
-```
-
-Call `SetActiveSets(...)` to change the active grammar at any time. Inactive commands are excluded from the grammar entirely, reducing VOSK's search space and preventing out-of-mode matches.
-
-## Inspector Authoring
-
-For zero-code setup, create ScriptableObject assets:
-
-1. **Assets > Create > VOSK XR > Slot Definition** -- define slot values in the Inspector.
-2. **Assets > Create > VOSK XR > Command** -- define patterns like `"launch {?quantity} {weapon} target {target}"`.
-3. **Assets > Create > VOSK XR > Command Set** -- group commands into named sets.
-4. Drag the assets onto `VoskCommandRecogniser` in the Inspector.
-
-Code-based `Configure()` takes priority if both are present.
-
-## NumberSequence Slots
-
-Parse spoken digit words into integers:
-
-```csharp
-var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
-// "heading two seven zero" -> heading=270
-// "heading one eight" -> heading=18
-```
-
-`VoskNumberParser` converts digit words ("zero" through "nine") into concatenated integers. Use with commands like headings, frequencies, or grid coordinates.
-
-## Editor Iteration (No Quest Required)
-
-### Command Debug Window
-
-Open **Window > VOSK XR > Command Debug** during Play Mode to inspect the full command pipeline in real time. The two-panel layout shows:
-
-- **Left panel:** Audio level meters (pre/post-AGC RMS, AGC gain), partial result, final result text, per-word confidence bars, and n-best alternatives.
-- **Right panel:** Active command sets, last match breakdown with score/confidence threshold pass/fail, slot word positions with per-slot confidence, and a scrolling match history (last 20 entries).
-
-The bottom toolbar provides text injection (type a phrase and press Enter to test without a microphone), plus pause and clear controls. Pause freezes the display so you can inspect a result without it being overwritten.
-
-### Live Microphone (Windows Editor)
-
-On Windows, `StartRecognition()` transparently routes audio through `UnityEngine.Microphone` and a desktop `libvosk.dll`. Existing scenes work with zero code changes -- speak into your PC mic and watch commands fire in the Console.
-
-**Setup:** Download `vosk-win64-*.zip` from [alphacep/vosk-api releases](https://github.com/alphacep/vosk-api/releases) and place the four DLLs (`libvosk.dll`, `libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`) into the package's `Runtime/Plugins/x86_64/` folder. The plugin importer meta files are pre-configured for Editor-only loading.
-
-### Text Injection API
-
-For unit tests, CI, and replay scenarios without audio:
-
-```csharp
-// Inject text through the full command pipeline (parser -> threshold -> buffer -> debounce)
-commandRecogniser.InjectText("launch all missiles target hotel one");
-commandRecogniser.FlushPendingBuffer(); // Force immediate parse
-
-// Inject with simulated confidence for threshold testing
-var words = recogniser.CreateSimulatedWords("cease fire", confidence: 0.85f);
-commandRecogniser.InjectText("cease fire", words);
-
-// Inject raw recogniser events (bypasses command pipeline)
-recogniser.InjectResult("hello world");
-recogniser.InjectPartialResult("hel");
-```
-
-### Batch Test Runner
-
-Regression-test command definitions after changing thresholds, aliases, or slot values. Visual UI via **Window > VOSK XR > Batch Test Runner**, or programmatic for CI:
-
-```csharp
-var runner = new VoskBatchTestRunner(slots, commands, minScore: 0.6f, minConfidence: 0.4f);
-var results = runner.RunAll(testCases);
-Assert.IsTrue(results.AllPassed, results.FailureSummary);
-```
-
-Test cases can be authored as `VoskTestSuiteAsset` ScriptableObjects in the Inspector or imported/exported as JSON:
-
-```json
-{
-    "cases": [
-        {
-            "input": "launch all missiles target hotel one",
-            "expectedIntent": "launch_weapon",
-            "expectedSlots": [{"name": "target", "value": "hotel one"}],
-            "description": "Full launch command with target"
-        },
-        {
-            "input": "hello world",
-            "expectedIntent": "",
-            "description": "Out-of-grammar phrase should be rejected"
-        }
-    ]
-}
-```
+- [Getting Started](Documentation~/getting-started.md) -- installation, model setup, quick start, lifecycle
+- [Command Recognition](Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring
+- [Command Sets](Documentation~/command-sets.md) -- named sets, runtime mode switching
+- [Inspector Authoring](Documentation~/inspector-authoring.md) -- zero-code ScriptableObject setup
+- [Editor Testing](Documentation~/editor-testing.md) -- debug window, live mic, text injection, batch runner
+- [Push-to-Talk](Documentation~/push-to-talk.md) -- PTT pattern and error handling
+- [API Reference](Documentation~/api/speech-recogniser.md) -- full API documentation
+- [Troubleshooting](Documentation~/troubleshooting.md) -- common issues and platform support
 
 ## Samples
 
@@ -264,15 +177,7 @@ Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
 
 ## Running Tests
 
-The package includes 18 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model.
-
-To run them in a consuming Unity project:
-
-1. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`.
-2. Open **Window > General > Test Runner**.
-3. Run Edit Mode and Play Mode tests.
-
-Tests cover: command parser logic, injection API wiring, recogniser lifecycle, JSON parsing, number parsing, command sets, asset-to-runtime conversion, DSP (AGC, downsampler), model extractor validation, error codes, audio metrics, Editor diagnostic structs, and batch test runner pass/fail reporting.
+The package includes 18 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
 
 ## Architecture
 

@@ -97,3 +97,10 @@ usage examples.
 - `CommandDemo` activates all three command sets on start. In a real
   game you would call `SetActiveSets(...)` per game state to scope the
   active grammar to what the player can currently do.
+
+## See Also
+
+- [Command Recognition](../../Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring
+- [Command Sets](../../Documentation~/command-sets.md) -- named sets, runtime mode switching
+- [Editor Testing](../../Documentation~/editor-testing.md) -- debug window, live mic, text injection, batch runner
+- [CommandRecogniser API](../../Documentation~/api/command-recogniser.md) -- full event and method reference

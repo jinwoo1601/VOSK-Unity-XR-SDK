@@ -28,3 +28,8 @@ Live speech-to-text display using VOSK XR.
 
 - The model extracts on first launch (a few seconds). Subsequent launches use the cached model.
 - Partial results update in real time while you speak. Final results appear at utterance boundaries.
+
+## See Also
+
+- [Getting Started](../../Documentation~/getting-started.md) -- installation, model setup, lifecycle
+- [SpeechRecogniser API](../../Documentation~/api/speech-recogniser.md) -- full event and method reference
