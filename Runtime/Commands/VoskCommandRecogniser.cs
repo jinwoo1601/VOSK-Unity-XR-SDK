@@ -78,6 +78,8 @@ namespace VoskXR.Commands
         VoskSlotDefinition[] _slots;
         Dictionary<string, VoskCommandSet> _sets;
         string[] _activeSetNames = Array.Empty<string>();
+        VoskCommandDefinition[] _activeCommands;
+        Dictionary<string, Func<string[]>> _valueProviders;
 
         /// <summary>Names of the currently active command sets (snapshot copy).</summary>
         public string[] ActiveSetNames => (string[])_activeSetNames.Clone();
@@ -96,9 +98,10 @@ namespace VoskXR.Commands
             _slots = slots;
             _sets = null;
             _activeSetNames = Array.Empty<string>();
+            _activeCommands = commands;
 
-            _parser = new VoskCommandParser(slots, commands);
-            _grammarJson = _parser.GenerateGrammarJson();
+            _parser = new VoskCommandParser(BuildEffectiveSlots(), commands);
+            _grammarJson = VoskCommandParser.GenerateGrammarJson(_slots, commands);
             _grammarApplied = false;
 
             if (!freeSpeechMode && speechRecogniser != null && speechRecogniser.IsModelReady)
@@ -132,6 +135,7 @@ namespace VoskXR.Commands
             _grammarJson = null;
             _grammarApplied = false;
             _activeSetNames = Array.Empty<string>();
+            _activeCommands = null;
         }
 
         /// <summary>
@@ -236,6 +240,161 @@ namespace VoskXR.Commands
                 FlushBuffer();
         }
 
+        // -------- Dynamic slot value providers --------
+
+        /// <summary>
+        /// Registers a function that controls which values of the named slot the
+        /// parser will accept. Call <see cref="NotifySlotChanged"/> after the
+        /// provider's return set changes to rebuild the parser.
+        /// The grammar (VOSK vocabulary) is not affected — it always reflects the
+        /// full universe of slot values registered via <see cref="Configure"/>.
+        /// </summary>
+        public void RegisterSlotValueProvider(string slotName, Func<string[]> valueProvider)
+        {
+            if (slotName == null) throw new ArgumentNullException(nameof(slotName));
+            if (valueProvider == null) throw new ArgumentNullException(nameof(valueProvider));
+
+            if (_valueProviders == null)
+                _valueProviders = new Dictionary<string, Func<string[]>>(StringComparer.Ordinal);
+
+            _valueProviders[slotName] = valueProvider;
+        }
+
+        /// <summary>
+        /// Removes a previously registered value provider. The slot reverts to its
+        /// full universe of values on the next parser rebuild.
+        /// </summary>
+        public bool UnregisterSlotValueProvider(string slotName)
+        {
+            if (slotName == null) throw new ArgumentNullException(nameof(slotName));
+            return _valueProviders != null && _valueProviders.Remove(slotName);
+        }
+
+        /// <summary>
+        /// Rebuilds the parser to reflect current value-provider results.
+        /// Does not touch the grammar or VOSK recogniser. No-op if
+        /// <see cref="Configure"/> has not been called or no commands are active.
+        /// Performs a full parser rebuild — call only when provider values have
+        /// actually changed, not every frame.
+        /// </summary>
+        public void NotifySlotChanged()
+        {
+            if (_activeCommands == null)
+                return;
+
+            RebuildParser();
+        }
+
+        /// <summary>
+        /// Rebuilds only the parser from the current effective slots and active
+        /// commands. The grammar and VOSK recogniser are untouched.
+        /// </summary>
+        public void RebuildParser()
+        {
+            if (_activeCommands == null)
+                throw new InvalidOperationException(
+                    "Configure must be called before RebuildParser().");
+
+            _parser = new VoskCommandParser(BuildEffectiveSlots(), _activeCommands);
+        }
+
+        /// <summary>
+        /// Rebuilds and re-applies the VOSK grammar from the full universe of slot
+        /// values. Performs the stop → set grammar → start cycle when recognition
+        /// is running. Clears the utterance buffer.
+        /// </summary>
+        public void RebuildGrammar()
+        {
+            if (_activeCommands == null)
+                throw new InvalidOperationException(
+                    "Configure must be called before RebuildGrammar().");
+
+            if (_bufferActive)
+            {
+                _bufferedTexts.Clear();
+                _bufferedWords.Clear();
+                _bufferActive = false;
+            }
+
+            _grammarJson = VoskCommandParser.GenerateGrammarJson(_slots, _activeCommands);
+            _grammarApplied = false;
+
+            if (freeSpeechMode || speechRecogniser == null || !speechRecogniser.IsModelReady)
+                return;
+
+            bool wasRunning = speechRecogniser.IsRecognising;
+
+            if (wasRunning)
+                speechRecogniser.StopRecognition();
+
+            speechRecogniser.SetGrammar(_grammarJson);
+            _grammarApplied = true;
+
+            if (wasRunning)
+                speechRecogniser.StartRecognition();
+        }
+
+        VoskSlotDefinition[] BuildEffectiveSlots()
+        {
+            if (_valueProviders == null || _valueProviders.Count == 0)
+                return _slots;
+
+            VoskSlotDefinition[] effective = null;
+
+            for (int i = 0; i < _slots.Length; i++)
+            {
+                var slot = _slots[i];
+
+                if (slot.Type == VoskSlotType.NumberSequence ||
+                    !_valueProviders.TryGetValue(slot.Name, out var provider))
+                {
+                    if (effective != null)
+                        effective[i] = slot;
+                    continue;
+                }
+
+                var activeValues = provider();
+                if (activeValues == null)
+                {
+                    if (effective != null)
+                        effective[i] = slot;
+                    continue;
+                }
+
+                if (effective == null)
+                {
+                    effective = new VoskSlotDefinition[_slots.Length];
+                    Array.Copy(_slots, effective, i);
+                }
+
+                if (activeValues.Length == 0)
+                {
+                    effective[i] = new VoskSlotDefinition(slot.Name, Array.Empty<string>(), null);
+                    continue;
+                }
+
+                var activeSet = new HashSet<string>(activeValues, StringComparer.Ordinal);
+
+                Dictionary<string, string> filteredAliases = null;
+                if (slot.Aliases != null)
+                {
+                    foreach (var kvp in slot.Aliases)
+                    {
+                        if (activeSet.Contains(kvp.Value))
+                        {
+                            if (filteredAliases == null)
+                                filteredAliases = new Dictionary<string, string>(StringComparer.Ordinal);
+                            filteredAliases[kvp.Key] = kvp.Value;
+                        }
+                    }
+                }
+
+                effective[i] = new VoskSlotDefinition(slot.Name, activeValues, filteredAliases);
+            }
+
+            return effective ?? _slots;
+        }
+
         // Test-only setters. Production callers configure via the Inspector.
         internal float BufferWindow { set => bufferWindow = value; }
         internal float CommandCooldown { set => commandCooldown = value; }
@@ -270,31 +429,9 @@ namespace VoskXR.Commands
 
         void RebuildParserAndGrammar(VoskCommandDefinition[] commands)
         {
-            // Discard stale buffered speech from the previous grammar
-            if (_bufferActive)
-            {
-                _bufferedTexts.Clear();
-                _bufferedWords.Clear();
-                _bufferActive = false;
-            }
-
-            _parser = new VoskCommandParser(_slots, commands);
-            _grammarJson = _parser.GenerateGrammarJson();
-            _grammarApplied = false;
-
-            if (freeSpeechMode || speechRecogniser == null || !speechRecogniser.IsModelReady)
-                return;
-
-            bool wasRunning = speechRecogniser.IsRecognising;
-
-            if (wasRunning)
-                speechRecogniser.StopRecognition();
-
-            speechRecogniser.SetGrammar(_grammarJson);
-            _grammarApplied = true;
-
-            if (wasRunning)
-                speechRecogniser.StartRecognition();
+            _activeCommands = commands;
+            RebuildParser();
+            RebuildGrammar();
         }
 
         void Awake()
@@ -511,7 +648,10 @@ namespace VoskXR.Commands
 #endif
 
             if (accepted.Count == 0)
+            {
+                OnUnrecognisedSpeech?.Invoke(text);
                 return;
+            }
 
             // Fire per-command events in order
             for (int i = 0; i < accepted.Count; i++)

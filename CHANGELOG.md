@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-04-12
+
+### Added
+
+- Dynamic slot value providers for runtime filtering of which slot values the parser accepts. Register a `Func<string[]>` per slot name to narrow the active values without modifying the VOSK grammar:
+  - `RegisterSlotValueProvider(slotName, valueProvider)` — registers a function that controls which values of the named slot are accepted by the parser.
+  - `UnregisterSlotValueProvider(slotName)` — removes a provider, reverting the slot to its full value set on the next rebuild.
+  - `NotifySlotChanged()` — rebuilds the parser to reflect current provider results. Does not touch the grammar or VOSK recogniser.
+  - `RebuildParser()` — explicit parser rebuild from current effective slots and active commands.
+  - `RebuildGrammar()` — rebuilds and re-applies the VOSK grammar, performing the stop/set/start cycle when recognition is running.
+- Value providers automatically filter aliases: aliases pointing to excluded canonical values are pruned from the parser. `NumberSequence` slots are unaffected by providers.
+- `VoskCommandParser.GenerateGrammarJson` static overload — generates grammar from explicit slot and command arrays without constructing a parser instance.
+- `VoskDynamicSlotTests` — 14 Edit Mode tests covering registration API, parser narrowing, alias filtering, buffer preservation, grammar independence, provider updates, error paths, and the register-without-notify contract.
+
 ## [0.13.0] - 2026-04-11
 
 ### Added
