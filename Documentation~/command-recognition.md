@@ -120,6 +120,50 @@ When VOSK transcribes `"a"`, the alias resolves it to `"one"` in the extracted s
 
 ---
 
+## Dynamic Slot Filtering
+
+Slot value providers let you narrow which values the parser accepts for a slot at runtime, without changing the VOSK grammar. This is useful when the set of valid targets, items, or options changes based on game state -- for example, only allowing the player to target enemies currently on screen, or restricting weapon selection to what's in their inventory.
+
+```csharp
+// Register a provider that returns only currently visible targets
+commandRecogniser.RegisterSlotValueProvider("target", () =>
+{
+    return visibleTargets.Select(t => t.voiceName).ToArray();
+});
+
+// When targets change (spawn, die, enter/leave view), rebuild the parser
+commandRecogniser.NotifySlotChanged();
+```
+
+### How it works
+
+The **grammar** (VOSK vocabulary) always contains the full universe of slot values registered via `Configure()`. This means VOSK can transcribe any value at any time. The **parser** is rebuilt with only the provider's active values, so excluded values produce `OnUnrecognisedSpeech` instead of `OnCommandRecognised`.
+
+This two-layer design avoids the audio gap that grammar rebuilds cause (see [Command Sets](command-sets.md)). The trade-off: VOSK may still transcribe an excluded value since it's in the grammar, but the parser will reject it.
+
+### Alias filtering
+
+Aliases that point to excluded canonical values are automatically pruned. If "hotel one" is excluded, the alias "h one" → "hotel one" is also removed from the parser.
+
+### Null and empty providers
+
+- A provider returning **null** is treated as "no opinion" -- the slot uses its full static values.
+- A provider returning an **empty array** means nothing matches -- all values for that slot are excluded.
+- `NumberSequence` slots are unaffected by providers.
+
+### When to use dynamic slots vs command sets
+
+| | Dynamic Slot Filtering | Command Sets |
+|---|---|---|
+| **What it narrows** | Which *values* a slot accepts | Which *commands* are active |
+| **Grammar impact** | None -- no audio gap | Full rebuild -- ~50ms audio gap |
+| **Best for** | Contextual value lists (targets, items, locations) | Mode switching (weapons, navigation) |
+| **Combines with** | Command sets (orthogonal) | Dynamic slots (orthogonal) |
+
+The two features are complementary. Use command sets for coarse mode switching and dynamic slots for fine-grained value filtering within a mode.
+
+---
+
 ## NumberSequence Slots
 
 Parse spoken digit words into concatenated integers for headings, frequencies, grid coordinates, and similar numeric commands:

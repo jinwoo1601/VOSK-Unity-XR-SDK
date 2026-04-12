@@ -42,10 +42,15 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `SetActiveSet` | `(string setName)` | Convenience wrapper for activating a single set. |
 | `InjectText` | `(string text, VoskWord[] words = null)` | Injects text into the full command pipeline (parser -> threshold -> buffer -> debounce) as if it arrived from VOSK. Main-thread only. |
 | `FlushPendingBuffer` | `()` | Immediately flushes any speech held in the utterance buffer, forcing parse. Useful for push-to-talk release, scene transitions, and synchronous test injection. |
+| `RegisterSlotValueProvider` | `(string slotName, Func<string[]> valueProvider)` | Registers a function that controls which values of the named slot the parser accepts. Call `NotifySlotChanged()` after the provider's return set changes. The grammar is unaffected -- it always reflects the full universe of slot values. |
+| `UnregisterSlotValueProvider` | `(string slotName)` | Removes a value provider. The slot reverts to its full value set on the next parser rebuild. Returns `true` if a provider was removed. |
+| `NotifySlotChanged` | `()` | Rebuilds the parser to reflect current value-provider results. Does not touch the grammar or VOSK recogniser. No-op if `Configure` has not been called. Performs a full parser rebuild -- call only when values have actually changed. |
+| `RebuildParser` | `()` | Rebuilds only the parser from current effective slots and active commands. Grammar and VOSK recogniser are untouched. Throws if `Configure` has not been called. |
+| `RebuildGrammar` | `()` | Rebuilds and re-applies the VOSK grammar from the full universe of slot values. Performs stop/set grammar/start when recognition is running. Clears the utterance buffer. Throws if `Configure` has not been called. |
 
 ## See Also
 
-- [Command Recognition](../command-recognition.md) -- patterns, slots, and matching concepts
+- [Command Recognition](../command-recognition.md) -- patterns, slots, matching concepts, and dynamic slot filtering
 - [Command Sets](../command-sets.md) -- mode-specific grammar switching
 - [Inspector Authoring](../inspector-authoring.md) -- zero-code setup via ScriptableObjects
 - [Push-to-Talk](../push-to-talk.md) -- buffer flush on release

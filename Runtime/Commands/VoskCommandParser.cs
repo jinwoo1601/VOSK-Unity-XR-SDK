@@ -324,12 +324,19 @@ namespace VoskXR.Commands
         /// Generates a VOSK grammar JSON array containing all words from pattern
         /// literals, slot values, aliases, and optional literals, plus [unk].
         /// </summary>
-        public string GenerateGrammarJson()
+        public string GenerateGrammarJson() => GenerateGrammarJson(_slots, _commands);
+
+        /// <summary>
+        /// Generates a VOSK grammar JSON array from explicit slot and command arrays.
+        /// Used by the recogniser to generate grammar from universe slots without
+        /// constructing a throwaway parser.
+        /// </summary>
+        internal static string GenerateGrammarJson(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands)
         {
             var uniqueWords = new HashSet<string>(StringComparer.Ordinal);
 
             // Collect words from pattern literals (including optional literals stripped of ?)
-            foreach (var command in _commands)
+            foreach (var command in commands)
             {
                 foreach (var pattern in command.Patterns)
                 {
@@ -352,7 +359,7 @@ namespace VoskXR.Commands
             }
 
             // Collect words from slot values
-            foreach (var slot in _slots)
+            foreach (var slot in slots)
             {
                 foreach (string value in slot.Values)
                 {
@@ -378,7 +385,7 @@ namespace VoskXR.Commands
             }
 
             // Add digit vocabulary when any NumberSequence slot exists
-            foreach (var slot in _slots)
+            foreach (var slot in slots)
             {
                 if (slot.Type == VoskSlotType.NumberSequence)
                 {
