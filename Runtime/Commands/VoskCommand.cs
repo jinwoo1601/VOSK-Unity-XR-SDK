@@ -42,17 +42,24 @@ namespace VoskXR.Commands
         /// <summary>The original VOSK output text.</summary>
         public readonly string RawText;
 
+        /// <summary>
+        /// Index into <see cref="VoskCommandDefinition.Patterns"/> identifying which
+        /// pattern produced this match. -1 when unavailable (e.g. manually constructed).
+        /// </summary>
+        public readonly int MatchedPatternIndex;
+
         /// <summary>Names of all registered slots, used for debug validation in GetSlot. Null in release builds.</summary>
         readonly string[] _registeredSlotNames;
 
         public VoskCommand(string intent, VoskSlotMatch[] slots, float confidence, float score,
-            string rawText, string[] registeredSlotNames = null)
+            string rawText, string[] registeredSlotNames = null, int matchedPatternIndex = -1)
         {
             Intent = intent;
             Slots = slots ?? Array.Empty<VoskSlotMatch>();
             Confidence = confidence;
             Score = score;
             RawText = rawText;
+            MatchedPatternIndex = matchedPatternIndex;
             _registeredSlotNames = registeredSlotNames;
         }
 

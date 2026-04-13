@@ -18,7 +18,25 @@ namespace VoskXR.Commands
         /// </summary>
         public readonly string[][] Patterns;
 
+        /// <summary>
+        /// When true, a match with unfilled required slots enters pending state
+        /// instead of being rejected, allowing follow-up speech to fill the gaps.
+        /// </summary>
+        public readonly bool AllowPartialMatch;
+
+        /// <summary>
+        /// When true, a fully-matched command enters pending state awaiting
+        /// explicit confirmation ("confirm" / "cancel") before firing.
+        /// </summary>
+        public readonly bool RequiresConfirmation;
+
         public VoskCommandDefinition(string intent, string[][] patterns)
+            : this(intent, patterns, false, false)
+        {
+        }
+
+        public VoskCommandDefinition(string intent, string[][] patterns,
+            bool allowPartialMatch = false, bool requiresConfirmation = false)
         {
             Intent = intent ?? throw new ArgumentNullException(nameof(intent));
 
@@ -37,6 +55,8 @@ namespace VoskXR.Commands
             }
 
             Patterns = outerCopy;
+            AllowPartialMatch = allowPartialMatch;
+            RequiresConfirmation = requiresConfirmation;
         }
     }
 }

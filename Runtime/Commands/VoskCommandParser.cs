@@ -227,11 +227,11 @@ namespace VoskXR.Commands
                 float bestScore = float.MinValue;
                 int bestLiteralCount = -1;
                 int bestCommandIdx = -1;
+                int bestPatternIdx = -1;
                 int bestStartIdx = int.MaxValue;
                 int bestEndIdx = 0;
                 List<VoskSlotMatch> bestSlots = null;
 #if UNITY_EDITOR
-                int bestPatternIdx = -1;
                 List<int> bestSlotStartWords = null;
                 List<int> bestSlotEndWords = null;
 #endif
@@ -258,11 +258,11 @@ namespace VoskXR.Commands
                                 bestScore = matchResult.Score;
                                 bestLiteralCount = matchResult.LiteralCount;
                                 bestCommandIdx = ci;
+                                bestPatternIdx = pi;
                                 bestStartIdx = startIdx;
                                 bestEndIdx = matchResult.EndIdx;
                                 bestSlots = matchResult.Slots;
 #if UNITY_EDITOR
-                                bestPatternIdx = pi;
                                 bestSlotStartWords = matchResult.SlotStartWords;
                                 bestSlotEndWords = matchResult.SlotEndWords;
 #endif
@@ -290,7 +290,8 @@ namespace VoskXR.Commands
                     confidence,
                     bestScore,
                     text,
-                    _slotNames);
+                    _slotNames,
+                    bestPatternIdx);
 
                 results.Add(new VoskCommandResult(command));
 #if UNITY_EDITOR
@@ -331,7 +332,8 @@ namespace VoskXR.Commands
         /// Used by the recogniser to generate grammar from universe slots without
         /// constructing a throwaway parser.
         /// </summary>
-        internal static string GenerateGrammarJson(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands)
+        internal static string GenerateGrammarJson(VoskSlotDefinition[] slots,
+            VoskCommandDefinition[] commands, string[] additionalWords = null)
         {
             var uniqueWords = new HashSet<string>(StringComparer.Ordinal);
 
@@ -392,6 +394,16 @@ namespace VoskXR.Commands
                     foreach (string word in VoskNumberParser.DigitVocabulary)
                         uniqueWords.Add(word);
                     break;
+                }
+            }
+
+            // Add caller-supplied words (e.g. confirm/cancel vocabulary)
+            if (additionalWords != null)
+            {
+                foreach (string word in additionalWords)
+                {
+                    if (!string.IsNullOrEmpty(word))
+                        uniqueWords.Add(word);
                 }
             }
 
@@ -617,6 +629,25 @@ namespace VoskXR.Commands
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Attempts to match a slot by name against tokens at the given position.
+        /// Used by the recogniser for follow-up slot-fill matching.
+        /// </summary>
+        internal string TryMatchSlotByName(string[] tokens, int startIdx,
+            string slotName, out int consumed)
+        {
+            consumed = 0;
+
+            if (!_slotIndex.TryGetValue(slotName, out int slotIdx))
+                return null;
+
+            if (_slots[slotIdx].Type == VoskSlotType.NumberSequence)
+                return TryMatchNumberSequence(tokens, startIdx,
+                    _slots[slotIdx].MinWords, _slots[slotIdx].MaxWords, out consumed);
+
+            return TryMatchSlot(tokens, startIdx, slotIdx, out consumed);
+        }
+
         internal static float ComputeConfidence(string[] tokens, int startIdx, int endIdx,
             Dictionary<string, float> wordConfidence)
         {
@@ -646,7 +677,7 @@ namespace VoskXR.Commands
         /// Extracts the slot name from a pattern element. Returns null for literals.
         /// Handles {slot} (required), {?slot} (optional), and skips ?literal.
         /// </summary>
-        static string ExtractSlotName(string element)
+        internal static string ExtractSlotName(string element)
         {
             if (element.Length < 3 || element[0] != '{' || element[element.Length - 1] != '}')
                 return null;
@@ -661,7 +692,7 @@ namespace VoskXR.Commands
         /// <summary>
         /// Returns true if the pattern element is an optional slot reference ({?slot}).
         /// </summary>
-        static bool IsOptionalSlot(string element)
+        internal static bool IsOptionalSlot(string element)
         {
             return element.Length >= 4 && element[0] == '{' && element[1] == '?'
                 && element[element.Length - 1] == '}';

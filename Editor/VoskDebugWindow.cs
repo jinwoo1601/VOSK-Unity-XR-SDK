@@ -327,6 +327,8 @@ namespace VoskXR.Editor
 
             DrawActiveSets();
             EditorGUILayout.Space(4);
+            DrawPendingCommand();
+            EditorGUILayout.Space(4);
             DrawLastMatchBreakdown();
             EditorGUILayout.Space(8);
             DrawHistory();
@@ -343,6 +345,37 @@ namespace VoskXR.Editor
             {
                 EditorGUILayout.LabelField($"Active Sets: {string.Join(", ", setNames)}");
             }
+        }
+
+        void DrawPendingCommand()
+        {
+            var pending = _commandRecogniser.EditorPendingCommand;
+            if (!pending.HasValue)
+                return;
+
+            DrawSectionHeader("Pending Command");
+
+            var p = pending.Value;
+            EditorGUILayout.LabelField($"Intent: {p.Command.Intent}", EditorStyles.boldLabel);
+
+            string reason = p.Reason == VoskPendingReason.PartialMatch
+                ? "Partial match \u2014 waiting for follow-up"
+                : "Awaiting confirmation";
+            EditorGUILayout.LabelField($"Reason: {reason}");
+
+            if (p.Command.Slots.Length > 0)
+            {
+                EditorGUILayout.LabelField("Filled slots:", EditorStyles.miniLabel);
+                foreach (var slot in p.Command.Slots)
+                    EditorGUILayout.LabelField($"  {slot.Name} = \"{slot.Value}\"");
+            }
+
+            if (p.UnfilledSlots != null && p.UnfilledSlots.Length > 0)
+                EditorGUILayout.LabelField(
+                    $"Unfilled: {string.Join(", ", p.UnfilledSlots)}");
+
+            float elapsed = Time.time - p.CreatedTime;
+            EditorGUILayout.LabelField($"Elapsed: {elapsed:F1}s");
         }
 
         void DrawLastMatchBreakdown()

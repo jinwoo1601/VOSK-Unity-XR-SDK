@@ -20,6 +20,15 @@ namespace VoskXR.Commands
                  "Use {slot} for required slots, {?slot} for optional, ?word for optional literals.")]
         public string[] patterns;
 
+        [Tooltip("When enabled, this command enters pending state when matched with " +
+                 "unfilled required slots, instead of being rejected. Follow-up speech " +
+                 "can fill the missing slots.")]
+        public bool allowPartialMatch;
+
+        [Tooltip("When enabled, this command enters pending state even when fully matched, " +
+                 "requiring explicit confirmation before firing.")]
+        public bool requiresConfirmation;
+
         /// <summary>
         /// Converts this asset to the runtime <see cref="VoskCommandDefinition"/> struct.
         /// Each pattern string is split on whitespace to produce the token array the parser expects.
@@ -37,7 +46,8 @@ namespace VoskXR.Commands
                     : patterns[i].Split(SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
             }
 
-            return new VoskCommandDefinition(intent, patternArrays);
+            return new VoskCommandDefinition(intent, patternArrays,
+                allowPartialMatch, requiresConfirmation);
         }
     }
 }
