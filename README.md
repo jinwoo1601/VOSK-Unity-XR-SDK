@@ -227,6 +227,7 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
+| 0.16.0 | Internal refactoring and per-utterance allocation reduction |
 | 0.15.0 | Pending commands: partial match, confirmation, follow-up slot-fill |
 | 0.14.0 | Dynamic slot value providers for runtime parser filtering |
 | 0.13.0 | Batch test runner for regression-testing command definitions |
