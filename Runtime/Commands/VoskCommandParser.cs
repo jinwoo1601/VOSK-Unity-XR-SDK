@@ -38,6 +38,18 @@ namespace VoskXR.Commands
         // Cached stripped forms of optional literals (pattern element -> literal without '?')
         readonly Dictionary<string, string> _optionalLiteralCache;
 
+        // Pre-allocated slot match buffers — avoids per-call List allocations in TryMatchScored/Parse.
+        readonly int _maxSlotsPerPattern;
+        readonly VoskSlotMatch[] _matchSlotBuf;   // TryMatchScored writes here
+        readonly VoskSlotMatch[] _bestSlotBuf;    // copy-on-best in Parse
+        int _matchSlotCount;                      // set by TryMatchScored
+#if UNITY_EDITOR
+        readonly int[] _matchSlotStartBuf;
+        readonly int[] _matchSlotEndBuf;
+        readonly int[] _bestSlotStartBuf;
+        readonly int[] _bestSlotEndBuf;
+#endif
+
         struct SlotValueEntry
         {
             public string CanonicalValue;
@@ -116,6 +128,28 @@ namespace VoskXR.Commands
                     }
                 }
             }
+
+            // Compute max slots per pattern to size reusable buffers.
+            int maxSlots = 0;
+            foreach (var command in commands)
+            {
+                foreach (var pattern in command.Patterns)
+                {
+                    int count = 0;
+                    foreach (string element in pattern)
+                        if (ExtractSlotName(element) != null) count++;
+                    if (count > maxSlots) maxSlots = count;
+                }
+            }
+            _maxSlotsPerPattern = maxSlots > 0 ? maxSlots : 1;
+            _matchSlotBuf = new VoskSlotMatch[_maxSlotsPerPattern];
+            _bestSlotBuf = new VoskSlotMatch[_maxSlotsPerPattern];
+#if UNITY_EDITOR
+            _matchSlotStartBuf = new int[_maxSlotsPerPattern];
+            _matchSlotEndBuf = new int[_maxSlotsPerPattern];
+            _bestSlotStartBuf = new int[_maxSlotsPerPattern];
+            _bestSlotEndBuf = new int[_maxSlotsPerPattern];
+#endif
 
             RunValidationWarnings(slots);
         }
@@ -227,11 +261,7 @@ namespace VoskXR.Commands
                 int bestPatternIdx = -1;
                 int bestStartIdx = int.MaxValue;
                 int bestEndIdx = 0;
-                List<VoskSlotMatch> bestSlots = null;
-#if UNITY_EDITOR
-                List<int> bestSlotStartWords = null;
-                List<int> bestSlotEndWords = null;
-#endif
+                int bestSlotCount = 0;
 
                 for (int ci = 0; ci < _commands.Length; ci++)
                 {
@@ -258,11 +288,16 @@ namespace VoskXR.Commands
                                 bestPatternIdx = pi;
                                 bestStartIdx = startIdx;
                                 bestEndIdx = matchResult.EndIdx;
-                                bestSlots = matchResult.Slots;
+                                bestSlotCount = matchResult.SlotCount;
+                                // Copy current match buffer into best buffer
+                                if (matchResult.SlotCount > 0)
+                                {
+                                    Array.Copy(_matchSlotBuf, _bestSlotBuf, matchResult.SlotCount);
 #if UNITY_EDITOR
-                                bestSlotStartWords = matchResult.SlotStartWords;
-                                bestSlotEndWords = matchResult.SlotEndWords;
+                                    Array.Copy(_matchSlotStartBuf, _bestSlotStartBuf, matchResult.SlotCount);
+                                    Array.Copy(_matchSlotEndBuf, _bestSlotEndBuf, matchResult.SlotCount);
 #endif
+                                }
                             }
                         }
                     }
@@ -277,9 +312,16 @@ namespace VoskXR.Commands
 
                 float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
 
-                var slotsArray = bestSlots != null && bestSlots.Count > 0
-                    ? bestSlots.ToArray()
-                    : Array.Empty<VoskSlotMatch>();
+                VoskSlotMatch[] slotsArray;
+                if (bestSlotCount > 0)
+                {
+                    slotsArray = new VoskSlotMatch[bestSlotCount];
+                    Array.Copy(_bestSlotBuf, slotsArray, bestSlotCount);
+                }
+                else
+                {
+                    slotsArray = Array.Empty<VoskSlotMatch>();
+                }
 
                 var command = new VoskCommand(
                     _commands[bestCommandIdx].Intent,
@@ -292,11 +334,20 @@ namespace VoskXR.Commands
 
                 results.Add(new VoskCommandResult(command));
 #if UNITY_EDITOR
+                int[] diagStartWords = null;
+                int[] diagEndWords = null;
+                if (bestSlotCount > 0)
+                {
+                    diagStartWords = new int[bestSlotCount];
+                    diagEndWords = new int[bestSlotCount];
+                    Array.Copy(_bestSlotStartBuf, diagStartWords, bestSlotCount);
+                    Array.Copy(_bestSlotEndBuf, diagEndWords, bestSlotCount);
+                }
                 diagnosticEntries.Add(new ParseDiagnosticEntry
                 {
                     PatternString = string.Join(" ", _commands[bestCommandIdx].Patterns[bestPatternIdx]),
-                    SlotStartWords = bestSlotStartWords?.ToArray(),
-                    SlotEndWords = bestSlotEndWords?.ToArray(),
+                    SlotStartWords = diagStartWords,
+                    SlotEndWords = diagEndWords,
                 });
 #endif
                 searchStart = bestEndIdx;
@@ -428,12 +479,8 @@ namespace VoskXR.Commands
         {
             public float Score;
             public int LiteralCount;
-            public List<VoskSlotMatch> Slots;
+            public int SlotCount;
             public int EndIdx;
-#if UNITY_EDITOR
-            public List<int> SlotStartWords;
-            public List<int> SlotEndWords;
-#endif
         }
 
 #if UNITY_EDITOR
@@ -457,11 +504,7 @@ namespace VoskXR.Commands
             float rawScore = 0f;
             int patternLength = pattern.Length;
             int literalCount = 0;
-            List<VoskSlotMatch> slots = null;
-#if UNITY_EDITOR
-            List<int> slotStartWords = null;
-            List<int> slotEndWords = null;
-#endif
+            int slotCount = 0;
 
             for (int patIdx = 0; patIdx < pattern.Length; patIdx++)
             {
@@ -488,18 +531,11 @@ namespace VoskXR.Commands
 
                     if (matchedValue != null)
                     {
-                        if (slots == null)
-                            slots = new List<VoskSlotMatch>();
 #if UNITY_EDITOR
-                        if (slotStartWords == null)
-                        {
-                            slotStartWords = new List<int>();
-                            slotEndWords = new List<int>();
-                        }
-                        slotStartWords.Add(tokenIdx);
-                        slotEndWords.Add(tokenIdx + consumed);
+                        _matchSlotStartBuf[slotCount] = tokenIdx;
+                        _matchSlotEndBuf[slotCount] = tokenIdx + consumed;
 #endif
-                        slots.Add(new VoskSlotMatch(slotName, matchedValue));
+                        _matchSlotBuf[slotCount++] = new VoskSlotMatch(slotName, matchedValue);
                         tokenIdx += consumed;
                         rawScore += MatchScore;
                     }
@@ -534,18 +570,15 @@ namespace VoskXR.Commands
                 }
             }
 
+            _matchSlotCount = slotCount;
             float normalizedScore = patternLength > 0 ? rawScore / patternLength : 0f;
 
             return new MatchResult
             {
                 Score = normalizedScore,
                 LiteralCount = literalCount,
-                Slots = slots,
+                SlotCount = slotCount,
                 EndIdx = tokenIdx,
-#if UNITY_EDITOR
-                SlotStartWords = slotStartWords,
-                SlotEndWords = slotEndWords,
-#endif
             };
         }
 

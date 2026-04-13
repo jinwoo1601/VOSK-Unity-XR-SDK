@@ -109,6 +109,9 @@ namespace VoskXR.Commands
         // Pending command state
         readonly PendingCommandHandler _pending = new PendingCommandHandler();
 
+        // Pre-allocated buffer for accepted commands (avoids per-utterance List allocation)
+        VoskCommand[] _acceptedBuf;
+
         /// <summary>Names of the currently active command sets (snapshot copy).</summary>
         public string[] ActiveSetNames => _setManager.ActiveSetNames;
 
@@ -135,6 +138,7 @@ namespace VoskXR.Commands
             _setManager.Reset();
             _activeCommands = commands;
             _setManager.BuildLookup(commands);
+            EnsureAcceptedBuffer(commands.Length);
 
             _parser = new VoskCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands);
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
@@ -181,6 +185,7 @@ namespace VoskXR.Commands
 
             var commands = _setManager.Activate(setNames);
             _activeCommands = commands;
+            EnsureAcceptedBuffer(commands.Length);
             _debouncer.Clear();
             RebuildParserAndGrammar();
         }
@@ -362,6 +367,12 @@ namespace VoskXR.Commands
 #endif
                 }
             }
+        }
+
+        void EnsureAcceptedBuffer(int commandCount)
+        {
+            if (_acceptedBuf == null || _acceptedBuf.Length < commandCount)
+                _acceptedBuf = new VoskCommand[Math.Max(commandCount, 1)];
         }
 
         void RebuildParserAndGrammar()
@@ -591,7 +602,7 @@ namespace VoskXR.Commands
 
             // ---- Step 7: Process results with pending-aware logic ----
             float now = Time.time;
-            var accepted = new List<VoskCommand>();
+            int acceptedCount = 0;
 #if UNITY_EDITOR
             var attempts = new List<VoskMatchAttempt>(results.Length);
 #endif
@@ -669,7 +680,7 @@ namespace VoskXR.Commands
                 }
 
                 _debouncer.RecordFire(cmd.Intent, now);
-                accepted.Add(cmd);
+                _acceptedBuf[acceptedCount++] = cmd;
 #if UNITY_EDITOR
                 attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf, null, true));
 #endif
@@ -680,19 +691,26 @@ namespace VoskXR.Commands
                 text, words, attempts.ToArray(), Time.frameCount);
 #endif
 
-            if (accepted.Count == 0)
+            if (acceptedCount == 0)
             {
                 OnUnrecognisedSpeech?.Invoke(text);
                 return;
             }
 
             // Fire per-command events in order
-            for (int i = 0; i < accepted.Count; i++)
-                OnCommandRecognised?.Invoke(accepted[i]);
+            for (int i = 0; i < acceptedCount; i++)
+                OnCommandRecognised?.Invoke(_acceptedBuf[i]);
 
             // Fire batch event
             if (OnCommandsRecognised != null)
-                OnCommandsRecognised.Invoke(accepted.ToArray());
+            {
+                var batch = new VoskCommand[acceptedCount];
+                Array.Copy(_acceptedBuf, batch, acceptedCount);
+                OnCommandsRecognised.Invoke(batch);
+            }
+
+            // Clear stale references
+            Array.Clear(_acceptedBuf, 0, acceptedCount);
         }
 
         // -------- Pending resolution interpreter --------
