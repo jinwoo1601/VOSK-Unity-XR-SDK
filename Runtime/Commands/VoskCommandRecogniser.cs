@@ -499,24 +499,37 @@ namespace VoskXR.Commands
 
         void FlushBuffer()
         {
-            var (text, words) = _buffer.Flush();
+            string text = _buffer.Flush();
             if (text.Length == 0)
+            {
+                _buffer.ClearWords();
                 return;
+            }
 
+            var words = _buffer.GetWordsSpan();
             ProcessParsedResults(text, words);
+            _buffer.ClearWords();
         }
 
         void ProcessParsedResults(string text, VoskWord[] words)
+            => ProcessParsedResultsCore(text, words, _parser.InstanceBuildWordConfidence(words));
+
+        void ProcessParsedResults(string text, ReadOnlySpan<VoskWord> words)
+            => ProcessParsedResultsCore(text, words, _parser.InstanceBuildWordConfidence(words));
+
+        void ProcessParsedResultsCore(string text, ReadOnlySpan<VoskWord> words,
+            Dictionary<string, float> wordConfidence)
         {
-            // Split once — shared by pending handlers, diagnostics, and (indirectly) the parser.
+            // Split once — shared by pending handlers, diagnostics, and the parser.
             string[] tokens = text.Split(VoskCommandParser.SplitSeparator,
                 StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0)
                 return;
 
-            Dictionary<string, float> wordConfidence = _pending.HasPending
-                ? VoskCommandParser.BuildWordConfidence(words)
-                : null;
+#if UNITY_EDITOR
+            // Editor diagnostics need VoskWord[] — copy once for the editor path only.
+            VoskWord[] diagWords = words.ToArray();
+#endif
 
             // ---- Step 1: Confirm/cancel check (before parsing) ----
             if (_pending.HasPending)
@@ -528,7 +541,7 @@ namespace VoskXR.Commands
                     InterpretResolution(ccResolution);
 #if UNITY_EDITOR
                     LastMatchDiagnostics = new VoskMatchDiagnostics(
-                        text, words,
+                        text, diagWords,
                         new[] { new VoskMatchAttempt(null, null, 0f, minScore, 0f, minConfidence,
                             null, "handled as confirm/cancel", false) },
                         Time.frameCount);
@@ -543,20 +556,21 @@ namespace VoskXR.Commands
                 followUpResult = _pending.TryFollowUpSlotFill(
                     text, tokens, wordConfidence, _parser);
 
-            // ---- Step 3: Normal parse ----
-            var results = _parser.Parse(text, words);
+            // ---- Step 3: Normal parse (internal path — no duplicate split/dict) ----
+            int resultCount = _parser.ParseInternal(tokens, text, wordConfidence);
 
 #if UNITY_EDITOR
             var parseDiag = _parser.LastParseDiagnostics;
-            Dictionary<string, float> diagWordConf = wordConfidence
-                ?? VoskCommandParser.BuildWordConfidence(words);
+            // wordConfidence is already built above — reuse for diagnostics.
+            Dictionary<string, float> diagWordConf = wordConfidence;
 #endif
 
             // ---- Step 4: Determine if any normal result passes standard thresholds ----
             bool hasCompleteNewCommand = false;
-            for (int i = 0; i < results.Length; i++)
+            var resultBuf = _parser.ResultBuffer;
+            for (int i = 0; i < resultCount; i++)
             {
-                var cmd = results[i].Command;
+                var cmd = resultBuf[i].Command;
                 if (cmd.Score >= minScore &&
                     (cmd.Confidence < 0f || cmd.Confidence >= minConfidence))
                 {
@@ -572,7 +586,7 @@ namespace VoskXR.Commands
                 InterpretResolution(completeRes);
 #if UNITY_EDITOR
                 LastMatchDiagnostics = new VoskMatchDiagnostics(
-                    text, words,
+                    text, diagWords,
                     new[] { new VoskMatchAttempt(
                         followUpResult.Value.Intent, null, followUpResult.Value.Score,
                         minScore, followUpResult.Value.Confidence, minConfidence,
@@ -587,11 +601,11 @@ namespace VoskXR.Commands
                 InterpretResolution(_pending.Cancel());
 
             // ---- Step 6: No parse results ----
-            if (results.Length == 0)
+            if (resultCount == 0)
             {
 #if UNITY_EDITOR
                 LastMatchDiagnostics = new VoskMatchDiagnostics(
-                    text, words,
+                    text, diagWords,
                     new[] { new VoskMatchAttempt(null, null, 0f, minScore, 0f, minConfidence,
                         null, "no match", false) },
                     Time.frameCount);
@@ -604,12 +618,12 @@ namespace VoskXR.Commands
             float now = Time.time;
             int acceptedCount = 0;
 #if UNITY_EDITOR
-            var attempts = new List<VoskMatchAttempt>(results.Length);
+            var attempts = new List<VoskMatchAttempt>(resultCount);
 #endif
 
-            for (int i = 0; i < results.Length; i++)
+            for (int i = 0; i < resultCount; i++)
             {
-                var cmd = results[i].Command;
+                var cmd = resultBuf[i].Command;
 
                 // Below score threshold — check AllowPartialMatch before rejecting
                 if (cmd.Score < minScore)
@@ -618,7 +632,7 @@ namespace VoskXR.Commands
                         _setManager.TryLookupCommand(cmd.Intent, out var partialDef) &&
                         partialDef.AllowPartialMatch)
                     {
-                        var unfilled = PendingCommandHandler.ComputeUnfilledSlots(cmd, partialDef);
+                        var unfilled = _pending.ComputeUnfilledSlots(cmd, partialDef);
                         if (unfilled.Length > 0)
                         {
                             var enterRes = _pending.EnterPending(cmd, partialDef, unfilled,
@@ -688,7 +702,7 @@ namespace VoskXR.Commands
 
 #if UNITY_EDITOR
             LastMatchDiagnostics = new VoskMatchDiagnostics(
-                text, words, attempts.ToArray(), Time.frameCount);
+                text, diagWords, attempts.ToArray(), Time.frameCount);
 #endif
 
             if (acceptedCount == 0)

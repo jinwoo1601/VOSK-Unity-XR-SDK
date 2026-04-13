@@ -6,6 +6,7 @@
 // ============================================================================
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace VoskXR.Commands
 {
@@ -19,6 +20,7 @@ namespace VoskXR.Commands
     {
         readonly List<string> _texts = new List<string>();
         readonly List<VoskWord> _words = new List<VoskWord>();
+        readonly System.Text.StringBuilder _sb = new System.Text.StringBuilder();
         float _lastResultTime;
 
         /// <summary>True when the buffer holds at least one result.</summary>
@@ -46,23 +48,55 @@ namespace VoskXR.Commands
         }
 
         /// <summary>
-        /// Concatenates buffered texts and words, clears the buffer, and returns the result.
+        /// Concatenates buffered texts, clears text buffer, and returns the joined text.
+        /// Call <see cref="GetWordsSpan"/> before <see cref="ClearWords"/> to read word data
+        /// without copying. Both must happen synchronously in the same <c>Update</c> tick.
         /// </summary>
-        internal (string Text, VoskWord[] Words) Flush()
+        internal string Flush()
         {
             IsActive = false;
 
             if (_texts.Count == 0)
-                return (string.Empty, Array.Empty<VoskWord>());
+                return string.Empty;
 
-            // Fast path: single entry avoids string.Join allocation.
-            string text = _texts.Count == 1 ? _texts[0] : string.Join(" ", _texts);
-            var words = _words.Count > 0 ? _words.ToArray() : Array.Empty<VoskWord>();
-
+            // Fast path: single entry avoids StringBuilder overhead.
+            string text;
+            if (_texts.Count == 1)
+            {
+                text = _texts[0];
+            }
+            else
+            {
+                _sb.Clear();
+                for (int i = 0; i < _texts.Count; i++)
+                {
+                    if (i > 0) _sb.Append(' ');
+                    _sb.Append(_texts[i]);
+                }
+                text = _sb.ToString();
+            }
             _texts.Clear();
-            _words.Clear();
+            return text;
+        }
 
-            return (text, words);
+        /// <summary>
+        /// Returns a span over the buffered word data without copying.
+        /// Valid only until <see cref="ClearWords"/> is called.
+        /// </summary>
+        internal ReadOnlySpan<VoskWord> GetWordsSpan()
+        {
+            return _words.Count > 0
+                ? CollectionsMarshal.AsSpan(_words)
+                : ReadOnlySpan<VoskWord>.Empty;
+        }
+
+        /// <summary>
+        /// Clears the word list. Must be called after <see cref="GetWordsSpan"/>
+        /// has been fully consumed.
+        /// </summary>
+        internal void ClearWords()
+        {
+            _words.Clear();
         }
 
         /// <summary>

@@ -20,8 +20,8 @@ namespace VoskXR.Commands
         string[] _activeSetNames = Array.Empty<string>();
         Dictionary<string, VoskCommandDefinition> _commandLookup;
 
-        /// <summary>Names of the currently active command sets (snapshot copy).</summary>
-        internal string[] ActiveSetNames => (string[])_activeSetNames.Clone();
+        /// <summary>Names of the currently active command sets (defensive copy).</summary>
+        internal string[] ActiveSetNames => _activeSetNames;
 
         /// <summary>True when sets have been configured.</summary>
         internal bool HasSets => _sets != null;

@@ -54,6 +54,9 @@ namespace VoskXR.Commands
     {
         VoskPendingCommand? _pendingCommand;
 
+        readonly List<VoskSlotMatch> _followUpSlotBuf = new List<VoskSlotMatch>();
+        readonly List<string> _unfilledBuf = new List<string>();
+
         internal bool HasPending => _pendingCommand.HasValue;
         internal VoskPendingCommand? Current => _pendingCommand;
         internal VoskCommand? PendingCommand => _pendingCommand?.Command;
@@ -94,17 +97,15 @@ namespace VoskXR.Commands
             if (tokens.Length == 0)
                 return PendingResolution.NoAction();
 
-            string normalized = tokens.Length == 1 ? tokens[0] : string.Join(" ", tokens);
-
             string[] effectiveCancel = cancelVocab != null && cancelVocab.Length > 0
                 ? cancelVocab : VoskFollowUpVocabulary.DefaultCancel;
             string[] effectiveConfirm = confirmVocab != null && confirmVocab.Length > 0
                 ? confirmVocab : VoskFollowUpVocabulary.DefaultConfirm;
 
-            if (IsVocabularyMatch(normalized, effectiveCancel))
+            if (IsVocabularyMatchTokens(tokens, effectiveCancel))
                 return Cancel();
 
-            if (IsVocabularyMatch(normalized, effectiveConfirm))
+            if (IsVocabularyMatchTokens(tokens, effectiveConfirm))
             {
                 var confirmed = _pendingCommand.Value;
                 _pendingCommand = null;
@@ -128,7 +129,11 @@ namespace VoskXR.Commands
             if (tokens.Length == 0)
                 return null;
 
-            var newSlots = new List<VoskSlotMatch>(pending.Command.Slots);
+            _followUpSlotBuf.Clear();
+            var existingSlots = pending.Command.Slots;
+            for (int i = 0; i < existingSlots.Length; i++)
+                _followUpSlotBuf.Add(existingSlots[i]);
+
             int tokenIdx = 0;
 
             foreach (string slotName in pending.UnfilledSlots)
@@ -143,7 +148,7 @@ namespace VoskXR.Commands
                         tokens, startIdx, slotName, out int consumed);
                     if (value != null)
                     {
-                        newSlots.Add(new VoskSlotMatch(slotName, value));
+                        _followUpSlotBuf.Add(new VoskSlotMatch(slotName, value));
                         tokenIdx = startIdx + consumed;
                         found = true;
                         break;
@@ -155,7 +160,7 @@ namespace VoskXR.Commands
             }
 
             // Must have filled at least one new slot
-            if (newSlots.Count == pending.Command.Slots.Length)
+            if (_followUpSlotBuf.Count == existingSlots.Length)
                 return null;
 
             float followUpConf = VoskCommandParser.ComputeConfidence(
@@ -165,9 +170,17 @@ namespace VoskXR.Commands
                 ? Math.Min(pending.Command.Confidence, followUpConf)
                 : pending.Command.Confidence >= 0f ? pending.Command.Confidence : followUpConf;
 
+            // Allocate a fresh array — this command crosses into public events
+            // (OnCommandConfirmed/OnCommandRecognised) where subscribers may retain it,
+            // so it must not be pool-borrowed.
+            int slotCount = _followUpSlotBuf.Count;
+            var slotsArray = new VoskSlotMatch[slotCount];
+            for (int i = 0; i < slotCount; i++)
+                slotsArray[i] = _followUpSlotBuf[i];
+
             return new VoskCommand(
                 pending.Command.Intent,
-                newSlots.ToArray(),
+                slotsArray,
                 mergedConfidence,
                 pending.Command.Score,
                 pending.Command.RawText + " " + text,
@@ -233,14 +246,14 @@ namespace VoskXR.Commands
         /// <summary>
         /// Computes which required slots in the matched pattern are unfilled.
         /// </summary>
-        internal static string[] ComputeUnfilledSlots(VoskCommand cmd, VoskCommandDefinition def)
+        internal string[] ComputeUnfilledSlots(VoskCommand cmd, VoskCommandDefinition def)
         {
             if (cmd.MatchedPatternIndex < 0 ||
                 cmd.MatchedPatternIndex >= def.Patterns.Length)
                 return Array.Empty<string>();
 
             var pattern = def.Patterns[cmd.MatchedPatternIndex];
-            List<string> unfilled = null;
+            _unfilledBuf.Clear();
 
             foreach (string element in pattern)
             {
@@ -248,23 +261,56 @@ namespace VoskXR.Commands
                 if (slotName != null && !VoskCommandParser.IsOptionalSlot(element)
                     && !cmd.HasSlot(slotName))
                 {
-                    if (unfilled == null)
-                        unfilled = new List<string>();
-                    unfilled.Add(slotName);
+                    _unfilledBuf.Add(slotName);
                 }
             }
 
-            return unfilled?.ToArray() ?? Array.Empty<string>();
+            return _unfilledBuf.Count > 0 ? _unfilledBuf.ToArray() : Array.Empty<string>();
         }
 
-        static bool IsVocabularyMatch(string normalized, string[] vocabulary)
+        /// <summary>
+        /// Matches vocabulary phrases directly against the token array without
+        /// joining tokens or splitting phrases. Walks each phrase span
+        /// word-by-word and compares against consecutive tokens.
+        /// A match requires all phrase words to correspond 1:1 with all tokens.
+        /// </summary>
+        static bool IsVocabularyMatchTokens(string[] tokens, string[] vocabulary)
         {
-            for (int i = 0; i < vocabulary.Length; i++)
+            for (int v = 0; v < vocabulary.Length; v++)
             {
-                if (string.Equals(normalized, vocabulary[i], StringComparison.Ordinal))
+                if (MatchPhraseAgainstTokens(tokens, vocabulary[v].AsSpan()))
                     return true;
             }
             return false;
+        }
+
+        static bool MatchPhraseAgainstTokens(string[] tokens, ReadOnlySpan<char> phrase)
+        {
+            int tokenIdx = 0;
+            int pos = 0;
+
+            while (pos < phrase.Length)
+            {
+                // Skip spaces.
+                if (phrase[pos] == ' ') { pos++; continue; }
+
+                // Find word end.
+                int wordStart = pos;
+                while (pos < phrase.Length && phrase[pos] != ' ') pos++;
+
+                if (tokenIdx >= tokens.Length)
+                    return false;
+
+                // Compare phrase word span against token.
+                if (!phrase.Slice(wordStart, pos - wordStart)
+                        .SequenceEqual(tokens[tokenIdx].AsSpan()))
+                    return false;
+
+                tokenIdx++;
+            }
+
+            // All tokens must be consumed.
+            return tokenIdx == tokens.Length;
         }
 
         // Test-only: force-set the pending command state for timeout testing.

@@ -5,7 +5,6 @@
 // Depends:  VoskWord, VoskAlternative, VoskBridgeErrorCode
 // ============================================================================
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 
 namespace VoskXR
@@ -106,12 +105,29 @@ namespace VoskXR
             if (arrayEnd < 0)
                 return Array.Empty<VoskAlternative>();
 
-            // Alternatives contain nested "result":[{...}] arrays, so a simple '{'
-            // count would overcount. Use a List and walk depth-1 objects instead.
-            var alternatives = new List<VoskAlternative>();
+            // Count depth-1 objects to allocate exact-size array upfront.
+            int count = 0;
+            {
+                int depth = 0;
+                for (int i = arrayStart; i <= arrayEnd; i++)
+                {
+                    if (json[i] == '{')
+                    {
+                        depth++;
+                        if (depth == 1) count++;
+                    }
+                    else if (json[i] == '}') depth--;
+                }
+            }
+
+            if (count == 0)
+                return Array.Empty<VoskAlternative>();
+
+            var alternatives = new VoskAlternative[count];
+            int altIdx = 0;
             int pos = arrayStart + 1;
 
-            while (pos < arrayEnd)
+            while (altIdx < count && pos < arrayEnd)
             {
                 int objStart = json.IndexOf('{', pos);
                 if (objStart < 0 || objStart >= arrayEnd) break;
@@ -123,13 +139,11 @@ namespace VoskXR
                 float confidence = ParseFloatValue(json, objStart, objEnd, "\"confidence\"");
                 var words = ParseWordsInRange(json, objStart, objEnd);
 
-                alternatives.Add(new VoskAlternative(text, confidence, words));
+                alternatives[altIdx++] = new VoskAlternative(text, confidence, words);
                 pos = objEnd + 1;
             }
 
-            return alternatives.Count > 0
-                ? alternatives.ToArray()
-                : Array.Empty<VoskAlternative>();
+            return altIdx > 0 ? alternatives : Array.Empty<VoskAlternative>();
         }
 
         internal static int FindMatchingDelimiter(string json, int openPos, char open, char close)

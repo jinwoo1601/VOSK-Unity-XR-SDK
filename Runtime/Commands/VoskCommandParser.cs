@@ -38,6 +38,12 @@ namespace VoskXR.Commands
         // Cached stripped forms of optional literals (pattern element -> literal without '?')
         readonly Dictionary<string, string> _optionalLiteralCache;
 
+        // Pre-computed slot name cache: pattern element (e.g. "{weapon}") -> slot name ("weapon").
+        readonly Dictionary<string, string> _slotNameCache;
+
+        // Pre-computed set of optional slot elements (e.g. "{?target}").
+        readonly HashSet<string> _optionalSlotElements;
+
         // Pre-allocated slot match buffers — avoids per-call List allocations in TryMatchScored/Parse.
         readonly int _maxSlotsPerPattern;
         readonly VoskSlotMatch[] _matchSlotBuf;   // TryMatchScored writes here
@@ -49,6 +55,17 @@ namespace VoskXR.Commands
         readonly int[] _bestSlotStartBuf;
         readonly int[] _bestSlotEndBuf;
 #endif
+
+        // Pooled word-confidence dictionary — cleared and reused each utterance.
+        readonly Dictionary<string, float> _wordConfidencePool =
+            new Dictionary<string, float>(32, StringComparer.Ordinal);
+
+        // Pre-allocated result buffer — sized to _commands.Length.
+        readonly VoskCommandResult[] _resultBuf;
+        int _resultCount;
+
+        // Pooled StringBuilder for TryMatchNumberSequence.
+        readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
 
         struct SlotValueEntry
         {
@@ -117,6 +134,8 @@ namespace VoskXR.Commands
 
             // Cache optional literal stripped forms
             _optionalLiteralCache = new Dictionary<string, string>(StringComparer.Ordinal);
+            _slotNameCache = new Dictionary<string, string>(StringComparer.Ordinal);
+            _optionalSlotElements = new HashSet<string>(StringComparer.Ordinal);
             foreach (var command in commands)
             {
                 foreach (var pattern in command.Patterns)
@@ -125,6 +144,15 @@ namespace VoskXR.Commands
                     {
                         if (IsOptionalLiteral(element) && !_optionalLiteralCache.ContainsKey(element))
                             _optionalLiteralCache[element] = element.Substring(1);
+
+                        string slotName = ExtractSlotName(element);
+                        if (slotName != null)
+                        {
+                            if (!_slotNameCache.ContainsKey(element))
+                                _slotNameCache[element] = slotName;
+                            if (IsOptionalSlot(element))
+                                _optionalSlotElements.Add(element);
+                        }
                     }
                 }
             }
@@ -150,6 +178,8 @@ namespace VoskXR.Commands
             _bestSlotStartBuf = new int[_maxSlotsPerPattern];
             _bestSlotEndBuf = new int[_maxSlotsPerPattern];
 #endif
+
+            _resultBuf = new VoskCommandResult[Math.Max(commands.Length, 1)];
 
             RunValidationWarnings(slots);
         }
@@ -245,9 +275,37 @@ namespace VoskXR.Commands
                 return Array.Empty<VoskCommandResult>();
             }
 
-            Dictionary<string, float> wordConfidence = BuildWordConfidence(words);
+            var wordConfidence = InstanceBuildWordConfidence(words);
+            int count = ParseInternal(tokens, text, wordConfidence);
 
-            var results = new List<VoskCommandResult>();
+            if (count == 0)
+                return Array.Empty<VoskCommandResult>();
+
+            // Public API returns a fresh copy — callers own the array indefinitely.
+            var result = new VoskCommandResult[count];
+            Array.Copy(_resultBuf, result, count);
+            return result;
+        }
+
+        /// <summary>
+        /// Internal overload used by the recogniser. Accepts pre-split tokens and a
+        /// pre-built word-confidence dictionary to avoid duplicate work. Writes results
+        /// into <see cref="_resultBuf"/> and returns the count. Callers iterate by count
+        /// and must not hold references to the buffer across calls.
+        /// </summary>
+        internal int ParseInternal(string[] tokens, string text,
+            Dictionary<string, float> wordConfidence)
+        {
+            _resultCount = 0;
+
+            if (tokens.Length == 0)
+            {
+#if UNITY_EDITOR
+                LastParseDiagnostics = Array.Empty<ParseDiagnosticEntry>();
+#endif
+                return 0;
+            }
+
             int searchStart = 0;
 #if UNITY_EDITOR
             var diagnosticEntries = new List<ParseDiagnosticEntry>();
@@ -332,7 +390,9 @@ namespace VoskXR.Commands
                     _slotNames,
                     bestPatternIdx);
 
-                results.Add(new VoskCommandResult(command));
+                if (_resultCount >= _resultBuf.Length)
+                    break; // Buffer full — stop extracting.
+                _resultBuf[_resultCount++] = new VoskCommandResult(command);
 #if UNITY_EDITOR
                 int[] diagStartWords = null;
                 int[] diagEndWords = null;
@@ -358,8 +418,14 @@ namespace VoskXR.Commands
                 ? diagnosticEntries.ToArray()
                 : Array.Empty<ParseDiagnosticEntry>();
 #endif
-            return results.Count > 0 ? results.ToArray() : Array.Empty<VoskCommandResult>();
+            return _resultCount;
         }
+
+        /// <summary>
+        /// Provides access to the internal result buffer. Valid only up to the count
+        /// returned by <see cref="ParseInternal"/>. Do not hold references across calls.
+        /// </summary>
+        internal VoskCommandResult[] ResultBuffer => _resultBuf;
 
         /// <summary>
         /// Parses input text without word confidence data.
@@ -513,10 +579,10 @@ namespace VoskXR.Commands
                 while (tokenIdx < tokens.Length && tokens[tokenIdx] == UnkToken)
                     tokenIdx++;
 
-                string slotName = ExtractSlotName(element);
-                if (slotName != null)
+                bool isSlot = _slotNameCache.TryGetValue(element, out string slotName);
+                if (isSlot)
                 {
-                    bool isOptional = IsOptionalSlot(element);
+                    bool isOptional = _optionalSlotElements.Contains(element);
 
                     if (!_slotIndex.TryGetValue(slotName, out int slotIdx))
                         return default;
@@ -650,13 +716,13 @@ namespace VoskXR.Commands
             if (count == 1)
                 return tokens[matchStart];
 
-            var sb = new System.Text.StringBuilder();
+            _numberSb.Clear();
             for (int i = 0; i < count; i++)
             {
-                if (i > 0) sb.Append(' ');
-                sb.Append(tokens[matchStart + i]);
+                if (i > 0) _numberSb.Append(' ');
+                _numberSb.Append(tokens[matchStart + i]);
             }
-            return sb.ToString();
+            return _numberSb.ToString();
         }
 
         /// <summary>
@@ -692,6 +758,34 @@ namespace VoskXR.Commands
                 if (!string.IsNullOrEmpty(w.Text) && !d.ContainsKey(w.Text))
                     d[w.Text] = w.Confidence;
             return d;
+        }
+
+        /// <summary>
+        /// Instance version that reuses a pooled dictionary. Returns null when words
+        /// is null or empty. The returned dictionary is owned by this parser instance —
+        /// callers must not hold references across <see cref="ParseInternal"/> calls.
+        /// </summary>
+        internal Dictionary<string, float> InstanceBuildWordConfidence(VoskWord[] words)
+        {
+            if (words == null || words.Length == 0)
+                return null;
+            return InstanceBuildWordConfidence((ReadOnlySpan<VoskWord>)words);
+        }
+
+        /// <summary>
+        /// Instance version that reuses a pooled dictionary, accepting a
+        /// <see cref="ReadOnlySpan{VoskWord}"/>. Returns null when the span is empty.
+        /// </summary>
+        internal Dictionary<string, float> InstanceBuildWordConfidence(ReadOnlySpan<VoskWord> words)
+        {
+            if (words.Length == 0)
+                return null;
+
+            _wordConfidencePool.Clear();
+            foreach (var w in words)
+                if (!string.IsNullOrEmpty(w.Text) && !_wordConfidencePool.ContainsKey(w.Text))
+                    _wordConfidencePool[w.Text] = w.Confidence;
+            return _wordConfidencePool;
         }
 
         internal static float ComputeConfidence(string[] tokens, int startIdx, int endIdx,
