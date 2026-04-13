@@ -233,6 +233,56 @@ If the user says the same command twice quickly (or VOSK produces overlapping re
 
 ---
 
+## Unrecognised Speech
+
+When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in two situations:
+
+1. **No pattern match** -- the parser could not match any command pattern against the transcript.
+2. **All matches rejected** -- patterns matched but every candidate was rejected by `minScore`, `minConfidence`, or `commandCooldown` debounce.
+
+The `string` parameter is the full buffered transcript (after utterance merging), exactly as VOSK transcribed it.
+
+### When it does not fire
+
+- If `Configure` has not been called, speech is silently dropped -- no events fire.
+- If speech arrives during a grammar rebuild (stop/set/start cycle), it is discarded before reaching the parser.
+
+### Common uses
+
+**Diagnostics and tuning** -- Log unrecognised speech to identify patterns that need adding, thresholds that need adjusting, or VOSK transcription issues:
+
+```csharp
+commandRecogniser.OnUnrecognisedSpeech += text =>
+{
+    Debug.Log($"[VoskXR] Unrecognised: \"{text}\"");
+};
+```
+
+**Player feedback** -- Show a subtle UI hint so the player knows they were heard but their words didn't match a command:
+
+```csharp
+commandRecogniser.OnUnrecognisedSpeech += text =>
+{
+    hudController.ShowTransientMessage("Command not recognised");
+};
+```
+
+**Dynamic slot interaction** -- When a value provider excludes a target, speech that names the excluded target fires `OnUnrecognisedSpeech` instead of `OnCommandRecognised`. You can use this to explain *why* the command failed:
+
+```csharp
+commandRecogniser.OnUnrecognisedSpeech += text =>
+{
+    if (text.Contains("target"))
+        hudController.ShowTransientMessage("Target not available");
+};
+```
+
+### Relationship to other events
+
+`OnUnrecognisedSpeech` and `OnCommandRecognised`/`OnCommandsRecognised` are mutually exclusive per utterance. A given buffered transcript either produces commands (and fires the command events) or produces none (and fires `OnUnrecognisedSpeech`). It never fires both for the same transcript.
+
+---
+
 ## Grammar Mode vs Free Speech
 
 By default, `VoskCommandRecogniser` constrains VOSK's decoder to only the words that appear in registered commands and slots. This is **grammar mode**, and it dramatically improves recognition accuracy for command-driven UX.

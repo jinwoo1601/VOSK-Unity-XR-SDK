@@ -30,7 +30,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 |-------|-----------|-------------|
 | `OnCommandRecognised` | `Action<VoskCommand>` | Fired for each successfully recognised command that passes threshold and debounce filters |
 | `OnCommandsRecognised` | `Action<VoskCommand[]>` | Fired with the full batch of commands extracted from a single utterance (after sequential extraction) |
-| `OnUnrecognisedSpeech` | `Action<string>` | Fired when speech does not match any command pattern |
+| `OnUnrecognisedSpeech` | `Action<string>` | Fired when speech does not produce any accepted command -- either no pattern matched, or all matches were rejected by score, confidence, or debounce thresholds. The `string` parameter is the full buffered transcript. See [Unrecognised Speech](../command-recognition.md#unrecognised-speech). |
 
 ## Methods
 

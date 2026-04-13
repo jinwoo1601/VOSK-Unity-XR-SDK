@@ -191,7 +191,10 @@ public class CommandDemo : MonoBehaviour
 
     void OnCommandBatch(VoskCommand[] commands) { }
 
-    void OnUnrecognised(string text) { }
+    void OnUnrecognised(string text)
+    {
+        Debug.Log($"[CommandDemo] Unrecognised speech: \"{text}\"");
+    }
 
     // --- Mode switching (voice-triggered or called from UI/game logic) ---
 
