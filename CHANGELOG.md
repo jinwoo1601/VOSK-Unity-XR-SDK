@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-04-13
+
+### Changed
+
+- Extracted `VoskCommandRecogniser` responsibilities into single-purpose internal classes: `CommandDebouncer`, `CommandSetManager`, `DynamicSlotManager`, `GrammarManager`, `PendingCommandHandler`, `UtteranceBuffer`.
+- Pulled JSON result/word/alternative parsing out of `VoskSpeechRecogniser` into `VoskJsonParser`.
+- Unified `SplitSeparator` declarations — `VoskCommandAsset` and `VoskNumberParser` now use `VoskCommandParser.SplitSeparator`.
+- Simplified pending command resolution pipeline: all event dispatch goes through `InterpretResolution`; grammar drain based on outcome type instead of explicit flag.
+- `UtteranceBuffer.Flush()` returns text only; word data accessed via `GetWordsSpan()` (zero-copy `ReadOnlySpan<VoskWord>` via `CollectionsMarshal.AsSpan`).
+- `VoskCommandParser.ParseInternal()` accepts pre-split tokens and pre-built word-confidence dictionary, avoiding duplicate `string.Split` and `Dictionary` allocations per utterance.
+- Pre-allocated reusable buffers replace per-utterance `List` allocations: `_matchSlotBuf`/`_bestSlotBuf` in `TryMatchScored`, `_acceptedBuf` in the recogniser, `_followUpSlotBuf`/`_unfilledBuf` in `PendingCommandHandler`, pooled `StringBuilder` in `UtteranceBuffer` and `TryMatchNumberSequence`, pooled word-confidence dictionary in `VoskCommandParser`.
+- Pre-computed `_slotNameCache` and `_optionalSlotElements` replace runtime `ExtractSlotName`/`IsOptionalSlot` calls in the match loop.
+- `VoskJsonParser.ParseAlternativesFromJson` pre-counts depth-1 objects for exact-size array allocation, replacing `List<VoskAlternative>`.
+- Vocabulary confirm/cancel matching uses span-based `MatchPhraseAgainstTokens` instead of joining tokens into a temporary string.
+
+### Fixed
+
+- Removed unsound slot array pool (`BorrowSlotArray`/`ReturnSlotArray`) that had two escape bugs: accepted commands' slot arrays were returned to the pool after being fired via `OnCommandRecognised` (subscribers may retain references), and only two pending-slot references were tracked so a third command entering pending in one parse would silently corrupt live data.
+
 ## [0.15.0] - 2026-04-13
 
 ### Added
