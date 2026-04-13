@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Automatic gain control with soft-limiter for 16kHz speech normalization
+// Layer:    Runtime.Dsp
+// Owns:     Agc (internal sealed class)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR.Dsp

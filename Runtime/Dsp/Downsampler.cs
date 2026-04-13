@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  FIR low-pass filter with 3:1 decimation (48kHz to 16kHz)
+// Layer:    Runtime.Dsp
+// Owns:     Downsampler (internal sealed class)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR.Dsp

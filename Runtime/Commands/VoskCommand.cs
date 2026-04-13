@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Data types for parsed command results (slot match, command, command result)
+// Layer:    Runtime.Commands
+// Owns:     VoskSlotMatch, VoskCommand, VoskCommandResult (public readonly structs)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR.Commands

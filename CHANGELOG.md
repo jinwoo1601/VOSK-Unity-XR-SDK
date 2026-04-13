@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-04-13
+
+### Added
+
+- Pending command system for partial match, confirmation, and follow-up slot-fill:
+  - `AllowPartialMatch` on `VoskCommandDefinition` — when a command matches with unfilled required slots, it enters pending state instead of being rejected. Follow-up speech fills the missing slots.
+  - `RequiresConfirmation` on `VoskCommandDefinition` — fully-matched commands enter pending state awaiting explicit voice confirmation before firing.
+  - Commands that are both `AllowPartialMatch` and `RequiresConfirmation` go through two pending stages: first slot-fill, then confirmation.
+  - Configurable `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` (`Cancel` or `FireAsIs`) on `VoskCommandRecogniser`.
+  - Custom confirm/cancel vocabulary via `confirmVocabulary` and `cancelVocabulary` Inspector arrays. Defaults: confirm = "confirm", "affirmative", "yes", "go ahead", "do it"; cancel = "cancel", "abort", "negative", "belay that", "never mind".
+  - Confirm/cancel vocabulary words are automatically merged into the VOSK grammar JSON.
+- `VoskCommandRecogniser` pending command events:
+  - `OnCommandPending` — fires when a command enters pending state (partial match or awaiting confirmation).
+  - `OnCommandConfirmed` — fires when a pending command is confirmed. Also fires `OnCommandRecognised` and `OnCommandsRecognised`.
+  - `OnCommandCancelled` — fires when a pending command is cancelled (timeout, explicit cancel, or preempted by a new complete command).
+- `VoskCommandRecogniser` pending command API:
+  - `HasPendingCommand` property — true if a command is currently in pending state.
+  - `PendingCommand` property — the currently pending `VoskCommand`, or null.
+  - `CancelPendingCommand()` — programmatically cancels the pending command.
+- `VoskCommandRecogniser.RebuildGrammar()` defers grammar rebuild while a command is pending, draining the rebuild when the pending command resolves.
+- `VoskCommandParser.TryMatchSlotByName()` — internal method for follow-up slot-fill matching against specific slot names.
+- `VoskPendingTimeoutBehavior` enum (`Cancel`, `FireAsIs`).
+- `VoskPendingCommand`, `VoskPendingReason`, `VoskFollowUpVocabulary` internal types.
+- `VoskCommandAsset` exposes `allowPartialMatch` and `requiresConfirmation` Inspector fields.
+- `VoskDebugWindow` shows pending command state: intent, reason, filled/unfilled slots, and elapsed time.
+- `VoskPendingCommandTests` — 32 Play Mode tests covering partial match entry, follow-up slot-fill, confirmation flow, cancel vocabulary, timeout behaviours, preemption by new commands, dual partial+confirmation flow, custom vocabulary, and grammar rebuild deferral.
+
+### Changed
+
+- `VoskCommandDefinition` constructor accepts optional `allowPartialMatch` and `requiresConfirmation` parameters. Existing two-parameter constructor is unchanged.
+- `VoskCommandRecogniser.Configure()` and `SetActiveSets()` cancel any active pending command before rebuilding.
+- Grammar generation includes confirm/cancel vocabulary words so VOSK recognises them in grammar mode.
+
 ## [0.14.0] - 2026-04-12
 
 ### Added

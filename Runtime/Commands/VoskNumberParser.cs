@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Converts spoken number-word sequences to integers (digit-by-digit and cardinal)
+// Layer:    Runtime.Commands
+// Owns:     VoskNumberParser (public static class)
+// Depends:  VoskCommandParser (SplitSeparator)
+// ============================================================================
 using System;
 using System.Collections.Generic;
 
@@ -29,7 +35,6 @@ namespace VoskXR.Commands
         public static readonly HashSet<string> DigitVocabulary =
             new HashSet<string>(WordValues.Keys, StringComparer.Ordinal);
 
-        static readonly char[] SplitSeparator = { ' ' };
 
         /// <summary>
         /// Parses a digit-per-word sequence by concatenating single digits.
@@ -42,7 +47,7 @@ namespace VoskXR.Commands
             if (string.IsNullOrWhiteSpace(words))
                 return 0;
 
-            string[] tokens = words.Split(SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
+            string[] tokens = words.Split(VoskCommandParser.SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
             int result = 0;
 
             foreach (string token in tokens)
@@ -67,7 +72,7 @@ namespace VoskXR.Commands
             if (string.IsNullOrWhiteSpace(words))
                 return 0;
 
-            string[] tokens = words.Split(SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
+            string[] tokens = words.Split(VoskCommandParser.SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
 
             int result = 0;
             int current = 0;

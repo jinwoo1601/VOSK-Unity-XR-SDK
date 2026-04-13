@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Editor-only Windows microphone capture via Unity.Microphone and libvosk P/Invoke
+// Layer:    Runtime (UNITY_EDITOR_WIN only)
+// Owns:     EditorMicBackend (internal sealed class)
+// Depends:  Downsampler, Agc, VoskNative, BridgeNative, VoskBridgeErrorCode
+// ============================================================================
 #if UNITY_EDITOR_WIN
 using System;
 using System.Collections.Generic;

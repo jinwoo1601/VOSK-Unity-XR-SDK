@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Immutable command intent definition with phrase patterns and behavioral flags
+// Layer:    Runtime.Commands
+// Owns:     VoskCommandDefinition (public readonly struct)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR.Commands

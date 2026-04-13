@@ -14,7 +14,7 @@ namespace VoskXR.Tests.Runtime
                 "{\"conf\":0.87,\"end\":1.20,\"start\":0.70,\"word\":\"world\"}" +
                 "],\"text\":\"hello world\"}";
 
-            var words = VoskSpeechRecogniser.ParseWordsFromJson(json);
+            var words = VoskJsonParser.ParseWordsFromJson(json);
 
             Assert.AreEqual(2, words.Length);
 
@@ -36,7 +36,7 @@ namespace VoskXR.Tests.Runtime
                 "{\"result\":[{\"conf\":1.000000,\"end\":0.39,\"start\":0.09,\"word\":\"yes\"}]," +
                 "\"text\":\"yes\"}";
 
-            var words = VoskSpeechRecogniser.ParseWordsFromJson(json);
+            var words = VoskJsonParser.ParseWordsFromJson(json);
 
             Assert.AreEqual(1, words.Length);
             Assert.AreEqual("yes", words[0].Text);
@@ -48,7 +48,7 @@ namespace VoskXR.Tests.Runtime
         {
             const string json = "{\"text\":\"\"}";
 
-            var words = VoskSpeechRecogniser.ParseWordsFromJson(json);
+            var words = VoskJsonParser.ParseWordsFromJson(json);
 
             Assert.AreEqual(0, words.Length);
         }
@@ -58,7 +58,7 @@ namespace VoskXR.Tests.Runtime
         {
             const string json = "{\"result\":[],\"text\":\"\"}";
 
-            var words = VoskSpeechRecogniser.ParseWordsFromJson(json);
+            var words = VoskJsonParser.ParseWordsFromJson(json);
 
             Assert.AreEqual(0, words.Length);
         }
@@ -77,7 +77,7 @@ namespace VoskXR.Tests.Runtime
                 "  \"text\" : \"test\"\n" +
                 "}";
 
-            var words = VoskSpeechRecogniser.ParseWordsFromJson(json);
+            var words = VoskJsonParser.ParseWordsFromJson(json);
 
             Assert.AreEqual(1, words.Length);
             Assert.AreEqual("test", words[0].Text);
@@ -91,7 +91,7 @@ namespace VoskXR.Tests.Runtime
                 "{\"result\":[{\"conf\":0.000000,\"end\":0.5,\"start\":0.1,\"word\":\"um\"}]," +
                 "\"text\":\"um\"}";
 
-            var words = VoskSpeechRecogniser.ParseWordsFromJson(json);
+            var words = VoskJsonParser.ParseWordsFromJson(json);
 
             Assert.AreEqual(1, words.Length);
             Assert.AreEqual(0f, words[0].Confidence, 0.001f);

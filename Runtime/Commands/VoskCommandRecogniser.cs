@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  MonoBehaviour facade: speech-to-command pipeline with buffer, debounce, pending, grammar
+// Layer:    Runtime.Commands
+// Owns:     VoskCommandRecogniser (public MonoBehaviour)
+// Depends:  VoskSpeechRecogniser, VoskCommandParser, VoskCommand, VoskCommandDefinition, VoskSlotDefinition, VoskPendingCommand, VoskMatchDiagnostics
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -86,38 +92,31 @@ namespace VoskXR.Commands
 #endif
 
         VoskCommandParser _parser;
-        string _grammarJson;
-        bool _grammarApplied;
+        readonly GrammarManager _grammar = new GrammarManager();
 
-        // Utterance buffer state
-        readonly List<string> _bufferedTexts = new List<string>();
-        readonly List<VoskWord> _bufferedWords = new List<VoskWord>();
-        float _lastResultTime;
-        bool _bufferActive;
+        // Utterance buffer
+        readonly UtteranceBuffer _buffer = new UtteranceBuffer();
 
-        // Per-intent debounce state
-        readonly Dictionary<string, float> _lastFireTime = new Dictionary<string, float>(StringComparer.Ordinal);
+        // Per-intent debounce
+        readonly CommandDebouncer _debouncer = new CommandDebouncer();
 
-        // Command set state
+        // Command set and slot state
         VoskSlotDefinition[] _slots;
-        Dictionary<string, VoskCommandSet> _sets;
-        string[] _activeSetNames = Array.Empty<string>();
         VoskCommandDefinition[] _activeCommands;
-        Dictionary<string, Func<string[]>> _valueProviders;
-        Dictionary<string, VoskCommandDefinition> _commandLookup;
+        readonly CommandSetManager _setManager = new CommandSetManager();
+        readonly DynamicSlotManager _slotManager = new DynamicSlotManager();
 
         // Pending command state
-        VoskPendingCommand? _pendingCommand;
-        bool _grammarRebuildDeferred;
+        readonly PendingCommandHandler _pending = new PendingCommandHandler();
 
         /// <summary>Names of the currently active command sets (snapshot copy).</summary>
-        public string[] ActiveSetNames => (string[])_activeSetNames.Clone();
+        public string[] ActiveSetNames => _setManager.ActiveSetNames;
 
         /// <summary>True if a command is currently in pending state.</summary>
-        public bool HasPendingCommand => _pendingCommand.HasValue;
+        public bool HasPendingCommand => _pending.HasPending;
 
         /// <summary>The currently pending command, or null if none.</summary>
-        public VoskCommand? PendingCommand => _pendingCommand?.Command;
+        public VoskCommand? PendingCommand => _pending.PendingCommand;
 
         /// <summary>
         /// Builds the command parser from the given slot and command definitions.
@@ -129,24 +128,21 @@ namespace VoskXR.Commands
             if (slots == null) throw new ArgumentNullException(nameof(slots));
             if (commands == null) throw new ArgumentNullException(nameof(commands));
 
-            CancelPendingIfActive();
+            InterpretResolution(_pending.Cancel());
 
-            _lastFireTime.Clear();
+            _debouncer.Clear();
             _slots = slots;
-            _sets = null;
-            _activeSetNames = Array.Empty<string>();
+            _setManager.Reset();
             _activeCommands = commands;
-            BuildCommandLookup(commands);
+            _setManager.BuildLookup(commands);
 
-            _parser = new VoskCommandParser(BuildEffectiveSlots(), commands);
-            _grammarJson = VoskCommandParser.GenerateGrammarJson(
-                _slots, commands, GetFollowUpGrammarWords());
-            _grammarApplied = false;
+            _parser = new VoskCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands);
+            _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
             if (!freeSpeechMode && speechRecogniser != null && speechRecogniser.IsModelReady)
             {
-                speechRecogniser.SetGrammar(_grammarJson);
-                _grammarApplied = true;
+                speechRecogniser.SetGrammar(_grammar.CurrentJson);
+                _grammar.IsApplied = true;
             }
         }
 
@@ -159,25 +155,15 @@ namespace VoskXR.Commands
             if (slots == null) throw new ArgumentNullException(nameof(slots));
             if (sets == null) throw new ArgumentNullException(nameof(sets));
 
-            CancelPendingIfActive();
+            InterpretResolution(_pending.Cancel());
 
-            _lastFireTime.Clear();
+            _debouncer.Clear();
             _slots = slots;
-            _sets = new Dictionary<string, VoskCommandSet>(sets.Length, StringComparer.Ordinal);
-
-            for (int i = 0; i < sets.Length; i++)
-            {
-                if (_sets.ContainsKey(sets[i].Name))
-                    throw new ArgumentException($"Duplicate command set name: '{sets[i].Name}'.");
-                _sets[sets[i].Name] = sets[i];
-            }
+            _setManager.Configure(sets);
 
             _parser = null;
-            _grammarJson = null;
-            _grammarApplied = false;
-            _activeSetNames = Array.Empty<string>();
+            _grammar.Reset();
             _activeCommands = null;
-            _commandLookup = null;
         }
 
         /// <summary>
@@ -187,50 +173,16 @@ namespace VoskXR.Commands
         /// </summary>
         public void SetActiveSets(params string[] setNames)
         {
-            if (_sets == null)
+            if (!_setManager.HasSets)
                 throw new InvalidOperationException(
                     "Configure(slots, sets) must be called before SetActiveSets().");
 
-            CancelPendingIfActive();
+            InterpretResolution(_pending.Cancel());
 
-            if (setNames == null)
-                setNames = Array.Empty<string>();
-
-            for (int i = 0; i < setNames.Length; i++)
-            {
-                if (!_sets.ContainsKey(setNames[i]))
-                    throw new ArgumentException(
-                        $"Unknown command set name: '{setNames[i]}'.", nameof(setNames));
-            }
-
-            int total = 0;
-            for (int i = 0; i < setNames.Length; i++)
-                total += _sets[setNames[i]].Commands.Length;
-
-            VoskCommandDefinition[] commands;
-            if (total == 0)
-            {
-                commands = Array.Empty<VoskCommandDefinition>();
-            }
-            else
-            {
-                commands = new VoskCommandDefinition[total];
-                int offset = 0;
-                for (int i = 0; i < setNames.Length; i++)
-                {
-                    var c = _sets[setNames[i]].Commands;
-                    Array.Copy(c, 0, commands, offset, c.Length);
-                    offset += c.Length;
-                }
-            }
-
-            _activeSetNames = setNames.Length > 0
-                ? (string[])setNames.Clone()
-                : Array.Empty<string>();
-
-            _lastFireTime.Clear();
-            RebuildParserAndGrammar(commands);
-            BuildCommandLookup(commands);
+            var commands = _setManager.Activate(setNames);
+            _activeCommands = commands;
+            _debouncer.Clear();
+            RebuildParserAndGrammar();
         }
 
         /// <summary>
@@ -281,7 +233,7 @@ namespace VoskXR.Commands
             Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
                 "FlushPendingBuffer must be called from the Unity main thread.");
 
-            if (_bufferActive)
+            if (_buffer.IsActive)
                 FlushBuffer();
         }
 
@@ -289,7 +241,7 @@ namespace VoskXR.Commands
         /// Cancels the currently pending command, if any. Fires <see cref="OnCommandCancelled"/>.
         /// No-op when no command is pending.
         /// </summary>
-        public void CancelPendingCommand() => CancelPendingIfActive();
+        public void CancelPendingCommand() => InterpretResolution(_pending.Cancel());
 
         // -------- Dynamic slot value providers --------
 
@@ -302,13 +254,7 @@ namespace VoskXR.Commands
         /// </summary>
         public void RegisterSlotValueProvider(string slotName, Func<string[]> valueProvider)
         {
-            if (slotName == null) throw new ArgumentNullException(nameof(slotName));
-            if (valueProvider == null) throw new ArgumentNullException(nameof(valueProvider));
-
-            if (_valueProviders == null)
-                _valueProviders = new Dictionary<string, Func<string[]>>(StringComparer.Ordinal);
-
-            _valueProviders[slotName] = valueProvider;
+            _slotManager.Register(slotName, valueProvider);
         }
 
         /// <summary>
@@ -317,8 +263,7 @@ namespace VoskXR.Commands
         /// </summary>
         public bool UnregisterSlotValueProvider(string slotName)
         {
-            if (slotName == null) throw new ArgumentNullException(nameof(slotName));
-            return _valueProviders != null && _valueProviders.Remove(slotName);
+            return _slotManager.Unregister(slotName);
         }
 
         /// <summary>
@@ -346,7 +291,7 @@ namespace VoskXR.Commands
                 throw new InvalidOperationException(
                     "Configure must be called before RebuildParser().");
 
-            _parser = new VoskCommandParser(BuildEffectiveSlots(), _activeCommands);
+            _parser = new VoskCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands);
         }
 
         /// <summary>
@@ -362,9 +307,9 @@ namespace VoskXR.Commands
                 throw new InvalidOperationException(
                     "Configure must be called before RebuildGrammar().");
 
-            if (_pendingCommand.HasValue)
+            if (_pending.HasPending)
             {
-                _grammarRebuildDeferred = true;
+                _grammar.GrammarRebuildDeferred = true;
                 return;
             }
 
@@ -373,100 +318,18 @@ namespace VoskXR.Commands
 
         void RebuildGrammarInternal()
         {
-            if (_bufferActive)
-            {
-                _bufferedTexts.Clear();
-                _bufferedWords.Clear();
-                _bufferActive = false;
-            }
-
-            _grammarJson = VoskCommandParser.GenerateGrammarJson(
-                _slots, _activeCommands, GetFollowUpGrammarWords());
-            _grammarApplied = false;
-
-            if (freeSpeechMode || speechRecogniser == null || !speechRecogniser.IsModelReady)
-                return;
-
-            bool wasRunning = speechRecogniser.IsRecognising;
-
-            if (wasRunning)
-                speechRecogniser.StopRecognition();
-
-            speechRecogniser.SetGrammar(_grammarJson);
-            _grammarApplied = true;
-
-            if (wasRunning)
-                speechRecogniser.StartRecognition();
+            _buffer.Reset();
+            _grammar.Rebuild(_slots, _activeCommands, GetFollowUpGrammarWords());
+            _grammar.ForceApply(speechRecogniser, freeSpeechMode);
         }
 
         void DrainDeferredGrammarRebuild()
         {
-            if (!_grammarRebuildDeferred)
+            if (!_grammar.GrammarRebuildDeferred)
                 return;
 
-            _grammarRebuildDeferred = false;
+            _grammar.GrammarRebuildDeferred = false;
             RebuildGrammarInternal();
-        }
-
-        VoskSlotDefinition[] BuildEffectiveSlots()
-        {
-            if (_valueProviders == null || _valueProviders.Count == 0)
-                return _slots;
-
-            VoskSlotDefinition[] effective = null;
-
-            for (int i = 0; i < _slots.Length; i++)
-            {
-                var slot = _slots[i];
-
-                if (slot.Type == VoskSlotType.NumberSequence ||
-                    !_valueProviders.TryGetValue(slot.Name, out var provider))
-                {
-                    if (effective != null)
-                        effective[i] = slot;
-                    continue;
-                }
-
-                var activeValues = provider();
-                if (activeValues == null)
-                {
-                    if (effective != null)
-                        effective[i] = slot;
-                    continue;
-                }
-
-                if (effective == null)
-                {
-                    effective = new VoskSlotDefinition[_slots.Length];
-                    Array.Copy(_slots, effective, i);
-                }
-
-                if (activeValues.Length == 0)
-                {
-                    effective[i] = new VoskSlotDefinition(slot.Name, Array.Empty<string>(), null);
-                    continue;
-                }
-
-                var activeSet = new HashSet<string>(activeValues, StringComparer.Ordinal);
-
-                Dictionary<string, string> filteredAliases = null;
-                if (slot.Aliases != null)
-                {
-                    foreach (var kvp in slot.Aliases)
-                    {
-                        if (activeSet.Contains(kvp.Value))
-                        {
-                            if (filteredAliases == null)
-                                filteredAliases = new Dictionary<string, string>(StringComparer.Ordinal);
-                            filteredAliases[kvp.Key] = kvp.Value;
-                        }
-                    }
-                }
-
-                effective[i] = new VoskSlotDefinition(slot.Name, activeValues, filteredAliases);
-            }
-
-            return effective ?? _slots;
         }
 
         // Test-only setters. Production callers configure via the Inspector.
@@ -501,9 +364,8 @@ namespace VoskXR.Commands
             }
         }
 
-        void RebuildParserAndGrammar(VoskCommandDefinition[] commands)
+        void RebuildParserAndGrammar()
         {
-            _activeCommands = commands;
             RebuildParser();
             RebuildGrammarInternal();
         }
@@ -580,33 +442,30 @@ namespace VoskXR.Commands
 
             // Suppress deferred grammar rebuild — grammar will be re-evaluated on next enable/configure.
             // CancelPendingIfActive would drain the rebuild, which is unsafe during disable.
-            _grammarRebuildDeferred = false;
-            CancelPendingIfActive();
+            _grammar.GrammarRebuildDeferred = false;
+            InterpretResolution(_pending.Cancel());
 
             // Flush any pending buffer on disable
-            if (_bufferActive)
+            if (_buffer.IsActive)
                 FlushBuffer();
         }
 
         void Update()
         {
-            if (_bufferActive && Time.time - _lastResultTime >= bufferWindow)
+            if (_buffer.IsActive && _buffer.ShouldFlush(Time.time, bufferWindow))
                 FlushBuffer();
 
-            if (_pendingCommand.HasValue &&
-                Time.time - _pendingCommand.Value.CreatedTime >= pendingTimeout)
+            if (_pending.HasPending &&
+                Time.time - _pending.Current.Value.CreatedTime >= pendingTimeout)
             {
-                HandlePendingTimeout();
+                var resolution = _pending.HandleTimeout(pendingTimeoutBehavior);
+                InterpretResolution(resolution);
             }
         }
 
         void HandleModelReady()
         {
-            if (!freeSpeechMode && !_grammarApplied && _grammarJson != null)
-            {
-                speechRecogniser.SetGrammar(_grammarJson);
-                _grammarApplied = true;
-            }
+            _grammar.ApplyIfReady(speechRecogniser, freeSpeechMode);
         }
 
         void HandleResult(VoskResult result)
@@ -624,64 +483,62 @@ namespace VoskXR.Commands
             }
 
             // Append to buffer and reset timer
-            _bufferedTexts.Add(result.Text);
-            if (result.Words != null && result.Words.Length > 0)
-                _bufferedWords.AddRange(result.Words);
-
-            _lastResultTime = Time.time;
-            _bufferActive = true;
+            _buffer.Append(result.Text, result.Words, Time.time);
         }
 
         void FlushBuffer()
         {
-            _bufferActive = false;
-
-            if (_bufferedTexts.Count == 0)
+            var (text, words) = _buffer.Flush();
+            if (text.Length == 0)
                 return;
-
-            string text = string.Join(" ", _bufferedTexts);
-            var words = _bufferedWords.Count > 0 ? _bufferedWords.ToArray() : Array.Empty<VoskWord>();
-
-            _bufferedTexts.Clear();
-            _bufferedWords.Clear();
 
             ProcessParsedResults(text, words);
         }
 
         void ProcessParsedResults(string text, VoskWord[] words)
         {
-            // ---- Step 1: Confirm/cancel check (before parsing) ----
-            if (_pendingCommand.HasValue && TryHandleConfirmCancel(text))
-            {
-#if UNITY_EDITOR
-                LastMatchDiagnostics = new VoskMatchDiagnostics(
-                    text, words,
-                    new[] { new VoskMatchAttempt(null, null, 0f, minScore, 0f, minConfidence,
-                        null, "handled as confirm/cancel", false) },
-                    Time.frameCount);
-#endif
+            // Split once — shared by pending handlers, diagnostics, and (indirectly) the parser.
+            string[] tokens = text.Split(VoskCommandParser.SplitSeparator,
+                StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0)
                 return;
+
+            Dictionary<string, float> wordConfidence = _pending.HasPending
+                ? VoskCommandParser.BuildWordConfidence(words)
+                : null;
+
+            // ---- Step 1: Confirm/cancel check (before parsing) ----
+            if (_pending.HasPending)
+            {
+                var ccResolution = _pending.TryHandleConfirmCancel(
+                    tokens, confirmVocabulary, cancelVocabulary);
+                if (ccResolution.Outcome != PendingOutcome.None)
+                {
+                    InterpretResolution(ccResolution);
+#if UNITY_EDITOR
+                    LastMatchDiagnostics = new VoskMatchDiagnostics(
+                        text, words,
+                        new[] { new VoskMatchAttempt(null, null, 0f, minScore, 0f, minConfidence,
+                            null, "handled as confirm/cancel", false) },
+                        Time.frameCount);
+#endif
+                    return;
+                }
             }
 
             // ---- Step 2: Follow-up slot-fill attempt (before parsing) ----
             VoskCommand? followUpResult = null;
-            if (_pendingCommand.HasValue)
-                followUpResult = TryFollowUpSlotFill(text, words);
+            if (_pending.HasPending)
+                followUpResult = _pending.TryFollowUpSlotFill(
+                    text, tokens, wordConfidence, _parser);
 
             // ---- Step 3: Normal parse ----
             var results = _parser.Parse(text, words);
 
 #if UNITY_EDITOR
             var parseDiag = _parser.LastParseDiagnostics;
-            string[] diagTokens = text.Split(VoskCommandParser.SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
-            Dictionary<string, float> diagWordConf = null;
-            if (words != null && words.Length > 0)
-            {
-                diagWordConf = new Dictionary<string, float>(words.Length, StringComparer.Ordinal);
-                foreach (var w in words)
-                    if (!string.IsNullOrEmpty(w.Text) && !diagWordConf.ContainsKey(w.Text))
-                        diagWordConf[w.Text] = w.Confidence;
-            }
+            Dictionary<string, float> diagWordConf = wordConfidence
+                ?? VoskCommandParser.BuildWordConfidence(words);
 #endif
 
             // ---- Step 4: Determine if any normal result passes standard thresholds ----
@@ -700,7 +557,8 @@ namespace VoskXR.Commands
             // ---- Step 5: Arbitrate follow-up vs new command ----
             if (followUpResult.HasValue && !hasCompleteNewCommand)
             {
-                CompletePendingCommand(followUpResult.Value);
+                var completeRes = _pending.Complete(followUpResult.Value);
+                InterpretResolution(completeRes);
 #if UNITY_EDITOR
                 LastMatchDiagnostics = new VoskMatchDiagnostics(
                     text, words,
@@ -714,8 +572,8 @@ namespace VoskXR.Commands
             }
 
             // If new complete command preempts a pending, cancel the pending
-            if (_pendingCommand.HasValue && hasCompleteNewCommand)
-                CancelPendingIfActive();
+            if (_pending.HasPending && hasCompleteNewCommand)
+                InterpretResolution(_pending.Cancel());
 
             // ---- Step 6: No parse results ----
             if (results.Length == 0)
@@ -745,17 +603,20 @@ namespace VoskXR.Commands
                 // Below score threshold — check AllowPartialMatch before rejecting
                 if (cmd.Score < minScore)
                 {
-                    if (cmd.Score > 0f && _commandLookup != null &&
-                        _commandLookup.TryGetValue(cmd.Intent, out var partialDef) &&
+                    if (cmd.Score > 0f &&
+                        _setManager.TryLookupCommand(cmd.Intent, out var partialDef) &&
                         partialDef.AllowPartialMatch)
                     {
-                        var unfilled = ComputeUnfilledSlots(cmd, partialDef);
+                        var unfilled = PendingCommandHandler.ComputeUnfilledSlots(cmd, partialDef);
                         if (unfilled.Length > 0)
                         {
-                            EnterPendingState(cmd, partialDef, unfilled,
-                                VoskPendingReason.PartialMatch);
+                            var enterRes = _pending.EnterPending(cmd, partialDef, unfilled,
+                                VoskPendingReason.PartialMatch, Time.time,
+                                out var cancelRes);
+                            InterpretResolution(cancelRes);
+                            InterpretResolution(enterRes);
 #if UNITY_EDITOR
-                            attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                            attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                                 $"entered pending (partial: unfilled [{string.Join(", ", unfilled)}])",
                                 false));
 #endif
@@ -764,7 +625,7 @@ namespace VoskXR.Commands
                     }
 
 #if UNITY_EDITOR
-                    attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                    attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                         $"score {cmd.Score:F2} < minScore {minScore:F2}", false));
 #endif
                     continue;
@@ -774,7 +635,7 @@ namespace VoskXR.Commands
                 if (cmd.Confidence >= 0f && cmd.Confidence < minConfidence)
                 {
 #if UNITY_EDITOR
-                    attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                    attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                         $"confidence {cmd.Confidence:F2} < minConfidence {minConfidence:F2}", false));
 #endif
                     continue;
@@ -782,34 +643,35 @@ namespace VoskXR.Commands
 
                 // Per-intent debounce
                 if (commandCooldown > 0f &&
-                    _lastFireTime.TryGetValue(cmd.Intent, out float lastTime) &&
-                    now - lastTime < commandCooldown)
+                    _debouncer.IsOnCooldown(cmd.Intent, now, commandCooldown))
                 {
 #if UNITY_EDITOR
-                    attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                    attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                         $"debounced ({commandCooldown:F1}s cooldown)", false));
 #endif
                     continue;
                 }
 
                 // Check RequiresConfirmation — enter pending instead of firing
-                if (_commandLookup != null &&
-                    _commandLookup.TryGetValue(cmd.Intent, out var confirmDef) &&
+                if (_setManager.TryLookupCommand(cmd.Intent, out var confirmDef) &&
                     confirmDef.RequiresConfirmation)
                 {
-                    EnterPendingState(cmd, confirmDef, Array.Empty<string>(),
-                        VoskPendingReason.AwaitingConfirmation);
+                    var enterConfRes = _pending.EnterPending(cmd, confirmDef,
+                        Array.Empty<string>(), VoskPendingReason.AwaitingConfirmation, Time.time,
+                        out var cancelConfRes);
+                    InterpretResolution(cancelConfRes);
+                    InterpretResolution(enterConfRes);
 #if UNITY_EDITOR
-                    attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf,
+                    attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                         "entered pending (awaiting confirmation)", false));
 #endif
                     continue;
                 }
 
-                _lastFireTime[cmd.Intent] = now;
+                _debouncer.RecordFire(cmd.Intent, now);
                 accepted.Add(cmd);
 #if UNITY_EDITOR
-                attempts.Add(BuildAttempt(cmd, parseDiag, i, diagTokens, diagWordConf, null, true));
+                attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf, null, true));
 #endif
             }
 
@@ -833,230 +695,34 @@ namespace VoskXR.Commands
                 OnCommandsRecognised.Invoke(accepted.ToArray());
         }
 
-        // -------- Pending command helpers --------
+        // -------- Pending resolution interpreter --------
 
-        bool TryHandleConfirmCancel(string text)
+        void InterpretResolution(PendingResolution resolution)
         {
-            string[] tokens = text.Split(VoskCommandParser.SplitSeparator,
-                StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length == 0)
-                return false;
-
-            string normalized = string.Join(" ", tokens);
-
-            string[] effectiveCancel = cancelVocabulary != null && cancelVocabulary.Length > 0
-                ? cancelVocabulary : VoskFollowUpVocabulary.DefaultCancel;
-            string[] effectiveConfirm = confirmVocabulary != null && confirmVocabulary.Length > 0
-                ? confirmVocabulary : VoskFollowUpVocabulary.DefaultConfirm;
-
-            if (IsVocabularyMatch(normalized, effectiveCancel))
+            switch (resolution.Outcome)
             {
-                CancelPendingIfActive();
-                return true;
-            }
+                case PendingOutcome.None:
+                    return;
 
-            if (IsVocabularyMatch(normalized, effectiveConfirm))
-            {
-                var confirmed = _pendingCommand.Value;
-                _pendingCommand = null;
-                FireConfirmedCommand(confirmed.Command);
-                return true;
-            }
+                case PendingOutcome.Confirmed:
+                    _debouncer.RecordFire(resolution.Command.Intent, Time.time);
+                    OnCommandConfirmed?.Invoke(resolution.Command);
+                    OnCommandRecognised?.Invoke(resolution.Command);
+                    if (OnCommandsRecognised != null)
+                        OnCommandsRecognised.Invoke(new[] { resolution.Command });
+                    DrainDeferredGrammarRebuild();
+                    break;
 
-            return false;
-        }
+                case PendingOutcome.Cancelled:
+                    OnCommandCancelled?.Invoke(resolution.Command);
+                    DrainDeferredGrammarRebuild();
+                    break;
 
-        VoskCommand? TryFollowUpSlotFill(string text, VoskWord[] words)
-        {
-            var pending = _pendingCommand.Value;
-            if (pending.UnfilledSlots == null || pending.UnfilledSlots.Length == 0)
-                return null;
-
-            string[] tokens = text.Split(VoskCommandParser.SplitSeparator,
-                StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length == 0)
-                return null;
-
-            var newSlots = new List<VoskSlotMatch>(pending.Command.Slots);
-            int tokenIdx = 0;
-
-            foreach (string slotName in pending.UnfilledSlots)
-            {
-                // Try each token position (sliding start) for this slot
-                bool found = false;
-                for (int startIdx = tokenIdx; startIdx < tokens.Length; startIdx++)
-                {
-                    if (tokens[startIdx] == VoskCommandParser.UnkToken)
-                        continue;
-
-                    string value = _parser.TryMatchSlotByName(
-                        tokens, startIdx, slotName, out int consumed);
-                    if (value != null)
-                    {
-                        newSlots.Add(new VoskSlotMatch(slotName, value));
-                        tokenIdx = startIdx + consumed;
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found)
+                case PendingOutcome.Entered:
+                case PendingOutcome.ReEnteredPending:
+                    OnCommandPending?.Invoke(resolution.Command);
                     break;
             }
-
-            // Must have filled at least one new slot
-            if (newSlots.Count == pending.Command.Slots.Length)
-                return null;
-
-            // Compute updated confidence from follow-up words
-            Dictionary<string, float> wordConfidence = null;
-            if (words != null && words.Length > 0)
-            {
-                wordConfidence = new Dictionary<string, float>(words.Length, StringComparer.Ordinal);
-                foreach (var w in words)
-                    if (!string.IsNullOrEmpty(w.Text) && !wordConfidence.ContainsKey(w.Text))
-                        wordConfidence[w.Text] = w.Confidence;
-            }
-            float followUpConf = VoskCommandParser.ComputeConfidence(
-                tokens, 0, tokens.Length, wordConfidence);
-
-            float mergedConfidence = pending.Command.Confidence >= 0f && followUpConf >= 0f
-                ? Math.Min(pending.Command.Confidence, followUpConf)
-                : pending.Command.Confidence >= 0f ? pending.Command.Confidence : followUpConf;
-
-            return new VoskCommand(
-                pending.Command.Intent,
-                newSlots.ToArray(),
-                mergedConfidence,
-                pending.Command.Score,
-                pending.Command.RawText + " " + text,
-                null,
-                pending.Command.MatchedPatternIndex);
-        }
-
-        void EnterPendingState(VoskCommand command, VoskCommandDefinition definition,
-            string[] unfilledSlots, VoskPendingReason reason)
-        {
-            CancelPendingIfActive();
-
-            _pendingCommand = new VoskPendingCommand
-            {
-                Command = command,
-                Definition = definition,
-                UnfilledSlots = unfilledSlots,
-                Reason = reason,
-                CreatedTime = Time.time,
-            };
-
-            OnCommandPending?.Invoke(command);
-        }
-
-        void CompletePendingCommand(VoskCommand completed)
-        {
-            var pending = _pendingCommand.Value;
-            _pendingCommand = null;
-
-            // If the definition also requires confirmation and we were pending
-            // for partial match, re-enter pending for confirmation
-            if (pending.Definition.RequiresConfirmation &&
-                pending.Reason == VoskPendingReason.PartialMatch)
-            {
-                _pendingCommand = new VoskPendingCommand
-                {
-                    Command = completed,
-                    Definition = pending.Definition,
-                    UnfilledSlots = Array.Empty<string>(),
-                    Reason = VoskPendingReason.AwaitingConfirmation,
-                    CreatedTime = Time.time,
-                };
-                OnCommandPending?.Invoke(completed);
-                return;
-            }
-
-            FireConfirmedCommand(completed);
-        }
-
-        void HandlePendingTimeout()
-        {
-            var pending = _pendingCommand.Value;
-            _pendingCommand = null;
-
-            if (pendingTimeoutBehavior == VoskPendingTimeoutBehavior.FireAsIs)
-            {
-                FireConfirmedCommand(pending.Command);
-            }
-            else
-            {
-                OnCommandCancelled?.Invoke(pending.Command);
-                DrainDeferredGrammarRebuild();
-            }
-        }
-
-        void FireConfirmedCommand(VoskCommand command)
-        {
-            _lastFireTime[command.Intent] = Time.time;
-            OnCommandConfirmed?.Invoke(command);
-            OnCommandRecognised?.Invoke(command);
-            if (OnCommandsRecognised != null)
-                OnCommandsRecognised.Invoke(new[] { command });
-            DrainDeferredGrammarRebuild();
-        }
-
-        void CancelPendingIfActive()
-        {
-            if (!_pendingCommand.HasValue)
-                return;
-
-            var cancelled = _pendingCommand.Value;
-            _pendingCommand = null;
-            OnCommandCancelled?.Invoke(cancelled.Command);
-            DrainDeferredGrammarRebuild();
-        }
-
-        static bool IsVocabularyMatch(string normalized, string[] vocabulary)
-        {
-            for (int i = 0; i < vocabulary.Length; i++)
-            {
-                if (string.Equals(normalized, vocabulary[i], StringComparison.Ordinal))
-                    return true;
-            }
-            return false;
-        }
-
-        string[] ComputeUnfilledSlots(VoskCommand cmd, VoskCommandDefinition def)
-        {
-            if (cmd.MatchedPatternIndex < 0 ||
-                cmd.MatchedPatternIndex >= def.Patterns.Length)
-                return Array.Empty<string>();
-
-            var pattern = def.Patterns[cmd.MatchedPatternIndex];
-            List<string> unfilled = null;
-
-            foreach (string element in pattern)
-            {
-                string slotName = VoskCommandParser.ExtractSlotName(element);
-                if (slotName != null && !VoskCommandParser.IsOptionalSlot(element)
-                    && !cmd.HasSlot(slotName))
-                {
-                    if (unfilled == null)
-                        unfilled = new List<string>();
-                    unfilled.Add(slotName);
-                }
-            }
-
-            return unfilled?.ToArray() ?? Array.Empty<string>();
-        }
-
-        void BuildCommandLookup(VoskCommandDefinition[] commands)
-        {
-            if (_commandLookup == null)
-                _commandLookup = new Dictionary<string, VoskCommandDefinition>(
-                    commands.Length, StringComparer.Ordinal);
-            else
-                _commandLookup.Clear();
-
-            for (int i = 0; i < commands.Length; i++)
-                _commandLookup[commands[i].Intent] = commands[i];
         }
 
         string[] GetFollowUpGrammarWords()
@@ -1076,7 +742,7 @@ namespace VoskXR.Commands
             return result;
         }
 
-        // Test-only setters
+        // Test-only setters/getters
         internal float PendingTimeout { set => pendingTimeout = value; }
         internal VoskPendingTimeoutBehavior PendingTimeoutBehavior
         {
@@ -1084,9 +750,20 @@ namespace VoskXR.Commands
         }
         internal string[] ConfirmVocabulary { set => confirmVocabulary = value; }
         internal string[] CancelVocabulary { set => cancelVocabulary = value; }
+        internal string TestGrammarJson => _grammar.CurrentJson;
+        internal bool TestGrammarRebuildDeferred => _grammar.GrammarRebuildDeferred;
+
+        internal void TestForceTimeoutNow()
+        {
+            if (!_pending.HasPending) return;
+            var current = _pending.Current.Value;
+            current.CreatedTime = -1000f;
+            _pending.ForceSetForTest(current);
+            SendMessage("Update", SendMessageOptions.DontRequireReceiver);
+        }
 
 #if UNITY_EDITOR
-        internal VoskPendingCommand? EditorPendingCommand => _pendingCommand;
+        internal VoskPendingCommand? EditorPendingCommand => _pending.Current;
 
         void HandlePartialResult(string text)
         {

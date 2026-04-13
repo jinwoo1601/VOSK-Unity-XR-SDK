@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Named group of command definitions for runtime activation/deactivation
+// Layer:    Runtime.Commands
+// Owns:     VoskCommandSet (public readonly struct)
+// Depends:  VoskCommandDefinition
+// ============================================================================
 using System;
 
 namespace VoskXR.Commands

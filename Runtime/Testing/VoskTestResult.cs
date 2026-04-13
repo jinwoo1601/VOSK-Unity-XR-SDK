@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Single test result and aggregated batch results with pass/fail summary
+// Layer:    Runtime.Testing
+// Owns:     VoskTestResult (public class), VoskBatchResults (public class)
+// Depends:  VoskTestCase, VoskSlotMatch, VoskMatchDiagnostics
+// ============================================================================
 using System;
 using System.Text;
 using VoskXR.Commands;

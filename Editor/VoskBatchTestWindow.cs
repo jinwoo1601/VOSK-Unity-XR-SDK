@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  IMGUI EditorWindow for running batch test suites with results table and CSV export
+// Layer:    Editor
+// Owns:     VoskBatchTestWindow (public EditorWindow)
+// Depends:  VoskBatchTestRunner, VoskTestSuiteAsset, VoskSlotAsset, VoskCommandSetAsset, VoskTestResult
+// ============================================================================
 using System;
 using System.IO;
 using UnityEditor;
@@ -435,12 +441,6 @@ namespace VoskXR.Editor
             return value.Length <= maxLen ? value : value.Substring(0, maxLen - 3) + "...";
         }
 
-        static void DrawHorizontalSeparator()
-        {
-            EditorGUILayout.Space(1);
-            var rect = EditorGUILayout.GetControlRect(false, 1);
-            EditorGUI.DrawRect(rect, new Color(0.3f, 0.3f, 0.3f));
-            EditorGUILayout.Space(1);
-        }
+        static void DrawHorizontalSeparator() => VoskEditorGUI.DrawHorizontalSeparator();
     }
 }

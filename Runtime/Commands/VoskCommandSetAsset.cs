@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  ScriptableObject grouping VoskCommandAssets into a named set
+// Layer:    Runtime.Commands
+// Owns:     VoskCommandSetAsset (public ScriptableObject)
+// Depends:  VoskCommandAsset, VoskCommandSet
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEngine;

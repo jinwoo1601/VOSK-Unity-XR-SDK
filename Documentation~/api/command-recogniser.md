@@ -17,12 +17,18 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `slotAssets` | `VoskSlotAsset[]` | -- | Slot definitions for Inspector authoring |
 | `commandSetAssets` | `VoskCommandSetAsset[]` | -- | Command set definitions for Inspector authoring |
 | `initialActiveSetNames` | `string[]` | -- | Which sets to activate on startup when using Inspector authoring |
+| `pendingTimeout` | `float` | `5.0` | Maximum seconds a pending command waits for follow-up speech before timing out |
+| `pendingTimeoutBehavior` | `VoskPendingTimeoutBehavior` | `Cancel` | What happens on timeout: `Cancel` discards the command, `FireAsIs` fires it with whatever slots were filled |
+| `confirmVocabulary` | `string[]` | -- | Phrases that confirm a pending command. Empty = defaults ("confirm", "affirmative", "yes", "go ahead", "do it"). |
+| `cancelVocabulary` | `string[]` | -- | Phrases that cancel a pending command. Empty = defaults ("cancel", "abort", "negative", "belay that", "never mind"). |
 
 ## Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `ActiveSetNames` | `string[]` | Names of currently active command sets (returns a snapshot copy) |
+| `HasPendingCommand` | `bool` | True if a command is currently in pending state (partial match or awaiting confirmation) |
+| `PendingCommand` | `VoskCommand?` | The currently pending command, or null if none |
 
 ## Events
 
@@ -31,6 +37,9 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `OnCommandRecognised` | `Action<VoskCommand>` | Fired for each successfully recognised command that passes threshold and debounce filters |
 | `OnCommandsRecognised` | `Action<VoskCommand[]>` | Fired with the full batch of commands extracted from a single utterance (after sequential extraction) |
 | `OnUnrecognisedSpeech` | `Action<string>` | Fired when speech does not produce any accepted command -- either no pattern matched, or all matches were rejected by score, confidence, or debounce thresholds. The `string` parameter is the full buffered transcript. See [Unrecognised Speech](../command-recognition.md#unrecognised-speech). |
+| `OnCommandPending` | `Action<VoskCommand>` | Fired when a command enters pending state (partial match with unfilled required slots, or awaiting explicit confirmation). See [Pending Commands](../command-recognition.md#pending-commands). |
+| `OnCommandConfirmed` | `Action<VoskCommand>` | Fired when a pending command is confirmed by follow-up speech or explicit confirmation. Also fires `OnCommandRecognised` and `OnCommandsRecognised`. |
+| `OnCommandCancelled` | `Action<VoskCommand>` | Fired when a pending command is cancelled by timeout, explicit cancel vocabulary, or preemption by a new complete command. |
 
 ## Methods
 
@@ -46,11 +55,12 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `UnregisterSlotValueProvider` | `(string slotName)` | Removes a value provider. The slot reverts to its full value set on the next parser rebuild. Returns `true` if a provider was removed. |
 | `NotifySlotChanged` | `()` | Rebuilds the parser to reflect current value-provider results. Does not touch the grammar or VOSK recogniser. No-op if `Configure` has not been called. Performs a full parser rebuild -- call only when values have actually changed. |
 | `RebuildParser` | `()` | Rebuilds only the parser from current effective slots and active commands. Grammar and VOSK recogniser are untouched. Throws if `Configure` has not been called. |
-| `RebuildGrammar` | `()` | Rebuilds and re-applies the VOSK grammar from the full universe of slot values. Performs stop/set grammar/start when recognition is running. Clears the utterance buffer. Throws if `Configure` has not been called. |
+| `RebuildGrammar` | `()` | Rebuilds and re-applies the VOSK grammar from the full universe of slot values. Performs stop/set grammar/start when recognition is running. Clears the utterance buffer. Defers if a command is pending. Throws if `Configure` has not been called. |
+| `CancelPendingCommand` | `()` | Cancels the currently pending command, firing `OnCommandCancelled`. No-op when no command is pending. |
 
 ## See Also
 
-- [Command Recognition](../command-recognition.md) -- patterns, slots, matching concepts, and dynamic slot filtering
+- [Command Recognition](../command-recognition.md) -- patterns, slots, matching concepts, dynamic slot filtering, and pending commands
 - [Command Sets](../command-sets.md) -- mode-specific grammar switching
 - [Inspector Authoring](../inspector-authoring.md) -- zero-code setup via ScriptableObjects
 - [Push-to-Talk](../push-to-talk.md) -- buffer flush on release

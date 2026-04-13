@@ -31,11 +31,17 @@ Sequential Extraction
 Threshold Filter
     |  rejects commands below minScore or minConfidence
     |  confidence of -1 (no data) bypasses the minConfidence check
+    |  partial matches with allowPartialMatch enter pending state
+    v
+Pending Command Check
+    |  commands with requiresConfirmation enter pending state
+    |  follow-up speech fills missing slots or confirms/cancels
     v
 Debounce
     |  suppresses duplicate intents within commandCooldown seconds
     v
 Events: OnCommandRecognised, OnCommandsRecognised, OnUnrecognisedSpeech
+        OnCommandPending, OnCommandConfirmed, OnCommandCancelled
 ```
 
 Each stage is configurable. The most common tuning points are `bufferWindow` (how long to wait for split speech), `minScore` / `minConfidence` (quality thresholds), and `commandCooldown` (debounce window).
@@ -230,6 +236,72 @@ commandRecogniser.commandCooldown = 0.3f; // Default: 0.3s
 ```
 
 If the user says the same command twice quickly (or VOSK produces overlapping results), the second firing is suppressed.
+
+---
+
+## Pending Commands
+
+Sometimes a command partially matches (some required slots are unfilled) or needs explicit confirmation before a high-consequence action fires. The pending command system handles both cases by holding the command in a "pending" state and listening for follow-up speech.
+
+### Partial Match with Follow-Up Slot-Fill
+
+Set `allowPartialMatch: true` on a command definition to let it enter pending state when matched with unfilled required slots, instead of being rejected by the score threshold.
+
+```csharp
+var launchCmd = new VoskCommandDefinition("launch_weapon",
+    new[] { new[] { "launch", "{weapon}", "target", "{target}" } },
+    allowPartialMatch: true);
+```
+
+If the user says "launch missiles" without specifying a target, the command enters pending state and `OnCommandPending` fires. The system then listens for follow-up speech. If the user says "hotel one" within the `pendingTimeout` window, the target slot is filled and the command fires normally via `OnCommandConfirmed` and `OnCommandRecognised`.
+
+```csharp
+commandRecogniser.OnCommandPending += cmd =>
+    Debug.Log($"Waiting for: {cmd.Intent}");
+
+commandRecogniser.OnCommandConfirmed += cmd =>
+    Debug.Log($"Confirmed: {cmd.Intent} target={cmd.GetSlot("target")}");
+
+commandRecogniser.OnCommandCancelled += cmd =>
+    Debug.Log($"Cancelled: {cmd.Intent}");
+```
+
+### Explicit Confirmation
+
+Set `requiresConfirmation: true` to require the user to say a confirmation phrase before the command fires, even when fully matched.
+
+```csharp
+var selfDestruct = new VoskCommandDefinition("self_destruct",
+    new[] { new[] { "self", "destruct" } },
+    requiresConfirmation: true);
+```
+
+After saying "self destruct", the command enters pending state. The user must say "confirm" (or another confirm phrase) to fire it, or "cancel" to discard it.
+
+Default confirm vocabulary: "confirm", "affirmative", "yes", "go ahead", "do it". Default cancel vocabulary: "cancel", "abort", "negative", "belay that", "never mind". Override these with the `confirmVocabulary` and `cancelVocabulary` Inspector arrays on `VoskCommandRecogniser`.
+
+### Combined Partial + Confirmation
+
+A command with both `allowPartialMatch` and `requiresConfirmation` goes through two pending stages: first, follow-up speech fills missing slots; then, the user confirms before the command fires.
+
+### Timeout Behaviour
+
+Configure `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` on `VoskCommandRecogniser`:
+
+- **Cancel** (default) -- the pending command is discarded and `OnCommandCancelled` fires.
+- **FireAsIs** -- the pending command fires with whatever slots were filled, even if some are still missing.
+
+### Preemption
+
+If a new complete command is recognised while a command is pending, the pending command is cancelled and the new command fires normally. This prevents stale pending commands from blocking normal operation.
+
+### Grammar Integration
+
+Confirm and cancel vocabulary words are automatically included in the VOSK grammar JSON, so they are recognised reliably in grammar mode. Custom vocabulary phrases are also merged into the grammar.
+
+### Programmatic Control
+
+Call `CancelPendingCommand()` to cancel the pending command from code (e.g. on a scene transition or mode switch). Check `HasPendingCommand` and `PendingCommand` to inspect the current pending state.
 
 ---
 

@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  IMGUI EditorWindow showing live command recognition diagnostics in Play Mode
+// Layer:    Editor
+// Owns:     VoskDebugWindow (public EditorWindow)
+// Depends:  VoskSpeechRecogniser, VoskCommandRecogniser, VoskMatchDiagnostics, VoskResult
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEditor;
@@ -548,21 +554,9 @@ namespace VoskXR.Editor
 
         // ─── Helpers ────────────────────────────────────────────────────
 
-        static void DrawSectionHeader(string title)
-        {
-            EditorGUILayout.Space(2);
-            var rect = EditorGUILayout.GetControlRect(false, 1);
-            EditorGUI.DrawRect(rect, new Color(0.3f, 0.3f, 0.3f));
-            EditorGUILayout.LabelField(title, EditorStyles.miniBoldLabel);
-        }
+        static void DrawSectionHeader(string title) => VoskEditorGUI.DrawSectionHeader(title);
 
-        static void DrawHorizontalSeparator()
-        {
-            EditorGUILayout.Space(2);
-            var rect = EditorGUILayout.GetControlRect(false, 1);
-            EditorGUI.DrawRect(rect, new Color(0.3f, 0.3f, 0.3f));
-            EditorGUILayout.Space(2);
-        }
+        static void DrawHorizontalSeparator() => VoskEditorGUI.DrawHorizontalSeparator();
 
         void DrawVerticalSeparator()
         {

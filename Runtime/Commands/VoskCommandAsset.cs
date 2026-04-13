@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  ScriptableObject for Inspector-authored command definitions
+// Layer:    Runtime.Commands
+// Owns:     VoskCommandAsset (public ScriptableObject)
+// Depends:  VoskCommandDefinition, VoskCommandParser (SplitSeparator)
+// ============================================================================
 using System;
 using UnityEngine;
 
@@ -12,8 +18,6 @@ namespace VoskXR.Commands
     [CreateAssetMenu(menuName = "VOSK XR/Command Definition")]
     public class VoskCommandAsset : ScriptableObject
     {
-        static readonly char[] SplitSeparator = { ' ' };
-
         public string intent;
 
         [Tooltip("Each element is one pattern. Tokens separated by spaces. " +
@@ -43,7 +47,7 @@ namespace VoskXR.Commands
             {
                 patternArrays[i] = string.IsNullOrEmpty(patterns[i])
                     ? Array.Empty<string>()
-                    : patterns[i].Split(SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
+                    : patterns[i].Split(VoskCommandParser.SplitSeparator, StringSplitOptions.RemoveEmptyEntries);
             }
 
             return new VoskCommandDefinition(intent, patternArrays,

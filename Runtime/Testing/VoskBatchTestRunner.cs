@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Feeds test cases through VoskCommandParser with threshold filtering, produces results matrix
+// Layer:    Runtime.Testing
+// Owns:     VoskBatchTestRunner (public class)
+// Depends:  VoskCommandParser, VoskSlotDefinition, VoskCommandDefinition, VoskCommandSet, VoskTestCase, VoskTestResult, VoskSpeechRecogniser
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using System.Text;

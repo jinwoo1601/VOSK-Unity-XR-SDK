@@ -20,7 +20,7 @@ namespace VoskXR.Tests.Runtime
                 "\"text\":\"yellow world\"}" +
                 "]}";
 
-            var alts = VoskSpeechRecogniser.ParseAlternativesFromJson(json);
+            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(2, alts.Length);
 
@@ -47,7 +47,7 @@ namespace VoskXR.Tests.Runtime
                 "\"text\":\"yes\"}" +
                 "]}";
 
-            var alts = VoskSpeechRecogniser.ParseAlternativesFromJson(json);
+            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(1, alts.Length);
             Assert.AreEqual("yes", alts[0].Text);
@@ -61,7 +61,7 @@ namespace VoskXR.Tests.Runtime
                 "{\"result\":[{\"conf\":0.9,\"end\":0.5,\"start\":0.1,\"word\":\"hello\"}]," +
                 "\"text\":\"hello\"}";
 
-            var alts = VoskSpeechRecogniser.ParseAlternativesFromJson(json);
+            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(0, alts.Length);
         }
@@ -74,7 +74,7 @@ namespace VoskXR.Tests.Runtime
                 "{\"confidence\":100.0,\"text\":\"hello\"}" +
                 "]}";
 
-            var alts = VoskSpeechRecogniser.ParseAlternativesFromJson(json);
+            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(1, alts.Length);
             Assert.AreEqual("hello", alts[0].Text);
@@ -98,7 +98,7 @@ namespace VoskXR.Tests.Runtime
                 "    }]\n" +
                 "}";
 
-            var alts = VoskSpeechRecogniser.ParseAlternativesFromJson(json);
+            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(1, alts.Length);
             Assert.AreEqual("test", alts[0].Text);

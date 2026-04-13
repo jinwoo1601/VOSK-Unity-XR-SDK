@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  P/Invoke bindings for libvosk.dll (Windows Editor desktop build)
+// Layer:    Runtime.Native (UNITY_EDITOR_WIN only)
+// Owns:     VoskNative (internal static class)
+// Depends:  (none)
+// ============================================================================
 #if UNITY_EDITOR_WIN
 using System;
 using System.Runtime.InteropServices;

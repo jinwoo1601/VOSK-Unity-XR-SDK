@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Pure C# pattern matcher: scores tokenized VOSK output against command patterns
+// Layer:    Runtime.Commands
+// Owns:     VoskCommandParser (internal class)
+// Depends:  VoskSlotDefinition, VoskCommandDefinition, VoskSlotMatch, VoskCommand, VoskCommandResult, VoskNumberParser
+// ============================================================================
 using System;
 using System.Collections.Generic;
 
@@ -205,16 +211,7 @@ namespace VoskXR.Commands
                 return Array.Empty<VoskCommandResult>();
             }
 
-            Dictionary<string, float> wordConfidence = null;
-            if (words != null && words.Length > 0)
-            {
-                wordConfidence = new Dictionary<string, float>(words.Length, StringComparer.Ordinal);
-                foreach (var w in words)
-                {
-                    if (!string.IsNullOrEmpty(w.Text) && !wordConfidence.ContainsKey(w.Text))
-                        wordConfidence[w.Text] = w.Confidence;
-                }
-            }
+            Dictionary<string, float> wordConfidence = BuildWordConfidence(words);
 
             var results = new List<VoskCommandResult>();
             int searchStart = 0;
@@ -646,6 +643,22 @@ namespace VoskXR.Commands
                     _slots[slotIdx].MinWords, _slots[slotIdx].MaxWords, out consumed);
 
             return TryMatchSlot(tokens, startIdx, slotIdx, out consumed);
+        }
+
+        /// <summary>
+        /// Builds a word → confidence lookup from a <see cref="VoskWord"/> array.
+        /// Returns null when <paramref name="words"/> is null or empty.
+        /// </summary>
+        internal static Dictionary<string, float> BuildWordConfidence(VoskWord[] words)
+        {
+            if (words == null || words.Length == 0)
+                return null;
+
+            var d = new Dictionary<string, float>(words.Length, StringComparer.Ordinal);
+            foreach (var w in words)
+                if (!string.IsNullOrEmpty(w.Text) && !d.ContainsKey(w.Text))
+                    d[w.Text] = w.Confidence;
+            return d;
         }
 
         internal static float ComputeConfidence(string[] tokens, int startIdx, int endIdx,

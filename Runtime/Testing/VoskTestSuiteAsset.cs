@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  ScriptableObject wrapping a list of test cases with JSON import/export
+// Layer:    Runtime.Testing
+// Owns:     VoskTestSuiteAsset (public ScriptableObject)
+// Depends:  VoskTestCase
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEngine;

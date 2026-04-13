@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Data types and vocabulary for the pending command state machine
+// Layer:    Runtime.Commands
+// Owns:     VoskPendingTimeoutBehavior (public enum), VoskPendingReason (internal enum), VoskPendingCommand (internal struct), VoskFollowUpVocabulary (internal static)
+// Depends:  VoskCommand, VoskCommandDefinition
+// ============================================================================
 using System;
 
 namespace VoskXR.Commands

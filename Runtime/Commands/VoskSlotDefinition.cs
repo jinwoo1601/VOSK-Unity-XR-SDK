@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Immutable slot definition (enumerated values + aliases, or number sequence)
+// Layer:    Runtime.Commands
+// Owns:     VoskSlotDefinition (public readonly struct)
+// Depends:  VoskSlotType
+// ============================================================================
 using System;
 using System.Collections.Generic;
 

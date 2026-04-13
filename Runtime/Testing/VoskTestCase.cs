@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Test case data: input text, expected intent/slots, simulated word confidence
+// Layer:    Runtime.Testing
+// Owns:     VoskTestCase (public class), ExpectedSlot (public struct)
+// Depends:  (none)
+// ============================================================================
 using System;
 using UnityEngine;
 

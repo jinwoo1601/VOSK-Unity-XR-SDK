@@ -14,6 +14,8 @@ Declares a command pattern with an intent name and one or more token arrays.
 |-------|------|-------------|
 | `Intent` | `string` | The intent name (e.g. `"launch_weapon"`) |
 | `Patterns` | `string[][]` | One or more token arrays. Each token is a literal word, `{slotName}`, or `{?slotName}` (optional). |
+| `AllowPartialMatch` | `bool` | When true, a match with unfilled required slots enters pending state instead of being rejected, allowing follow-up speech to fill the gaps. Default: `false`. |
+| `RequiresConfirmation` | `bool` | When true, a fully-matched command enters pending state awaiting explicit confirmation before firing. Default: `false`. |
 
 ### Examples
 
@@ -26,6 +28,11 @@ new VoskCommandDefinition("launch_weapon", new[] {
     new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
     new[] { "fire", "{weapon}", "at", "{target}" },
 })
+
+// Partial match + confirmation
+new VoskCommandDefinition("launch_weapon", new[] {
+    new[] { "launch", "{weapon}", "target", "{target}" },
+}, allowPartialMatch: true, requiresConfirmation: true)
 ```
 
 ## VoskSlotDefinition

@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Data structs for speech recognition results (word, alternative, result)
+// Layer:    Runtime
+// Owns:     VoskWord, VoskAlternative, VoskResult (public readonly structs)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR

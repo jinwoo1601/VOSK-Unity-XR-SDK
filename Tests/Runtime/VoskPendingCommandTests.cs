@@ -416,17 +416,12 @@ namespace VoskXR.Tests.Runtime
             _recogniser.InjectText("launch missiles target hotel one");
             Assert.IsTrue(_recogniser.HasPendingCommand);
 
-            // Use reflection to read _grammarJson before and after
-            var field = typeof(VoskCommandRecogniser)
-                .GetField("_grammarJson",
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance);
-            string grammarBefore = (string)field.GetValue(_recogniser);
+            string grammarBefore = _recogniser.TestGrammarJson;
 
             // This should be deferred
             _recogniser.RebuildGrammar();
 
-            string grammarDuring = (string)field.GetValue(_recogniser);
+            string grammarDuring = _recogniser.TestGrammarJson;
             Assert.AreEqual(grammarBefore, grammarDuring,
                 "Grammar should not change during pending state");
         }
@@ -451,17 +446,12 @@ namespace VoskXR.Tests.Runtime
             _recogniser.InjectText("launch missiles target hotel one");
             Assert.IsTrue(_recogniser.HasPendingCommand);
 
-            var field = typeof(VoskCommandRecogniser)
-                .GetField("_grammarRebuildDeferred",
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance);
-
             _recogniser.RebuildGrammar(); // Deferred
-            Assert.IsTrue((bool)field.GetValue(_recogniser), "Should be deferred");
+            Assert.IsTrue(_recogniser.TestGrammarRebuildDeferred, "Should be deferred");
 
             _recogniser.InjectText("confirm"); // Resolves pending
 
-            Assert.IsFalse((bool)field.GetValue(_recogniser),
+            Assert.IsFalse(_recogniser.TestGrammarRebuildDeferred,
                 "Deferred flag should be cleared after pending resolves");
         }
 
@@ -688,23 +678,7 @@ namespace VoskXR.Tests.Runtime
 
         void ForceTimeoutNow()
         {
-            // Use reflection to set CreatedTime far in the past
-            var pendingField = typeof(VoskCommandRecogniser)
-                .GetField("_pendingCommand",
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance);
-
-            var nullablePending = (VoskPendingCommand?)pendingField.GetValue(_recogniser);
-            if (!nullablePending.HasValue)
-                return;
-
-            var pending = nullablePending.Value;
-            pending.CreatedTime = -1000f; // Far in the past
-            pendingField.SetValue(_recogniser, (VoskPendingCommand?)pending);
-
-            // Manually trigger Update check
-            // Since Update() runs in MonoBehaviour lifecycle, we use SendMessage
-            _recogniser.SendMessage("Update", SendMessageOptions.DontRequireReceiver);
+            _recogniser.TestForceTimeoutNow();
         }
     }
 }

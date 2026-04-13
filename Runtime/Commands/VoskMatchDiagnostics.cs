@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Editor-only diagnostic structs capturing per-utterance match attempts
+// Layer:    Runtime.Commands (UNITY_EDITOR only)
+// Owns:     VoskMatchDiagnostics, VoskMatchAttempt, VoskDiagnosticSlotMatch (internal readonly structs)
+// Depends:  VoskWord
+// ============================================================================
 #if UNITY_EDITOR
 using System;
 

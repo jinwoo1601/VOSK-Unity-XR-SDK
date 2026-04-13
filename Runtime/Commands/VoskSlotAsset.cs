@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  ScriptableObject for Inspector-authored slot definitions
+// Layer:    Runtime.Commands
+// Owns:     VoskSlotAsset (public ScriptableObject), AliasEntry (public struct)
+// Depends:  VoskSlotDefinition, VoskSlotType
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEngine;

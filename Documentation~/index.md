@@ -7,7 +7,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 ## Getting Started
 
 - [Getting Started](getting-started.md) -- Installation, model setup, quick start examples, and the recognition lifecycle
-- [Command Recognition](command-recognition.md) -- How utterances become commands: the full parsing pipeline from audio to events
+- [Command Recognition](command-recognition.md) -- How utterances become commands: the full parsing pipeline from audio to events, including pending commands
 
 ## Guides
 
