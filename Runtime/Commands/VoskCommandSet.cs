@@ -8,10 +8,6 @@ using System;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// A named group of command definitions that can be activated or deactivated
-    /// at runtime via <see cref="VoskCommandRecogniser.SetActiveSets"/>.
-    /// </summary>
     public readonly struct VoskCommandSet
     {
         public string Name { get; }

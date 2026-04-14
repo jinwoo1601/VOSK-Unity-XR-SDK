@@ -14,21 +14,6 @@ using VoskXR.Native;
 
 namespace VoskXR
 {
-    /// <summary>
-    /// Editor-only live microphone backend for the Windows Unity Editor.
-    ///
-    /// Captures audio via <see cref="UnityEngine.Microphone"/>, runs it through
-    /// the C# ports of the existing downsampler and AGC, and feeds the resulting
-    /// 16 kHz int16 PCM directly to <c>libvosk.dll</c> via P/Invoke. Produces the
-    /// same JSON result strings as the Android native bridge, so the result-drain
-    /// code in <see cref="VoskSpeechRecogniser"/> can share its parser helpers
-    /// between the two paths.
-    ///
-    /// Single-threaded by design — every method on this class must be called
-    /// from the Unity main thread. The only exception is the background
-    /// <c>Task.Run</c> wrapped around the blocking <c>vosk_model_new</c> call
-    /// inside <see cref="InitialiseAsync"/>.
-    /// </summary>
     internal sealed class EditorMicBackend
     {
         const int CaptureLengthSeconds = 5;
@@ -311,11 +296,6 @@ namespace VoskXR
             IsInitialised = false;
         }
 
-        /// <summary>
-        /// Pulls new microphone samples, runs them through downsample → AGC →
-        /// int16 → VOSK, and enqueues any resulting JSON for the main Update()
-        /// loop to drain via <see cref="TryDequeueResult"/>.
-        /// </summary>
         internal void Tick(Action<VoskBridgeErrorCode, string> fireError)
         {
             if (!IsRunning || _clip == null) return;

@@ -10,12 +10,6 @@ using UnityEngine;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// Subscribes to <see cref="VoskSpeechRecogniser.OnResult"/> and parses
-    /// recognised speech into structured <see cref="VoskCommand"/> events.
-    /// Supports utterance buffering for split commands, sequential command
-    /// extraction, and per-intent debounce.
-    /// </summary>
     [AddComponentMenu("VOSK XR/Command Recogniser")]
     public class VoskCommandRecogniser : MonoBehaviour
     {
@@ -71,23 +65,15 @@ namespace VoskXR.Commands
         public event Action<VoskCommand[]> OnCommandsRecognised;
         public event Action<string> OnUnrecognisedSpeech;
 
-        /// <summary>Fires when a command enters pending state (partial match or awaiting confirmation).</summary>
         public event Action<VoskCommand> OnCommandPending;
 
-        /// <summary>Fires when a pending command is confirmed (by follow-up speech or explicit confirmation).</summary>
         public event Action<VoskCommand> OnCommandConfirmed;
 
-        /// <summary>Fires when a pending command is cancelled (timeout, explicit cancel, or preempted by a new command).</summary>
         public event Action<VoskCommand> OnCommandCancelled;
 
 #if UNITY_EDITOR
-        /// <summary>
-        /// Diagnostic snapshot of the last utterance processed through the command pipeline.
-        /// The debug window polls this via the <see cref="VoskMatchDiagnostics.Frame"/> field.
-        /// </summary>
         internal VoskMatchDiagnostics LastMatchDiagnostics { get; private set; }
 
-        /// <summary>Last partial result text from VOSK (updates as the user speaks).</summary>
         internal string LastPartialResult { get; private set; }
 #endif
 
@@ -112,20 +98,12 @@ namespace VoskXR.Commands
         // Pre-allocated buffer for accepted commands (avoids per-utterance List allocation)
         VoskCommand[] _acceptedBuf;
 
-        /// <summary>Names of the currently active command sets (snapshot copy).</summary>
         public string[] ActiveSetNames => _setManager.ActiveSetNames;
 
-        /// <summary>True if a command is currently in pending state.</summary>
         public bool HasPendingCommand => _pending.HasPending;
 
-        /// <summary>The currently pending command, or null if none.</summary>
         public VoskCommand? PendingCommand => _pending.PendingCommand;
 
-        /// <summary>
-        /// Builds the command parser from the given slot and command definitions.
-        /// If the speech recogniser model is already loaded and free-speech mode is off,
-        /// applies the grammar immediately. All commands are active.
-        /// </summary>
         public void Configure(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands)
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
@@ -150,10 +128,6 @@ namespace VoskXR.Commands
             }
         }
 
-        /// <summary>
-        /// Registers shared slots and named command sets. Does not activate any set —
-        /// call <see cref="SetActiveSets"/> to activate one or more sets.
-        /// </summary>
         public void Configure(VoskSlotDefinition[] slots, VoskCommandSet[] sets)
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
@@ -170,11 +144,6 @@ namespace VoskXR.Commands
             _activeCommands = null;
         }
 
-        /// <summary>
-        /// Activates the named command sets. Rebuilds the parser and grammar from
-        /// only the commands in the active sets. If recognition is running, performs
-        /// stop → set grammar → start.
-        /// </summary>
         public void SetActiveSets(params string[] setNames)
         {
             if (!_setManager.HasSets)
@@ -190,23 +159,11 @@ namespace VoskXR.Commands
             RebuildParserAndGrammar();
         }
 
-        /// <summary>
-        /// Activates a single command set by name.
-        /// </summary>
         public void SetActiveSet(string setName)
         {
             SetActiveSets(setName);
         }
 
-        /// <summary>
-        /// Injects text into the command pipeline as if it had arrived from VOSK, exercising
-        /// the same <see cref="HandleResult"/> path (parser, threshold filter, buffer, debounce)
-        /// as real audio.
-        /// When <c>bufferWindow &gt; 0</c> the result is queued and events fire later from
-        /// <see cref="Update"/>; call <see cref="FlushPendingBuffer"/> for synchronous events.
-        /// Requires one of the <c>Configure</c> overloads (and <see cref="SetActiveSets"/> when
-        /// using command sets) to have been called first. Main thread only.
-        /// </summary>
         public void InjectText(string text, VoskWord[] words = null)
         {
             Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
@@ -228,11 +185,6 @@ namespace VoskXR.Commands
                 Array.Empty<VoskAlternative>()));
         }
 
-        /// <summary>
-        /// Flushes any speech currently held in the utterance buffer, firing command events
-        /// synchronously. Useful for push-to-talk release and scene transitions. No-op when
-        /// the buffer is empty. Main thread only.
-        /// </summary>
         public void FlushPendingBuffer()
         {
             Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
@@ -242,42 +194,20 @@ namespace VoskXR.Commands
                 FlushBuffer();
         }
 
-        /// <summary>
-        /// Cancels the currently pending command, if any. Fires <see cref="OnCommandCancelled"/>.
-        /// No-op when no command is pending.
-        /// </summary>
         public void CancelPendingCommand() => InterpretResolution(_pending.Cancel());
 
         // -------- Dynamic slot value providers --------
 
-        /// <summary>
-        /// Registers a function that controls which values of the named slot the
-        /// parser will accept. Call <see cref="NotifySlotChanged"/> after the
-        /// provider's return set changes to rebuild the parser.
-        /// The grammar (VOSK vocabulary) is not affected — it always reflects the
-        /// full universe of slot values registered via <see cref="Configure"/>.
-        /// </summary>
         public void RegisterSlotValueProvider(string slotName, Func<string[]> valueProvider)
         {
             _slotManager.Register(slotName, valueProvider);
         }
 
-        /// <summary>
-        /// Removes a previously registered value provider. The slot reverts to its
-        /// full universe of values on the next parser rebuild.
-        /// </summary>
         public bool UnregisterSlotValueProvider(string slotName)
         {
             return _slotManager.Unregister(slotName);
         }
 
-        /// <summary>
-        /// Rebuilds the parser to reflect current value-provider results.
-        /// Does not touch the grammar or VOSK recogniser. No-op if
-        /// <see cref="Configure"/> has not been called or no commands are active.
-        /// Performs a full parser rebuild — call only when provider values have
-        /// actually changed, not every frame.
-        /// </summary>
         public void NotifySlotChanged()
         {
             if (_activeCommands == null)
@@ -286,10 +216,6 @@ namespace VoskXR.Commands
             RebuildParser();
         }
 
-        /// <summary>
-        /// Rebuilds only the parser from the current effective slots and active
-        /// commands. The grammar and VOSK recogniser are untouched.
-        /// </summary>
         public void RebuildParser()
         {
             if (_activeCommands == null)
@@ -299,13 +225,6 @@ namespace VoskXR.Commands
             _parser = new VoskCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands);
         }
 
-        /// <summary>
-        /// Rebuilds and re-applies the VOSK grammar from the full universe of slot
-        /// values. Performs the stop → set grammar → start cycle when recognition
-        /// is running. Clears the utterance buffer.
-        /// If a command is currently pending, the rebuild is deferred until the
-        /// pending command resolves.
-        /// </summary>
         public void RebuildGrammar()
         {
             if (_activeCommands == null)
@@ -617,6 +536,7 @@ namespace VoskXR.Commands
             // ---- Step 7: Process results with pending-aware logic ----
             float now = Time.time;
             int acceptedCount = 0;
+            bool anyThresholdFiltered = false;
 #if UNITY_EDITOR
             var attempts = new List<VoskMatchAttempt>(resultCount);
 #endif
@@ -659,6 +579,7 @@ namespace VoskXR.Commands
                 // Reject if below confidence threshold (skip when word data unavailable, i.e. -1)
                 if (cmd.Confidence >= 0f && cmd.Confidence < minConfidence)
                 {
+                    anyThresholdFiltered = true;
 #if UNITY_EDITOR
                     attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                         $"confidence {cmd.Confidence:F2} < minConfidence {minConfidence:F2}", false));
@@ -670,6 +591,7 @@ namespace VoskXR.Commands
                 if (commandCooldown > 0f &&
                     _debouncer.IsOnCooldown(cmd.Intent, now, commandCooldown))
                 {
+                    anyThresholdFiltered = true;
 #if UNITY_EDITOR
                     attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                         $"debounced ({commandCooldown:F1}s cooldown)", false));
@@ -707,7 +629,12 @@ namespace VoskXR.Commands
 
             if (acceptedCount == 0)
             {
-                OnUnrecognisedSpeech?.Invoke(text);
+                // Only fire OnUnrecognisedSpeech when the speech genuinely didn't match
+                // any command. Threshold-filtered results (confidence, debounce) are
+                // silently dropped — the user said a valid command, just not confidently
+                // or too soon after the last one.
+                if (!anyThresholdFiltered)
+                    OnUnrecognisedSpeech?.Invoke(text);
                 return;
             }
 

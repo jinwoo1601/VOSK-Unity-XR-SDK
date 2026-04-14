@@ -9,11 +9,6 @@ using System.Collections.Generic;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// Converts spoken number-word sequences to integers.
-    /// Provides the digit vocabulary used by <see cref="VoskCommandParser"/> for
-    /// NumberSequence slot matching and grammar generation.
-    /// </summary>
     public static class VoskNumberParser
     {
         static readonly Dictionary<string, int> WordValues = new Dictionary<string, int>(30, StringComparer.Ordinal)
@@ -28,20 +23,9 @@ namespace VoskXR.Commands
             { "hundred", 100 }, { "thousand", 1000 }
         };
 
-        /// <summary>
-        /// All number words recognized by the parser.
-        /// Derived from WordValues to maintain a single source of truth.
-        /// </summary>
         public static readonly HashSet<string> DigitVocabulary =
             new HashSet<string>(WordValues.Keys, StringComparer.Ordinal);
 
-
-        /// <summary>
-        /// Parses a digit-per-word sequence by concatenating single digits.
-        /// Each word must map to 0–9. "two seven zero" → 270, "one five" → 15.
-        /// </summary>
-        /// <returns>The concatenated integer, or 0 for null/empty input.</returns>
-        /// <exception cref="FormatException">A word is not a single digit (0–9).</exception>
         public static int ParseDigitSequence(string words)
         {
             if (string.IsNullOrWhiteSpace(words))
@@ -61,12 +45,6 @@ namespace VoskXR.Commands
             return result;
         }
 
-        /// <summary>
-        /// Parses a cardinal number phrase. Handles teens, tens, hundreds, and thousands.
-        /// "fifteen" → 15, "twenty" → 20, "two hundred" → 200.
-        /// </summary>
-        /// <returns>The parsed integer, or 0 for null/empty input.</returns>
-        /// <exception cref="FormatException">A word is not a recognized number word.</exception>
         public static int ParseCardinal(string words)
         {
             if (string.IsNullOrWhiteSpace(words))

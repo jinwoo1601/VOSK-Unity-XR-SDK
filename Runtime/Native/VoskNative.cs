@@ -11,13 +11,6 @@ using UnityEngine.Scripting;
 
 namespace VoskXR.Native
 {
-    /// <summary>
-    /// P/Invoke bindings for the upstream <c>libvosk.dll</c> desktop build.
-    ///
-    /// Used only by the Editor live-microphone backend on Windows. The Android
-    /// runtime path talks to <see cref="BridgeNative"/> (the custom JNI shim)
-    /// instead — the two are intentionally separate.
-    /// </summary>
     [Preserve]
     internal static class VoskNative
     {

@@ -13,11 +13,6 @@ using VoskXR.Testing;
 
 namespace VoskXR.Editor
 {
-    /// <summary>
-    /// EditorWindow for visually running batch test suites against command definitions.
-    /// Displays a results table with pass/fail, score, per-row diagnostics expansion,
-    /// and CSV export.
-    /// </summary>
     public class VoskBatchTestWindow : EditorWindow
     {
         [SerializeField] VoskTestSuiteAsset testSuite;

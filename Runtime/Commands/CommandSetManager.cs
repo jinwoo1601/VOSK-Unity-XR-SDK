@@ -9,26 +9,16 @@ using System.Collections.Generic;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// Manages named command sets and provides the active command definitions
-    /// after set activation. Also maintains a lookup from intent name to
-    /// definition for partial-match and confirmation checks.
-    /// </summary>
     internal sealed class CommandSetManager
     {
         Dictionary<string, VoskCommandSet> _sets;
         string[] _activeSetNames = Array.Empty<string>();
         Dictionary<string, VoskCommandDefinition> _commandLookup;
 
-        /// <summary>Names of the currently active command sets (defensive copy).</summary>
         internal string[] ActiveSetNames => _activeSetNames;
 
-        /// <summary>True when sets have been configured.</summary>
         internal bool HasSets => _sets != null;
 
-        /// <summary>
-        /// Registers named command sets. Does not activate any set.
-        /// </summary>
         internal void Configure(VoskCommandSet[] sets)
         {
             _sets = new Dictionary<string, VoskCommandSet>(sets.Length, StringComparer.Ordinal);
@@ -44,10 +34,6 @@ namespace VoskXR.Commands
             _commandLookup = null;
         }
 
-        /// <summary>
-        /// Activates the named command sets and returns the aggregated command definitions.
-        /// Also rebuilds the intent-to-definition lookup.
-        /// </summary>
         internal VoskCommandDefinition[] Activate(params string[] setNames)
         {
             if (_sets == null)
@@ -93,10 +79,6 @@ namespace VoskXR.Commands
             return commands;
         }
 
-        /// <summary>
-        /// Builds or rebuilds the intent-to-definition lookup from a flat command array.
-        /// Also used by the flat <c>Configure(slots, commands)</c> path.
-        /// </summary>
         internal void BuildLookup(VoskCommandDefinition[] commands)
         {
             if (_commandLookup == null)
@@ -109,10 +91,6 @@ namespace VoskXR.Commands
                 _commandLookup[commands[i].Intent] = commands[i];
         }
 
-        /// <summary>
-        /// Looks up a command definition by intent name.
-        /// Returns true if found; false otherwise.
-        /// </summary>
         internal bool TryLookupCommand(string intent, out VoskCommandDefinition definition)
         {
             if (_commandLookup != null)
@@ -122,9 +100,6 @@ namespace VoskXR.Commands
             return false;
         }
 
-        /// <summary>
-        /// Resets all state — sets, active names, and lookup.
-        /// </summary>
         internal void Reset()
         {
             _sets = null;

@@ -4,9 +4,6 @@ using VoskXR.Commands;
 
 namespace VoskXR.Tests.Editor
 {
-    /// <summary>
-    /// Category 2: Diagnostic data structure construction and immutability.
-    /// </summary>
     public class VoskMatchDiagnosticsTests
     {
         // 2.1

@@ -9,21 +9,12 @@ using System.Collections.Generic;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// Maintains a registry of slot value providers (functions returning active values)
-    /// and builds effective slot arrays by filtering base slots against provider results.
-    /// </summary>
     internal sealed class DynamicSlotManager
     {
         Dictionary<string, Func<string[]>> _providers;
 
-        /// <summary>True when at least one provider is registered.</summary>
         internal bool HasProviders => _providers != null && _providers.Count > 0;
 
-        /// <summary>
-        /// Registers a function that controls which values of the named slot
-        /// the parser will accept.
-        /// </summary>
         internal void Register(string slotName, Func<string[]> provider)
         {
             if (slotName == null) throw new ArgumentNullException(nameof(slotName));
@@ -35,20 +26,12 @@ namespace VoskXR.Commands
             _providers[slotName] = provider;
         }
 
-        /// <summary>
-        /// Removes a previously registered value provider.
-        /// </summary>
         internal bool Unregister(string slotName)
         {
             if (slotName == null) throw new ArgumentNullException(nameof(slotName));
             return _providers != null && _providers.Remove(slotName);
         }
 
-        /// <summary>
-        /// Builds an effective slot array by filtering <paramref name="baseSlots"/>
-        /// against registered provider results. Returns the original array if no
-        /// providers are registered or none produce a filter.
-        /// </summary>
         internal VoskSlotDefinition[] BuildEffectiveSlots(VoskSlotDefinition[] baseSlots)
         {
             if (_providers == null || _providers.Count == 0)

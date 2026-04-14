@@ -13,10 +13,6 @@ using VoskXR.Commands;
 
 namespace VoskXR.Editor
 {
-    /// <summary>
-    /// IMGUI EditorWindow showing the VOSK command recognition pipeline state in real time.
-    /// Pull model: polls runtime components every repaint during Play Mode.
-    /// </summary>
     public class VoskDebugWindow : EditorWindow
     {
         const int MaxHistoryEntries = 20;

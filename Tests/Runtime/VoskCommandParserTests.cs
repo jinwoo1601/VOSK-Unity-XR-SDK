@@ -60,9 +60,6 @@ namespace VoskXR.Tests.Runtime
             return new VoskCommandParser(MakeSlots(), MakeCommands());
         }
 
-        /// <summary>
-        /// Convenience: parse and assert exactly one match, returning that result.
-        /// </summary>
         static VoskCommandResult ParseOne(VoskCommandParser parser, string text,
             VoskWord[] words = null)
         {

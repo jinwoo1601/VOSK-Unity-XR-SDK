@@ -9,12 +9,6 @@ using UnityEngine;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// ScriptableObject for defining a command in the Inspector.
-    /// Create via Assets > Create > VOSK XR > Command Definition.
-    /// Patterns are authored as single strings (e.g. "launch {?quantity} {weapon} target {target}")
-    /// and split on whitespace by <see cref="ToDefinition"/>.
-    /// </summary>
     [CreateAssetMenu(menuName = "VOSK XR/Command Definition")]
     public class VoskCommandAsset : ScriptableObject
     {
@@ -33,10 +27,6 @@ namespace VoskXR.Commands
                  "requiring explicit confirmation before firing.")]
         public bool requiresConfirmation;
 
-        /// <summary>
-        /// Converts this asset to the runtime <see cref="VoskCommandDefinition"/> struct.
-        /// Each pattern string is split on whitespace to produce the token array the parser expects.
-        /// </summary>
         public VoskCommandDefinition ToDefinition()
         {
             var patternArrays = patterns != null

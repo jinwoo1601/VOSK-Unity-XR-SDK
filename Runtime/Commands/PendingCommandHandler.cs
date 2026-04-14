@@ -45,11 +45,6 @@ namespace VoskXR.Commands
             => new PendingResolution(PendingOutcome.None, default);
     }
 
-    /// <summary>
-    /// Manages the pending command state machine. Returns <see cref="PendingResolution"/>
-    /// structs that the recogniser interprets to dispatch events, record debounce times,
-    /// and drain deferred grammar rebuilds.
-    /// </summary>
     internal sealed class PendingCommandHandler
     {
         VoskPendingCommand? _pendingCommand;
@@ -61,11 +56,6 @@ namespace VoskXR.Commands
         internal VoskPendingCommand? Current => _pendingCommand;
         internal VoskCommand? PendingCommand => _pendingCommand?.Command;
 
-        /// <summary>
-        /// Enters pending state for the given command. Cancels any existing pending first.
-        /// Returns two resolutions: <paramref name="cancelledPrevious"/> for the displaced
-        /// command (may be <c>NoAction</c>), and the return value for the newly entered command.
-        /// </summary>
         internal PendingResolution EnterPending(VoskCommand command,
             VoskCommandDefinition definition, string[] unfilledSlots,
             VoskPendingReason reason, float currentTime,
@@ -87,10 +77,6 @@ namespace VoskXR.Commands
             return PendingResolution.Entered(command);
         }
 
-        /// <summary>
-        /// Checks if the pre-split tokens match confirm or cancel vocabulary.
-        /// Returns a resolution describing what happened.
-        /// </summary>
         internal PendingResolution TryHandleConfirmCancel(string[] tokens,
             string[] confirmVocab, string[] cancelVocab)
         {
@@ -115,10 +101,6 @@ namespace VoskXR.Commands
             return PendingResolution.NoAction();
         }
 
-        /// <summary>
-        /// Attempts to fill unfilled slots from follow-up speech.
-        /// Returns the completed command if any new slots were filled, null otherwise.
-        /// </summary>
         internal VoskCommand? TryFollowUpSlotFill(string text, string[] tokens,
             Dictionary<string, float> wordConfidence, VoskCommandParser parser)
         {
@@ -178,20 +160,23 @@ namespace VoskXR.Commands
             for (int i = 0; i < slotCount; i++)
                 slotsArray[i] = _followUpSlotBuf[i];
 
+            // Re-score against the matched pattern now that slots are filled.
+            // The original partial-match score penalised missing elements; with
+            // follow-up data the score should reflect the completed match.
+            float mergedScore = parser.ScoreFollowUp(
+                pending.Command.Intent, pending.Command.MatchedPatternIndex,
+                _followUpSlotBuf);
+
             return new VoskCommand(
                 pending.Command.Intent,
                 slotsArray,
                 mergedConfidence,
-                pending.Command.Score,
+                mergedScore,
                 pending.Command.RawText + " " + text,
                 null,
                 pending.Command.MatchedPatternIndex);
         }
 
-        /// <summary>
-        /// Completes a pending command. Handles re-entry for partial-match commands
-        /// that also require confirmation.
-        /// </summary>
         internal PendingResolution Complete(VoskCommand completed)
         {
             var pending = _pendingCommand.Value;
@@ -216,9 +201,6 @@ namespace VoskXR.Commands
             return PendingResolution.Confirmed(completed);
         }
 
-        /// <summary>
-        /// Handles pending timeout based on the configured behavior.
-        /// </summary>
         internal PendingResolution HandleTimeout(VoskPendingTimeoutBehavior behavior)
         {
             var pending = _pendingCommand.Value;
@@ -230,9 +212,6 @@ namespace VoskXR.Commands
             return PendingResolution.Cancelled(pending.Command);
         }
 
-        /// <summary>
-        /// Cancels the pending command if one is active.
-        /// </summary>
         internal PendingResolution Cancel()
         {
             if (!_pendingCommand.HasValue)
@@ -243,9 +222,6 @@ namespace VoskXR.Commands
             return PendingResolution.Cancelled(cancelled.Command);
         }
 
-        /// <summary>
-        /// Computes which required slots in the matched pattern are unfilled.
-        /// </summary>
         internal string[] ComputeUnfilledSlots(VoskCommand cmd, VoskCommandDefinition def)
         {
             if (cmd.MatchedPatternIndex < 0 ||
@@ -268,12 +244,6 @@ namespace VoskXR.Commands
             return _unfilledBuf.Count > 0 ? _unfilledBuf.ToArray() : Array.Empty<string>();
         }
 
-        /// <summary>
-        /// Matches vocabulary phrases directly against the token array without
-        /// joining tokens or splitting phrases. Walks each phrase span
-        /// word-by-word and compares against consecutive tokens.
-        /// A match requires all phrase words to correspond 1:1 with all tokens.
-        /// </summary>
         static bool IsVocabularyMatchTokens(string[] tokens, string[] vocabulary)
         {
             for (int v = 0; v < vocabulary.Length; v++)

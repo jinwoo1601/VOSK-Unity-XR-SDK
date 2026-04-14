@@ -36,11 +36,6 @@ namespace VoskXR
         public event Action<string> OnPartialResult;
         public event Action<string> OnFinalResult;
 
-        /// <summary>
-        /// Raised for each final recognition result with per-word confidence scores
-        /// and timing data. Subscribe to this when you need to inspect which words
-        /// VOSK is confident about and which it is not.
-        /// </summary>
         public event Action<VoskResult> OnResult;
 
         public event Action<VoskBridgeErrorCode, string> OnError;
@@ -298,13 +293,6 @@ namespace VoskXR
 #endif
         }
 
-        /// <summary>
-        /// Injects a final result as if VOSK had recognised it.
-        /// Bypasses bridge/model/session state, so events fire even when no recognition
-        /// session is active — gate downstream code that assumes an active session.
-        /// Empty or null text is passed through to match the real audio path. Must be
-        /// called from the main thread.
-        /// </summary>
         public void InjectResult(string text, VoskWord[] words = null, VoskAlternative[] alternatives = null)
         {
             AssertMainThread(nameof(InjectResult));
@@ -314,10 +302,6 @@ namespace VoskXR
                 alternatives ?? Array.Empty<VoskAlternative>());
         }
 
-        /// <summary>
-        /// Injects a partial result as if VOSK had recognised it. Empty or null text is
-        /// passed through to match the real audio path. Must be called from the main thread.
-        /// </summary>
         public void InjectPartialResult(string text)
         {
             AssertMainThread(nameof(InjectPartialResult));
@@ -327,12 +311,6 @@ namespace VoskXR
         // ~average English word duration; used to give simulated words a plausible non-zero span.
         const float SimulatedWordDurationSeconds = 0.3f;
 
-        /// <summary>
-        /// Synthesises a <see cref="VoskWord"/> array from a text string with uniform
-        /// confidence and sequential timing.
-        /// Confidence is passed through unchanged — values outside [0, 1] are valid but
-        /// may interact unexpectedly with downstream <c>minConfidence</c> filters.
-        /// </summary>
         public static VoskWord[] CreateSimulatedWords(string text, float confidence = 1.0f)
         {
             if (string.IsNullOrWhiteSpace(text)) return Array.Empty<VoskWord>();

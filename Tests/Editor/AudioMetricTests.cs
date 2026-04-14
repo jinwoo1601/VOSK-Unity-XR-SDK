@@ -5,10 +5,6 @@ using VoskXR;
 
 namespace VoskXR.Tests.Editor
 {
-    /// <summary>
-    /// Category 5: Audio metric tests (ComputeRms, forwarded properties).
-    /// Windows Editor only — the underlying code is #if UNITY_EDITOR_WIN guarded.
-    /// </summary>
     public class AudioMetricTests
     {
         // 5.4
