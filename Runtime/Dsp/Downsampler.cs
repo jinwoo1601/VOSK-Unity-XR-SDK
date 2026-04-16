@@ -1,17 +1,13 @@
+// ============================================================================
+// Purpose:  FIR low-pass filter with 3:1 decimation (48kHz to 16kHz)
+// Layer:    Runtime.Dsp
+// Owns:     Downsampler (internal sealed class)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR.Dsp
 {
-    /// <summary>
-    /// FIR low-pass filter with integer-ratio decimation.
-    /// Designed for 48 kHz -> 16 kHz (factor 3) downsampling.
-    ///
-    /// Uses a 15-tap windowed-sinc filter with a cutoff at ~7.5 kHz
-    /// (Nyquist/2 for the 16 kHz target rate) to anti-alias before decimation.
-    ///
-    /// C# port of <c>NativeBridge~/src/downsampler.h</c> — keep the coefficients
-    /// and state layout in sync if the C++ version ever changes.
-    /// </summary>
     internal sealed class Downsampler
     {
         public const int DecimationFactor = 3;
@@ -34,13 +30,6 @@ namespace VoskXR.Dsp
         int _writePos;
         int _phase;
 
-        /// <summary>
-        /// Processes input samples at the source rate, producing output samples
-        /// at source/<see cref="DecimationFactor"/>. The output buffer must hold
-        /// at least <c>inputCount / DecimationFactor + 1</c> samples because
-        /// residual phase from prior calls can produce one extra output.
-        /// </summary>
-        /// <returns>The number of output samples written.</returns>
         public int Process(float[] input, int inputCount, float[] output)
         {
             int outCount = 0;

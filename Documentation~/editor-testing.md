@@ -19,6 +19,7 @@ Open **Window > VOSK XR > Command Debug** during Play Mode to inspect the full c
 ### Right Panel (command matching)
 
 - **Active command sets** -- which sets are currently loaded in the parser.
+- **Pending command** -- when a command is in pending state, shows the intent, reason (partial match or awaiting confirmation), filled slots, unfilled slots, and elapsed time since entering pending state.
 - **Last match breakdown** -- for each command definition attempted: intent, score, confidence, threshold pass/fail, and reject reason (if any). Accepted commands are highlighted in green.
 - **Slot details** -- matched slot word positions (start/end indices) with per-slot confidence.
 - **Match history** -- scrolling list of the last 20 match results with timestamps.

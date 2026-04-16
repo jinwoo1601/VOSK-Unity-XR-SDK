@@ -1,37 +1,32 @@
+// ============================================================================
+// Purpose:  Single test result and aggregated batch results with pass/fail summary
+// Layer:    Runtime.Testing
+// Owns:     VoskTestResult (public class), VoskBatchResults (public class)
+// Depends:  VoskTestCase, VoskSlotMatch, VoskMatchDiagnostics
+// ============================================================================
 using System;
 using System.Text;
 using VoskXR.Commands;
 
 namespace VoskXR.Testing
 {
-    /// <summary>
-    /// Result of running a single <see cref="VoskTestCase"/> through the batch test runner.
-    /// </summary>
     public class VoskTestResult
     {
-        /// <summary>The test case that produced this result.</summary>
         public readonly VoskTestCase TestCase;
 
-        /// <summary>The intent that was accepted, or null if no command passed thresholds.</summary>
         public readonly string ActualIntent;
 
-        /// <summary>Slot matches from the accepted command.</summary>
         public readonly VoskSlotMatch[] ActualSlots;
 
-        /// <summary>Best match score from the parser (0 if no match).</summary>
         public readonly float Score;
 
-        /// <summary>Minimum word confidence across matched tokens (-1 if unavailable).</summary>
         public readonly float Confidence;
 
-        /// <summary>True if the actual result matches expectations.</summary>
         public readonly bool Passed;
 
-        /// <summary>Human-readable failure reason, or null if passed.</summary>
         public readonly string FailureReason;
 
 #if UNITY_EDITOR
-        /// <summary>Full diagnostic data from the parse cycle (Editor only).</summary>
         internal readonly VoskMatchDiagnostics Diagnostics;
 #endif
 
@@ -59,29 +54,16 @@ namespace VoskXR.Testing
 #endif
     }
 
-    /// <summary>
-    /// Aggregated results from <see cref="VoskBatchTestRunner.RunAll"/>.
-    /// Provides <see cref="AllPassed"/> and <see cref="FailureSummary"/> for
-    /// convenient use in NUnit assertions.
-    /// </summary>
     public class VoskBatchResults
     {
-        /// <summary>Individual results for each test case, in input order.</summary>
         public readonly VoskTestResult[] Results;
 
-        /// <summary>True when every test case passed.</summary>
         public bool AllPassed { get; private set; }
 
-        /// <summary>Number of test cases that passed.</summary>
         public int PassCount { get; private set; }
 
-        /// <summary>Number of test cases that failed.</summary>
         public int FailCount { get; private set; }
 
-        /// <summary>
-        /// Multi-line summary of all failures. Empty string when all passed.
-        /// Suitable for passing as the message argument to <c>Assert.IsTrue</c>.
-        /// </summary>
         public string FailureSummary
         {
             get
@@ -108,9 +90,6 @@ namespace VoskXR.Testing
             Recount();
         }
 
-        /// <summary>
-        /// Recalculates PassCount, FailCount, and AllPassed after in-place result updates.
-        /// </summary>
         internal void Recount()
         {
             int pass = 0;

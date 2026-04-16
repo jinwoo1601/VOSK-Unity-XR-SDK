@@ -1,24 +1,30 @@
+// ============================================================================
+// Purpose:  Immutable command intent definition with phrase patterns and behavioral flags
+// Layer:    Runtime.Commands
+// Owns:     VoskCommandDefinition (public readonly struct)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// Defines a command intent with one or more phrase patterns.
-    /// Each pattern is an array of literal words and slot references
-    /// (<c>{slot}</c> for required, <c>{?slot}</c> for optional).
-    /// </summary>
     public readonly struct VoskCommandDefinition
     {
-        /// <summary>The intent name, e.g. "launch_weapon".</summary>
         public readonly string Intent;
 
-        /// <summary>
-        /// Phrase templates for this command. Each inner array is one pattern
-        /// containing literal tokens and slot references.
-        /// </summary>
         public readonly string[][] Patterns;
 
+        public readonly bool AllowPartialMatch;
+
+        public readonly bool RequiresConfirmation;
+
         public VoskCommandDefinition(string intent, string[][] patterns)
+            : this(intent, patterns, false, false)
+        {
+        }
+
+        public VoskCommandDefinition(string intent, string[][] patterns,
+            bool allowPartialMatch = false, bool requiresConfirmation = false)
         {
             Intent = intent ?? throw new ArgumentNullException(nameof(intent));
 
@@ -37,6 +43,8 @@ namespace VoskXR.Commands
             }
 
             Patterns = outerCopy;
+            AllowPartialMatch = allowPartialMatch;
+            RequiresConfirmation = requiresConfirmation;
         }
     }
 }

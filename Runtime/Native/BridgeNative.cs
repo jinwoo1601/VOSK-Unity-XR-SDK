@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  P/Invoke bindings for the Android vosk-bridge native library
+// Layer:    Runtime.Native
+// Owns:     BridgeNative (internal static class)
+// Depends:  (none)
+// ============================================================================
 using System;
 using System.Runtime.InteropServices;
 using UnityEngine.Scripting;

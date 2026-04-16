@@ -249,14 +249,11 @@ namespace VoskXR.Tests.Runtime
             // Capture grammar before
             _recogniser.RegisterSlotValueProvider("target", () => new[] { "hotel one" });
 
-            // Use reflection to read _grammarJson
-            var field = typeof(VoskCommandRecogniser)
-                .GetField("_grammarJson", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            string grammarBefore = (string)field.GetValue(_recogniser);
+            string grammarBefore = _recogniser.TestGrammarJson;
 
             _recogniser.NotifySlotChanged();
 
-            string grammarAfter = (string)field.GetValue(_recogniser);
+            string grammarAfter = _recogniser.TestGrammarJson;
             Assert.AreEqual(grammarBefore, grammarAfter,
                 "RebuildParser (via NotifySlotChanged) must not change grammar");
         }

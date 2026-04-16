@@ -6,10 +6,6 @@ using VoskXR.Commands;
 
 namespace VoskXR.Tests.Editor
 {
-    /// <summary>
-    /// Category 3: Parser diagnostic fields (LastParseDiagnostics, slot positions,
-    /// ComputeConfidence, internal access).
-    /// </summary>
     public class VoskCommandParserDiagnosticTests
     {
         static VoskSlotDefinition[] MakeSlots() => new[]

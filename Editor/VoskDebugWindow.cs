@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  IMGUI EditorWindow showing live command recognition diagnostics in Play Mode
+// Layer:    Editor
+// Owns:     VoskDebugWindow (public EditorWindow)
+// Depends:  VoskSpeechRecogniser, VoskCommandRecogniser, VoskMatchDiagnostics, VoskResult
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEditor;
@@ -7,10 +13,6 @@ using VoskXR.Commands;
 
 namespace VoskXR.Editor
 {
-    /// <summary>
-    /// IMGUI EditorWindow showing the VOSK command recognition pipeline state in real time.
-    /// Pull model: polls runtime components every repaint during Play Mode.
-    /// </summary>
     public class VoskDebugWindow : EditorWindow
     {
         const int MaxHistoryEntries = 20;
@@ -327,6 +329,8 @@ namespace VoskXR.Editor
 
             DrawActiveSets();
             EditorGUILayout.Space(4);
+            DrawPendingCommand();
+            EditorGUILayout.Space(4);
             DrawLastMatchBreakdown();
             EditorGUILayout.Space(8);
             DrawHistory();
@@ -343,6 +347,37 @@ namespace VoskXR.Editor
             {
                 EditorGUILayout.LabelField($"Active Sets: {string.Join(", ", setNames)}");
             }
+        }
+
+        void DrawPendingCommand()
+        {
+            var pending = _commandRecogniser.EditorPendingCommand;
+            if (!pending.HasValue)
+                return;
+
+            DrawSectionHeader("Pending Command");
+
+            var p = pending.Value;
+            EditorGUILayout.LabelField($"Intent: {p.Command.Intent}", EditorStyles.boldLabel);
+
+            string reason = p.Reason == VoskPendingReason.PartialMatch
+                ? "Partial match \u2014 waiting for follow-up"
+                : "Awaiting confirmation";
+            EditorGUILayout.LabelField($"Reason: {reason}");
+
+            if (p.Command.Slots.Length > 0)
+            {
+                EditorGUILayout.LabelField("Filled slots:", EditorStyles.miniLabel);
+                foreach (var slot in p.Command.Slots)
+                    EditorGUILayout.LabelField($"  {slot.Name} = \"{slot.Value}\"");
+            }
+
+            if (p.UnfilledSlots != null && p.UnfilledSlots.Length > 0)
+                EditorGUILayout.LabelField(
+                    $"Unfilled: {string.Join(", ", p.UnfilledSlots)}");
+
+            float elapsed = Time.time - p.CreatedTime;
+            EditorGUILayout.LabelField($"Elapsed: {elapsed:F1}s");
         }
 
         void DrawLastMatchBreakdown()
@@ -515,21 +550,9 @@ namespace VoskXR.Editor
 
         // ─── Helpers ────────────────────────────────────────────────────
 
-        static void DrawSectionHeader(string title)
-        {
-            EditorGUILayout.Space(2);
-            var rect = EditorGUILayout.GetControlRect(false, 1);
-            EditorGUI.DrawRect(rect, new Color(0.3f, 0.3f, 0.3f));
-            EditorGUILayout.LabelField(title, EditorStyles.miniBoldLabel);
-        }
+        static void DrawSectionHeader(string title) => VoskEditorGUI.DrawSectionHeader(title);
 
-        static void DrawHorizontalSeparator()
-        {
-            EditorGUILayout.Space(2);
-            var rect = EditorGUILayout.GetControlRect(false, 1);
-            EditorGUI.DrawRect(rect, new Color(0.3f, 0.3f, 0.3f));
-            EditorGUILayout.Space(2);
-        }
+        static void DrawHorizontalSeparator() => VoskEditorGUI.DrawHorizontalSeparator();
 
         void DrawVerticalSeparator()
         {

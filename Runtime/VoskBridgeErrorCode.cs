@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Error codes returned by the native bridge, with human-readable descriptions
+// Layer:    Runtime
+// Owns:     VoskBridgeErrorCode (public enum), VoskBridgeErrorCodeExtensions (public static)
+// Depends:  (none)
+// ============================================================================
 namespace VoskXR
 {
     public enum VoskBridgeErrorCode

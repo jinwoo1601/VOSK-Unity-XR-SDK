@@ -22,6 +22,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Utterance buffer merges split speech across VOSK VAD boundaries
 - Sequential command extraction (multiple commands per utterance)
 - Per-intent debounce to suppress rapid duplicate firings
+- Pending command system: partial match with follow-up slot-fill, and explicit confirmation before firing
 - Configurable `minConfidence` and `minScore` thresholds
 - Free-speech mode toggle for unconstrained vocabulary with best-effort matching
 
@@ -35,7 +36,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe Edit Mode API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
-- 18 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, and asset conversion
+- 20 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, asset conversion, and pending commands
 - Extensively tested on Quest 3 with published test matrices for every release
 
 ## Requirements
@@ -55,7 +56,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0
 ```
 
 **Via manifest.json:**
@@ -63,7 +64,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.13.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0"
   }
 }
 ```
@@ -158,7 +159,7 @@ public class CommandDemo : MonoBehaviour
 For full documentation, see the [documentation index](Documentation~/index.md).
 
 - [Getting Started](Documentation~/getting-started.md) -- installation, model setup, quick start, lifecycle
-- [Command Recognition](Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring
+- [Command Recognition](Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring, pending commands
 - [Command Sets](Documentation~/command-sets.md) -- named sets, runtime mode switching
 - [Inspector Authoring](Documentation~/inspector-authoring.md) -- zero-code ScriptableObject setup
 - [Editor Testing](Documentation~/editor-testing.md) -- debug window, live mic, text injection, batch runner
@@ -177,7 +178,7 @@ Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
 
 ## Running Tests
 
-The package includes 18 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
+The package includes 20 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
 
 ## Architecture
 
@@ -226,6 +227,9 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
+| 0.16.0 | Internal refactoring and per-utterance allocation reduction |
+| 0.15.0 | Pending commands: partial match, confirmation, follow-up slot-fill |
+| 0.14.0 | Dynamic slot value providers for runtime parser filtering |
 | 0.13.0 | Batch test runner for regression-testing command definitions |
 | 0.12.0 | Editor command debug window with live diagnostics |
 | 0.11.0 | Windows Editor live microphone backend |

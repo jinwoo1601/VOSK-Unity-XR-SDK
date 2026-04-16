@@ -6,10 +6,6 @@ using VoskXR.Testing;
 
 namespace VoskXR.Tests.Editor
 {
-    /// <summary>
-    /// Meta-tests for the batch test runner itself.
-    /// Verifies that the runner correctly reports pass/fail for various scenarios.
-    /// </summary>
     public class VoskBatchTestRunnerTests
     {
         static VoskSlotDefinition[] MakeSlots() => new[]

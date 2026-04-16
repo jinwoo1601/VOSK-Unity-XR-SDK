@@ -1,12 +1,6 @@
 using UnityEngine;
 using VoskXR.Commands;
 
-/// <summary>
-/// Manual test driver for Phase 1–3 of the v4.0 test matrix.
-/// Drop onto the CommandDemo scene alongside VoskCommandRecogniser.
-/// Click a step button to set provider state, then inject text via the
-/// Command Debug window (Window > VOSK XR > Command Debug).
-/// </summary>
 public class DynamicSlotTestDriver : MonoBehaviour
 {
     [SerializeField] VoskCommandRecogniser commandRecogniser;

@@ -54,6 +54,7 @@ A parsed command with intent and extracted slots.
 | `Confidence` | `float` | Minimum word confidence across matched tokens. `-1` means no word data was available. |
 | `Score` | `float` | Pattern match quality (0.0--1.0). Higher is better. |
 | `RawText` | `string` | The original VOSK transcript text |
+| `MatchedPatternIndex` | `int` | Index into the definition's `Patterns` array identifying which pattern produced this match. `-1` when unavailable. |
 
 ### Methods
 
@@ -84,6 +85,17 @@ Parser output wrapping match/no-match.
 | `IsMatch` | `bool` | True if a command pattern matched |
 | `Command` | `VoskCommand` | The parsed command (only valid when `IsMatch` is true) |
 | `RawText` | `string` | The original VOSK transcript |
+
+## VoskPendingTimeoutBehavior
+
+`public enum VoskPendingTimeoutBehavior` -- Namespace: `VoskXR.Commands`
+
+Determines what happens when a pending command's timeout expires.
+
+| Value | Description |
+|-------|-------------|
+| `Cancel` | The pending command is cancelled and discarded. `OnCommandCancelled` fires. |
+| `FireAsIs` | The pending command fires as-is with whatever slots were filled. `OnCommandConfirmed` and `OnCommandRecognised` fire. |
 
 ## See Also
 

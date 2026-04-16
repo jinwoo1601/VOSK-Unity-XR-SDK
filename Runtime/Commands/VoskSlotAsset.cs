@@ -1,14 +1,15 @@
+// ============================================================================
+// Purpose:  ScriptableObject for Inspector-authored slot definitions
+// Layer:    Runtime.Commands
+// Owns:     VoskSlotAsset (public ScriptableObject), AliasEntry (public struct)
+// Depends:  VoskSlotDefinition, VoskSlotType
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// ScriptableObject for defining a slot in the Inspector.
-    /// Create via Assets > Create > VOSK XR > Slot Definition.
-    /// Use <see cref="ToDefinition"/> to convert to the runtime struct.
-    /// </summary>
     [CreateAssetMenu(menuName = "VOSK XR/Slot Definition")]
     public class VoskSlotAsset : ScriptableObject
     {
@@ -34,9 +35,6 @@ namespace VoskXR.Commands
             public string canonical;
         }
 
-        /// <summary>
-        /// Converts this asset to the runtime <see cref="VoskSlotDefinition"/> struct.
-        /// </summary>
         public VoskSlotDefinition ToDefinition()
         {
             if (slotType == VoskSlotType.NumberSequence)

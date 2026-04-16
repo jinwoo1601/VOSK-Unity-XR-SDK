@@ -1,28 +1,13 @@
+// ============================================================================
+// Purpose:  Automatic gain control with soft-limiter for 16kHz speech normalization
+// Layer:    Runtime.Dsp
+// Owns:     Agc (internal sealed class)
+// Depends:  (none)
+// ============================================================================
 using System;
 
 namespace VoskXR.Dsp
 {
-    /// <summary>
-    /// Automatic Gain Control with soft saturation.
-    ///
-    /// Tracks signal level per-sample with asymmetric attack/release smoothing,
-    /// computes a gain to reach a configurable target level, and applies it with
-    /// per-sample interpolation to avoid clicks. A tanh soft limiter replaces
-    /// hard clipping to prevent harmonic distortion.
-    ///
-    /// Designed for the 16 kHz downsampled speech path before VOSK ingestion.
-    ///
-    /// C# port of <c>NativeBridge~/src/agc.h</c> — keep the time constants, gain
-    /// bounds, and tanh approximation in sync if the C++ version ever changes.
-    ///
-    /// Intentional divergence from the C++ source: the noise-floor gate checks the
-    /// current input sample (<c>absX</c>) instead of the smoothed level. Gating on
-    /// the smoothed level means a burst of pure silence takes ~2 seconds to drain
-    /// the envelope follower below 1e-5, during which <c>desiredGain</c> ramps to
-    /// <c>MaxGain</c> and pumps the gain. Gating on <c>absX</c> freezes gain
-    /// immediately when the input is truly silent, which matches standard "hold on
-    /// silence" AGC behaviour and the intent captured in the Editor tests.
-    /// </summary>
     internal sealed class Agc
     {
         public const float DefaultTargetDb = -18f;
@@ -63,9 +48,6 @@ namespace VoskXR.Dsp
             _gainReleaseCoeff  = EmaCoeff(sampleRate, GainReleaseMs);
         }
 
-        /// <summary>
-        /// Process samples in-place. Output is bounded to (-1, 1) by the soft limiter.
-        /// </summary>
         public void Process(float[] samples, int count)
         {
             for (int i = 0; i < count; i++)

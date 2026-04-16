@@ -5,10 +5,6 @@ using VoskXR.Commands;
 
 namespace VoskXR.Tests.Editor
 {
-    /// <summary>
-    /// Category 4: Recogniser diagnostic population (LastMatchDiagnostics,
-    /// rejection reasons, per-slot confidence, partial result).
-    /// </summary>
     public class VoskCommandRecogniserDiagnosticTests
     {
         GameObject _go;

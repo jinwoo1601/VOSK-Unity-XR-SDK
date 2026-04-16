@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Feeds test cases through VoskCommandParser with threshold filtering, produces results matrix
+// Layer:    Runtime.Testing
+// Owns:     VoskBatchTestRunner (public class)
+// Depends:  VoskCommandParser, VoskSlotDefinition, VoskCommandDefinition, VoskCommandSet, VoskTestCase, VoskTestResult, VoskSpeechRecogniser
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -5,26 +11,12 @@ using VoskXR.Commands;
 
 namespace VoskXR.Testing
 {
-    /// <summary>
-    /// Feeds a list of test cases through the command parser and produces a results matrix.
-    /// Pure C# — no MonoBehaviour dependency, works in Edit Mode and CI.
-    /// Reuses <see cref="VoskCommandParser"/> directly (the same path that
-    /// <see cref="VoskCommandRecogniser.InjectText"/> uses internally).
-    /// </summary>
     public class VoskBatchTestRunner
     {
         readonly VoskCommandParser _parser;
         readonly float _minScore;
         readonly float _minConfidence;
 
-        /// <summary>
-        /// Creates a batch test runner with the given slot and command definitions.
-        /// All commands are active (no command sets).
-        /// </summary>
-        /// <param name="slots">Slot definitions used by the commands.</param>
-        /// <param name="commands">Command definitions to test against.</param>
-        /// <param name="minScore">Minimum match score threshold (default 0.6).</param>
-        /// <param name="minConfidence">Minimum word confidence threshold (default 0.4).</param>
         public VoskBatchTestRunner(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands,
             float minScore = 0.6f, float minConfidence = 0.4f)
         {
@@ -36,15 +28,6 @@ namespace VoskXR.Testing
             _minConfidence = minConfidence;
         }
 
-        /// <summary>
-        /// Creates a batch test runner with named command sets. Only commands from
-        /// the specified active sets are tested.
-        /// </summary>
-        /// <param name="slots">Slot definitions used by the commands.</param>
-        /// <param name="sets">Named command sets.</param>
-        /// <param name="activeSetNames">Which sets to activate.</param>
-        /// <param name="minScore">Minimum match score threshold (default 0.6).</param>
-        /// <param name="minConfidence">Minimum word confidence threshold (default 0.4).</param>
         public VoskBatchTestRunner(VoskSlotDefinition[] slots, VoskCommandSet[] sets,
             string[] activeSetNames, float minScore = 0.6f, float minConfidence = 0.4f)
         {
@@ -78,9 +61,6 @@ namespace VoskXR.Testing
             _minConfidence = minConfidence;
         }
 
-        /// <summary>
-        /// Runs all test cases and returns aggregated results.
-        /// </summary>
         public VoskBatchResults RunAll(VoskTestCase[] testCases)
         {
             if (testCases == null) throw new ArgumentNullException(nameof(testCases));
@@ -92,9 +72,6 @@ namespace VoskXR.Testing
             return new VoskBatchResults(results);
         }
 
-        /// <summary>
-        /// Runs a single test case through the parser and threshold filter.
-        /// </summary>
         public VoskTestResult Run(VoskTestCase testCase)
         {
             if (testCase == null) throw new ArgumentNullException(nameof(testCase));
@@ -276,9 +253,6 @@ namespace VoskXR.Testing
 #endif
         }
 
-        /// <summary>
-        /// Exports batch results as a CSV string for diffing across runs.
-        /// </summary>
         public static string ToCsv(VoskBatchResults results)
         {
             var sb = new StringBuilder();

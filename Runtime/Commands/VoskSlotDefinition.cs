@@ -1,34 +1,26 @@
+// ============================================================================
+// Purpose:  Immutable slot definition (enumerated values + aliases, or number sequence)
+// Layer:    Runtime.Commands
+// Owns:     VoskSlotDefinition (public readonly struct)
+// Depends:  VoskSlotType
+// ============================================================================
 using System;
 using System.Collections.Generic;
 
 namespace VoskXR.Commands
 {
-    /// <summary>
-    /// Defines a named slot with a fixed set of allowed values and optional aliases,
-    /// or a NumberSequence slot that greedily matches digit words.
-    /// Slots are registered once and referenced by name across multiple command definitions.
-    /// </summary>
     public readonly struct VoskSlotDefinition
     {
-        /// <summary>The slot name used in pattern references, e.g. "weapon".</summary>
         public readonly string Name;
 
-        /// <summary>How this slot matches tokens during parsing.</summary>
         public readonly VoskSlotType Type;
 
-        /// <summary>Allowed values for this slot (Enumerated only).</summary>
         public readonly string[] Values;
 
-        /// <summary>
-        /// Maps variant words to canonical values, e.g. "jackals" → "jackal".
-        /// <see cref="VoskSlotMatch.Value"/> contains the canonical value after resolution.
-        /// </summary>
         public readonly Dictionary<string, string> Aliases;
 
-        /// <summary>Minimum number of digit words to consume (NumberSequence only).</summary>
         public readonly int MinWords;
 
-        /// <summary>Maximum number of digit words to consume (NumberSequence only).</summary>
         public readonly int MaxWords;
 
         public VoskSlotDefinition(string name, string[] values)
@@ -74,12 +66,6 @@ namespace VoskXR.Commands
             MaxWords = maxWords;
         }
 
-        /// <summary>
-        /// Creates a NumberSequence slot that greedily matches consecutive digit words.
-        /// </summary>
-        /// <param name="name">Slot name used in pattern references.</param>
-        /// <param name="minWords">Minimum digit words required for a match (must be >= 1).</param>
-        /// <param name="maxWords">Maximum digit words consumed (must be >= minWords).</param>
         public static VoskSlotDefinition NumberSequence(string name, int minWords = 1, int maxWords = 3)
         {
             if (minWords < 1)

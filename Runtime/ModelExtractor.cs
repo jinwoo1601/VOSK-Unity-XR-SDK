@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  Extracts ZIP-compressed VOSK models from StreamingAssets to persistent storage
+// Layer:    Runtime
+// Owns:     ModelExtractor (internal static class)
+// Depends:  VoskBridgeErrorCode
+// ============================================================================
 using System;
 using System.IO;
 using System.IO.Compression;
