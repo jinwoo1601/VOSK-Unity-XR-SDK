@@ -12,6 +12,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Two-tier native lifecycle: heavy model load once, then start / stop recognition instantly
 - Adaptive automatic gain control (AGC) with soft saturation
 - Structured error codes for all failure modes
+- Built-in push-to-talk controller with runtime-switchable listening mode
 
 **Command Recognition**
 - Grammar-constrained VOSK parsing for high-accuracy command match
