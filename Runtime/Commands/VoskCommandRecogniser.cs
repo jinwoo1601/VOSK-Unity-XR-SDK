@@ -390,6 +390,20 @@ namespace VoskXR.Commands
             {
                 var resolution = _pending.HandleTimeout(pendingTimeoutBehavior);
                 InterpretResolution(resolution);
+#if UNITY_EDITOR
+                bool timedOutConfirmed = resolution.Outcome == PendingOutcome.Confirmed;
+                string timeoutLabel = timedOutConfirmed
+                    ? "timeout — fired as-is" : "timeout — cancelled";
+                LastMatchDiagnostics = new VoskMatchDiagnostics(
+                    resolution.Command.RawText ?? "", Array.Empty<VoskWord>(),
+                    new[] { new VoskMatchAttempt(
+                        resolution.Command.Intent, null,
+                        resolution.Command.Score, minScore,
+                        resolution.Command.Confidence, minConfidence,
+                        null, timedOutConfirmed ? null : timeoutLabel,
+                        timedOutConfirmed) },
+                    Time.frameCount);
+#endif
             }
         }
 
@@ -459,10 +473,16 @@ namespace VoskXR.Commands
                 {
                     InterpretResolution(ccResolution);
 #if UNITY_EDITOR
+                    bool wasConfirmed = ccResolution.Outcome == PendingOutcome.Confirmed;
+                    string ccLabel = wasConfirmed ? "confirmed" : "cancelled";
                     LastMatchDiagnostics = new VoskMatchDiagnostics(
                         text, diagWords,
-                        new[] { new VoskMatchAttempt(null, null, 0f, minScore, 0f, minConfidence,
-                            null, "handled as confirm/cancel", false) },
+                        new[] { new VoskMatchAttempt(
+                            ccResolution.Command.Intent, null,
+                            ccResolution.Command.Score, minScore,
+                            ccResolution.Command.Confidence, minConfidence,
+                            null, wasConfirmed ? null : $"{ccLabel} via vocabulary",
+                            wasConfirmed) },
                         Time.frameCount);
 #endif
                     return;
