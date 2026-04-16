@@ -79,6 +79,20 @@ The SDK does not bundle a VOSK model. You must download one separately:
 
 Any VOSK-compatible model works. Larger models improve accuracy at the cost of memory and download size.
 
+## Windows Editor Setup (Optional)
+
+Required only if you want the live microphone backend in the Unity Editor on Windows. Skip this if you only deploy to Android -- the Android native libraries are bundled in the package.
+
+1. Download `vosk-win64-*.zip` from [alphacep/vosk-api releases](https://github.com/alphacep/vosk-api/releases).
+2. Extract and drop these four DLLs into the package's `Runtime/Plugins/x86_64/` folder:
+   - `libvosk.dll`
+   - `libgcc_s_seh-1.dll`
+   - `libstdc++-6.dll`
+   - `libwinpthread-1.dll`
+3. Plugin importer meta files are pre-configured for Editor-only loading on Windows x86_64 -- no build settings changes needed. These DLLs are excluded from Android and standalone builds.
+
+If the DLLs are missing, `VoskSpeechRecogniser.OnError` fires with `ModelLoadFailed` on the first `StartRecognition()` call in the Editor. See [Editor Testing](Documentation~/editor-testing.md) for the full live-mic workflow.
+
 ## Quick Start -- Basic Transcription
 
 ```csharp
