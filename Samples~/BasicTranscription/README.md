@@ -1,6 +1,7 @@
 # Basic Transcription Sample
 
-Live speech-to-text display using VOSK XR.
+Live speech-to-text display using VOSK XR. Demonstrates partial/final results,
+per-word confidence and timing, n-best alternatives, and error reporting.
 
 ## Setup
 
@@ -10,24 +11,28 @@ Live speech-to-text display using VOSK XR.
    - Get [vosk-model-small-en-us-0.15](https://alphacephei.com/vosk/models) (~50 MB).
    - Place the `.zip` in `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`.
 
-3. **Create the scene:**
-   - Create a new scene.
-   - Add an empty GameObject and attach `VoskSpeechRecogniser`.
-   - Add a Canvas with a `TextMeshPro - Text (UI)` element.
-   - Add the `VoiceDemo` script to any GameObject.
-   - Wire the `recogniser` and `displayText` references in the Inspector.
+3. **Open the scene** at `Assets/Samples/VOSK XR Speech Recognition/<version>/Basic Transcription/BasicTranscription.unity`.
 
-4. **Build and deploy:**
-   - Switch platform to Android (arm64).
-   - Ensure `RECORD_AUDIO` permission is enabled in Player Settings.
-   - Build and run on a Meta Quest headset.
+4. **Run:**
+   - **Windows Editor:** press Play. Speak into your PC mic — you'll see transcription on screen and per-word confidence in the right panel. Requires the four `libvosk*.dll` files in `Runtime/Plugins/x86_64/` (see the package README's *Windows Editor Setup*).
+   - **Quest:** switch platform to Android (arm64), enable `RECORD_AUDIO` in Player Settings, build, deploy.
 
-5. **Speak** — you should see live transcription text updating on screen.
+## What's in the scene
+
+| GameObject | Role |
+|---|---|
+| `Recogniser` | `VoskSpeechRecogniser` with `Max Alternatives = 3` so the n-best panel populates. |
+| `VoiceDemo` | Subscribes to `OnPartialResult`, `OnFinalResult`, `OnResult`, `OnError`. Drives the four UI text fields. |
+| `Canvas/TranscriptText` | Shows the live transcript (partial during speech, final on utterance boundary). |
+| `Canvas/WordsText` | Per-word table: `word | confidence | start–end seconds`. Populated from `VoskResult.Words`. |
+| `Canvas/AlternativesText` | Ranked alternative hypotheses from `VoskResult.Alternatives`. Hidden message until `Max Alternatives > 0`. |
+| `Canvas/ErrorText` | Hidden by default; shown for ~4 s on `OnError`. |
 
 ## Notes
 
 - The model extracts on first launch (a few seconds). Subsequent launches use the cached model.
 - Partial results update in real time while you speak. Final results appear at utterance boundaries.
+- The sample uses legacy `UnityEngine.UI.Text`. To switch to TextMeshPro, replace the `Text` references with `TMP_Text` in `VoiceDemo.cs` and re-wire the inspector.
 
 ## See Also
 
