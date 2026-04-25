@@ -3,6 +3,18 @@
 Hold-to-talk gating with the `VoskPushToTalkController` component. Includes a
 runtime toggle between push-to-talk and continuous listening modes.
 
+## Requirements
+
+This sample uses Unity's new Input System for keyboard input and pointer
+events on the Hold-to-Talk button:
+
+- `com.unity.inputsystem` package installed (Window > Package Manager)
+- Project Settings > Player > **Active Input Handling** = `Input System Package (New)` or `Both`
+
+If you're on legacy input only, replace `Input System UI Input Module` on
+the `EventSystem` GameObject with `Standalone Input Module`, and edit
+`PushToTalkDemo.cs` to use `Input.GetKey` for keyboard polling.
+
 ## Setup
 
 1. **Import the sample** via Package Manager > VOSK XR Speech Recognition > Samples > Push-to-Talk > Import.

@@ -1,4 +1,7 @@
+// Requires the Unity Input System package (com.unity.inputsystem).
+// Project must have "Active Input Handling" set to "Input System Package (New)" or "Both".
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using VoskXR;
 
@@ -18,9 +21,9 @@ public class PushToTalkDemo : MonoBehaviour
 
     [Header("Keyboard")]
     [Tooltip("Hold this key to talk while in PushToTalk mode.")]
-    [SerializeField] KeyCode talkKey = KeyCode.Space;
+    [SerializeField] Key talkKey = Key.Space;
     [Tooltip("Press this key to toggle between PushToTalk and Continuous.")]
-    [SerializeField] KeyCode toggleModeKey = KeyCode.Tab;
+    [SerializeField] Key toggleModeKey = Key.Tab;
 
     void OnEnable()
     {
@@ -61,15 +64,18 @@ public class PushToTalkDemo : MonoBehaviour
     {
         if (controller == null) return;
 
+        var kb = Keyboard.current;
+        if (kb == null) return;
+
         if (controller.ListeningMode == VoskListeningMode.PushToTalk)
         {
-            if (Input.GetKeyDown(talkKey))
+            if (kb[talkKey].wasPressedThisFrame)
                 controller.PressTalk();
-            if (Input.GetKeyUp(talkKey))
+            if (kb[talkKey].wasReleasedThisFrame)
                 controller.ReleaseTalk();
         }
 
-        if (Input.GetKeyDown(toggleModeKey))
+        if (kb[toggleModeKey].wasPressedThisFrame)
             TogglePushToTalkMode();
     }
 
