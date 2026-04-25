@@ -37,7 +37,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe Edit Mode API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
-- 20 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, asset conversion, and pending commands
+- 21 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, asset conversion, pending commands, and push-to-talk
 - Extensively tested on Quest 3 with published test matrices for every release
 
 ## Requirements
@@ -57,7 +57,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.16.0
 ```
 
 **Via manifest.json:**
@@ -65,7 +65,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.16.0"
   }
 }
 ```
@@ -190,10 +190,11 @@ Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
 |---|---|
 | **Basic Transcription** | Live speech-to-text with on-screen display. Demonstrates `VoskSpeechRecogniser` events, partial/final results, and per-word confidence. |
 | **Command Recognition** | Full command parsing with slots, command sets, mode switching, utterance buffering, and sequential extraction. Includes an Inspector authoring toggle and 20 ScriptableObject assets covering every slot type and pattern form. |
+| **Push-to-Talk** | Hold-to-talk gating with `VoskPushToTalkController`, runtime switching between push-to-talk and continuous modes, `UnityEvent` wiring for a recording indicator, and optional command-recogniser flush on release. |
 
 ## Running Tests
 
-The package includes 20 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
+The package includes 21 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
 
 ## Architecture
 
