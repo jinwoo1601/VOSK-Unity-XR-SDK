@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `VoskPushToTalkController` MonoBehaviour — hold-to-talk gating with runtime-switchable listening mode (`VoskListeningMode.Continuous` | `VoskListeningMode.PushToTalk`), optional command-recogniser integration (auto `FlushPendingBuffer` on release; opt-in `CancelPendingCommand`), `UnityEvent` hooks for Inspector wiring, and automatic correction for the Android mic-permission race.
+- `VoskListeningMode` enum.
+- Push-to-talk sample at `Samples~/PushToTalk/`.
+- `VoskPushToTalkControllerTests` — 16 Play Mode tests covering default state, null safety, press/release idempotence, buffer flushing, pending-command cancel, listening-mode transitions, lifecycle silence across disable/enable, and destroy cleanup.
+
 ## [0.16.0] - 2026-04-13
 
 ### Changed

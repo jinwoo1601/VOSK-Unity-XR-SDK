@@ -12,6 +12,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Two-tier native lifecycle: heavy model load once, then start / stop recognition instantly
 - Adaptive automatic gain control (AGC) with soft saturation
 - Structured error codes for all failure modes
+- Built-in push-to-talk controller with runtime-switchable listening mode
 
 **Command Recognition**
 - Grammar-constrained VOSK parsing for high-accuracy command match
@@ -36,7 +37,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe Edit Mode API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
-- 20 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, asset conversion, and pending commands
+- 21 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, asset conversion, pending commands, and push-to-talk
 - Extensively tested on Quest 3 with published test matrices for every release
 
 ## Requirements
@@ -56,7 +57,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.16.0
 ```
 
 **Via manifest.json:**
@@ -64,7 +65,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.15.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.16.0"
   }
 }
 ```
@@ -78,6 +79,20 @@ The SDK does not bundle a VOSK model. You must download one separately:
 3. The SDK extracts it to persistent storage on first launch.
 
 Any VOSK-compatible model works. Larger models improve accuracy at the cost of memory and download size.
+
+## Windows Editor Setup (Optional)
+
+Required only if you want the live microphone backend in the Unity Editor on Windows. Skip this if you only deploy to Android -- the Android native libraries are bundled in the package.
+
+1. Download `vosk-win64-*.zip` from [alphacep/vosk-api releases](https://github.com/alphacep/vosk-api/releases).
+2. Extract and drop these four DLLs into the package's `Runtime/Plugins/x86_64/` folder:
+   - `libvosk.dll`
+   - `libgcc_s_seh-1.dll`
+   - `libstdc++-6.dll`
+   - `libwinpthread-1.dll`
+3. Plugin importer meta files are pre-configured for Editor-only loading on Windows x86_64 -- no build settings changes needed. These DLLs are excluded from Android and standalone builds.
+
+If the DLLs are missing, `VoskSpeechRecogniser.OnError` fires with `ModelLoadFailed` on the first `StartRecognition()` call in the Editor. See [Editor Testing](Documentation~/editor-testing.md) for the full live-mic workflow.
 
 ## Quick Start -- Basic Transcription
 
@@ -175,10 +190,11 @@ Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
 |---|---|
 | **Basic Transcription** | Live speech-to-text with on-screen display. Demonstrates `VoskSpeechRecogniser` events, partial/final results, and per-word confidence. |
 | **Command Recognition** | Full command parsing with slots, command sets, mode switching, utterance buffering, and sequential extraction. Includes an Inspector authoring toggle and 20 ScriptableObject assets covering every slot type and pattern form. |
+| **Push-to-Talk** | Hold-to-talk gating with `VoskPushToTalkController`, runtime switching between push-to-talk and continuous modes, `UnityEvent` wiring for a recording indicator, and optional command-recogniser flush on release. |
 
 ## Running Tests
 
-The package includes 20 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
+The package includes 21 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
 
 ## Architecture
 

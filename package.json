@@ -29,6 +29,11 @@
       "displayName": "Command Recognition",
       "description": "Demonstrates grammar-constrained command parsing with intent and slot extraction.",
       "path": "Samples~/CommandRecognition"
+    },
+    {
+      "displayName": "Push-to-Talk",
+      "description": "Demonstrates the VoskPushToTalkController with hold-to-talk gating, continuous mode switching, and UnityEvent wiring.",
+      "path": "Samples~/PushToTalk"
     }
   ]
 }
