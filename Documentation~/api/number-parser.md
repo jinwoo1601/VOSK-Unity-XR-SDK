@@ -8,9 +8,9 @@ Converts spoken digit words into integers. Used internally by `NumberSequence` s
 
 | Member | Description |
 |--------|-------------|
-| `DigitVocabulary` | `static readonly HashSet<string>`. All number words the parser recognises (zero through nine, plus cardinals like hundred, thousand). |
-| `ParseDigitSequence(string words)` | Parses digit-per-word sequences by concatenating single digits. `"two seven zero"` -> `270`. Returns `0` for null/empty. Throws `FormatException` for unrecognised words. |
-| `ParseCardinal(string words)` | Parses cardinal number phrases. `"fifteen"` -> `15`, `"two hundred"` -> `200`. Returns `0` for null/empty. Throws `FormatException` for unrecognised words. |
+| `DigitVocabulary` | `static readonly HashSet<string>`. All number words the parser recognises: zero through nineteen, the tens (twenty, thirty, …, ninety), and the cardinals hundred and thousand. This is the set `NumberSequence` slots greedily consume from. |
+| `ParseDigitSequence(string words)` | Parses digit-per-word sequences by concatenating single digits. `"two seven zero"` -> `270`. Returns `0` for null/empty. Throws `FormatException` for any token outside `zero`–`nine` (including `ten`+ and the cardinals — use `ParseCardinal` for those). |
+| `ParseCardinal(string words)` | Parses cardinal number phrases. `"fifteen"` -> `15`, `"two hundred"` -> `200`. Accepts the full `DigitVocabulary`. Returns `0` for null/empty. Throws `FormatException` for unrecognised words. |
 
 ## Example
 

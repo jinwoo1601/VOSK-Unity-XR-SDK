@@ -11,8 +11,8 @@ Common issues, platform support details, and solutions for problems you may enco
 | Meta Quest 2/3/Pro (Android arm64) | Supported -- primary target, extensively tested |
 | Other Android arm64 XR (Pico, Lynx) | Should work -- same native bridge, not yet device-tested |
 | Windows Editor (x86_64) | Supported -- live mic + text injection for iteration |
-| macOS / Linux Editor | Text injection only -- no live mic backend |
 | Standalone Windows (PCVR) | Not yet supported -- architecturally ready, deferred to a future release |
+| macOS / Linux Editor | Text injection only -- no live mic backend |
 
 ---
 

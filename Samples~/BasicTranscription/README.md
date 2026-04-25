@@ -11,7 +11,7 @@ Live speech-to-text display using VOSK XR.
    - Place the `.zip` in `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`.
 
 3. **Create the scene:**
-   - Create a new scene or open the included `BasicTranscription.unity`.
+   - Create a new scene.
    - Add an empty GameObject and attach `VoskSpeechRecogniser`.
    - Add a Canvas with a `TextMeshPro - Text (UI)` element.
    - Add the `VoiceDemo` script to any GameObject.

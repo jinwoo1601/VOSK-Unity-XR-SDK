@@ -75,5 +75,8 @@ namespace VoskXR.Commands
 
             return new VoskSlotDefinition(name, minWords, maxWords);
         }
+
+        public static VoskSlotDefinition OneOf(string name, params string[] values)
+            => new VoskSlotDefinition(name, values ?? Array.Empty<string>());
     }
 }

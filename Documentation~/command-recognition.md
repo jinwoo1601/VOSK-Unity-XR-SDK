@@ -181,9 +181,9 @@ var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords
 // "heading one eight"      -> heading="18"
 ```
 
-The parser greedily consumes consecutive digit words ("zero" through "nine") within the configured `minWords`/`maxWords` range. Digit vocabulary is automatically merged into the grammar JSON.
+The parser greedily consumes consecutive number words within the configured `minWords`/`maxWords` range. The accepted set is the full `VoskNumberParser.DigitVocabulary` — zero through nineteen, the tens (twenty, thirty, …, ninety), plus `hundred` and `thousand`. The full vocabulary is merged into the grammar JSON automatically.
 
-Use `VoskNumberParser.ParseDigitSequence()` in your command handler to convert the extracted string to an integer:
+Use `VoskNumberParser.ParseDigitSequence()` when you author commands as digit-by-digit utterances ("two seven zero" → `270`); use `VoskNumberParser.ParseCardinal()` when you want the slot to read as a cardinal number ("two hundred" → `200`). `ParseDigitSequence` rejects anything outside `zero`–`nine`, so design your commands accordingly:
 
 ```csharp
 commandRecogniser.OnCommandRecognised += cmd =>
@@ -195,8 +195,6 @@ commandRecogniser.OnCommandRecognised += cmd =>
     }
 };
 ```
-
-`VoskNumberParser` also provides `ParseCardinal()` for natural-language numbers (`"fifteen"` -> `15`, `"two hundred"` -> `200`).
 
 ---
 

@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-04-25
+
 ### Added
 
-- `VoskPushToTalkController` MonoBehaviour — hold-to-talk gating with runtime-switchable listening mode (`VoskListeningMode.Continuous` | `VoskListeningMode.PushToTalk`), optional command-recogniser integration (auto `FlushPendingBuffer` on release; opt-in `CancelPendingCommand`), `UnityEvent` hooks for Inspector wiring, and automatic correction for the Android mic-permission race.
-- `VoskListeningMode` enum.
-- Push-to-talk sample at `Samples~/PushToTalk/`.
-- `VoskPushToTalkControllerTests` — 16 Play Mode tests covering default state, null safety, press/release idempotence, buffer flushing, pending-command cancel, listening-mode transitions, lifecycle silence across disable/enable, and destroy cleanup.
+- `VoskPushToTalkController` MonoBehaviour and `VoskListeningMode` enum — hold-to-talk gating with runtime-switchable continuous mode, optional command-recogniser integration, `UnityEvent` hooks, and a guard for the Android mic-permission race. See [Push-to-Talk guide](Documentation~/push-to-talk.md).
+- Push-to-talk sample at `Samples~/PushToTalk/` and `VoskPushToTalkControllerTests` (16 Play Mode tests).
+- `VoskSlotDefinition.OneOf(name, params values)` factory method for concise enumerated-slot construction.
 
 ## [0.16.0] - 2026-04-13
 

@@ -57,7 +57,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.16.0
+https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0
 ```
 
 **Via manifest.json:**
@@ -65,7 +65,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.16.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.16.0"
+    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0"
   }
 }
 ```
@@ -215,7 +215,7 @@ VoskCommandRecogniser         -- MonoBehaviour, subscribes to speech events
   +-- Events: OnCommandRecognised, OnCommandsRecognised, OnUnrecognisedSpeech
 ```
 
-On Android, a C++ native bridge captures audio via Java `AudioRecord` (JNI), runs AGC and FIR downsampling (48 kHz -> 16 kHz), and feeds int16 samples to VOSK on a dedicated thread. In the Windows Editor, `EditorMicBackend` captures via `UnityEngine.Microphone`, runs equivalent C# DSP, and calls VOSK via P/Invoke on the main thread.
+On Android, a C++ native bridge captures audio via Java `AudioRecord` (JNI), runs AGC and FIR downsampling (48 kHz -> 16 kHz), and feeds int16 samples to VOSK on a dedicated thread. In the Windows Editor, `EditorMicBackend` captures via `UnityEngine.Microphone`, runs equivalent C# DSP, and calls VOSK via P/Invoke on the main thread (the one-time model load is offloaded to a background `Task` to avoid a startup hitch).
 
 ## Platform Support
 
@@ -243,6 +243,7 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
+| 0.17.0 | `VoskPushToTalkController` and `VoskListeningMode` for runtime-switchable push-to-talk |
 | 0.16.0 | Internal refactoring and per-utterance allocation reduction |
 | 0.15.0 | Pending commands: partial match, confirmation, follow-up slot-fill |
 | 0.14.0 | Dynamic slot value providers for runtime parser filtering |

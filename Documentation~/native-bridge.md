@@ -15,7 +15,7 @@ The SDK includes a prebuilt `libvosk-bridge.so` for Android arm64. This guide co
 
 ## Build Steps
 
-1. Place `libvosk.so` in `Plugins/Android/libs/arm64-v8a/`.
+1. Place `libvosk.so` in `Runtime/Plugins/Android/arm64-v8a/` (the location the package's CMake build expects by default — `NativeBridge~/CMakeLists.txt` sets `VOSK_LIB_DIR` here when nothing else is provided).
 
 2. Configure and build with CMake:
 

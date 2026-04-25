@@ -43,5 +43,5 @@ recogniser.OnError += (code, message) =>
 
 ## See Also
 
-- [Push-to-Talk](../push-to-talk.md) -- error handling patterns
+- [Push-to-Talk #error-handling](../push-to-talk.md#error-handling) -- worked examples for the codes most relevant during press/release flows
 - [VoskSpeechRecogniser](speech-recogniser.md) -- `OnError` event

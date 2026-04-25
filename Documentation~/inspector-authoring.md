@@ -32,7 +32,7 @@ Configure each slot asset in the Inspector:
 
 ### 2. Create Command Assets
 
-Select **Assets > Create > VOSK XR > Command**.
+Select **Assets > Create > VOSK XR > Command Definition**.
 
 Configure each command asset:
 - **Intent** -- the intent name that fires in `OnCommandRecognised` (e.g. `launch_weapon`)
