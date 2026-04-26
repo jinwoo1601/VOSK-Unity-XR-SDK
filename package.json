@@ -1,12 +1,12 @@
 {
-  "name": "com.jinwoo1601.vosk-xr",
+  "name": "com.jinwoo1601.voxr",
   "version": "0.17.0",
-  "displayName": "VOSK XR Speech Recognition",
+  "displayName": "VoXR Speech Recognition",
   "description": "Offline speech recognition for XR applications. Wraps the VOSK toolkit behind a Unity-native C# API with native audio capture via AudioRecord JNI on Android arm64, plus live microphone capture in the Unity Editor on Windows for iteration without a Quest device.",
   "unity": "6000.0",
-  "documentationUrl": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK/blob/main/Documentation~/index.md",
-  "changelogUrl": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK/blob/main/LICENSE.md",
+  "documentationUrl": "https://github.com/jinwoo1601/VoXR-Speech-Recognition/blob/main/Documentation~/index.md",
+  "changelogUrl": "https://github.com/jinwoo1601/VoXR-Speech-Recognition/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/jinwoo1601/VoXR-Speech-Recognition/blob/main/LICENSE.md",
   "keywords": [
     "vosk",
     "speech",
@@ -32,7 +32,7 @@
     },
     {
       "displayName": "Push-to-Talk",
-      "description": "Demonstrates the VoskPushToTalkController with hold-to-talk gating, continuous mode switching, and UnityEvent wiring.",
+      "description": "Demonstrates the VoxrPushToTalkController with hold-to-talk gating, continuous mode switching, and UnityEvent wiring.",
       "path": "Samples~/PushToTalk"
     }
   ]

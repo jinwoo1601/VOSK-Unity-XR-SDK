@@ -1,17 +1,17 @@
 # ScriptableObject Assets
 
-Inspector-friendly assets for zero-code command authoring. Create via **Assets > Create > VOSK XR**.
+Inspector-friendly assets for zero-code command authoring. Create via **Assets > Create > VoXR**.
 
-## VoskSlotAsset
+## VoxrSlotAsset
 
-`public class VoskSlotAsset : ScriptableObject` -- Namespace: `VoskXR.Commands`
+`public class VoxrSlotAsset : ScriptableObject` -- Namespace: `VoXR.Commands`
 
 ### Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `slotName` | `string` | Slot name used in pattern references |
-| `slotType` | `VoskSlotType` | `Enumerated` or `NumberSequence` |
+| `slotType` | `VoxrSlotType` | `Enumerated` or `NumberSequence` |
 | `values` | `string[]` | Allowed values (Enumerated only) |
 | `aliases` | `AliasEntry[]` | Variant-to-canonical mappings |
 | `minWords` | `int` | Minimum digit words (NumberSequence, default 1) |
@@ -21,7 +21,7 @@ Inspector-friendly assets for zero-code command authoring. Create via **Assets >
 
 | Method | Description |
 |--------|-------------|
-| `ToDefinition()` | Converts to runtime `VoskSlotDefinition` struct |
+| `ToDefinition()` | Converts to runtime `VoxrSlotDefinition` struct |
 
 ### AliasEntry
 
@@ -32,9 +32,9 @@ Nested serializable struct for variant-to-canonical mappings.
 | `variant` | `string` | The variant word/phrase (e.g. `"jackals"`) |
 | `canonical` | `string` | The canonical value it maps to (e.g. `"jackal"`) |
 
-## VoskCommandAsset
+## VoxrCommandAsset
 
-`public class VoskCommandAsset : ScriptableObject` -- Namespace: `VoskXR.Commands`
+`public class VoxrCommandAsset : ScriptableObject` -- Namespace: `VoXR.Commands`
 
 ### Fields
 
@@ -51,30 +51,30 @@ Each pattern string is split on whitespace into a token array at runtime. Tokens
 
 | Method | Description |
 |--------|-------------|
-| `ToDefinition()` | Converts to runtime `VoskCommandDefinition` struct. Splits pattern strings on whitespace into token arrays. |
+| `ToDefinition()` | Converts to runtime `VoxrCommandDefinition` struct. Splits pattern strings on whitespace into token arrays. |
 
-## VoskCommandSetAsset
+## VoxrCommandSetAsset
 
-`public class VoskCommandSetAsset : ScriptableObject` -- Namespace: `VoskXR.Commands`
+`public class VoxrCommandSetAsset : ScriptableObject` -- Namespace: `VoXR.Commands`
 
 ### Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `setName` | `string` | The command set name |
-| `commands` | `VoskCommandAsset[]` | Command assets in this set |
+| `commands` | `VoxrCommandAsset[]` | Command assets in this set |
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `ToSet()` | Converts to runtime `VoskCommandSet` struct. Skips null entries with a warning. |
+| `ToSet()` | Converts to runtime `VoxrCommandSet` struct. Skips null entries with a warning. |
 
-## VoskTestSuiteAsset
+## VoxrTestSuiteAsset
 
-`public class VoskTestSuiteAsset : ScriptableObject` -- Namespace: `VoskXR.Testing`
+`public class VoxrTestSuiteAsset : ScriptableObject` -- Namespace: `VoXR.Testing`
 
-Create via **Assets > Create > VOSK XR > Test Suite**.
+Create via **Assets > Create > VoXR > Test Suite**.
 
 A collection of test cases for regression-testing command definitions with the [Batch Test Runner](batch-test-runner.md).
 
@@ -83,19 +83,19 @@ A collection of test cases for regression-testing command definitions with the [
 | Field | Type | Description |
 |-------|------|-------------|
 | `suiteName` | `string` | Human-readable name for this test suite |
-| `cases` | `List<VoskTestCase>` | Test cases to run |
+| `cases` | `List<VoxrTestCase>` | Test cases to run |
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `ToArray()` | Returns `cases` as a `VoskTestCase[]` for `VoskBatchTestRunner.RunAll()`. |
+| `ToArray()` | Returns `cases` as a `VoxrTestCase[]` for `VoxrBatchTestRunner.RunAll()`. |
 | `ToJson()` | Serializes all cases to a JSON string for portability and version control. |
 | `FromJson(string json)` | Replaces `cases` from a JSON string. |
 
-## VoskTestCase
+## VoxrTestCase
 
-`[Serializable] public class VoskTestCase` -- Namespace: `VoskXR.Testing`
+`[Serializable] public class VoxrTestCase` -- Namespace: `VoXR.Testing`
 
 Serializable struct representing a single test case.
 
@@ -110,6 +110,6 @@ Serializable struct representing a single test case.
 ## See Also
 
 - [Inspector Authoring](../inspector-authoring.md) -- workflow guide for zero-code setup
-- [Command Definitions](command-definitions.md) -- runtime equivalents: `VoskCommandDefinition`, `VoskSlotDefinition`
-- [Batch Test Runner](batch-test-runner.md) -- regression testing with `VoskTestSuiteAsset`
+- [Command Definitions](command-definitions.md) -- runtime equivalents: `VoxrCommandDefinition`, `VoxrSlotDefinition`
+- [Batch Test Runner](batch-test-runner.md) -- regression testing with `VoxrTestSuiteAsset`
 - [Editor Testing](../editor-testing.md) -- visual test UI guide

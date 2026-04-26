@@ -1,17 +1,17 @@
 # Basic Transcription Sample
 
-Live speech-to-text display using VOSK XR. Demonstrates partial/final results,
+Live speech-to-text display using VoXR. Demonstrates partial/final results,
 per-word confidence and timing, n-best alternatives, and error reporting.
 
 ## Setup
 
-1. **Import the sample** via Package Manager > VOSK XR Speech Recognition > Samples > Basic Transcription > Import.
+1. **Import the sample** via Package Manager > VoXR Speech Recognition > Samples > Basic Transcription > Import.
 
 2. **Download a VOSK model:**
    - Get [vosk-model-small-en-us-0.15](https://alphacephei.com/vosk/models) (~50 MB).
    - Place the `.zip` in `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`.
 
-3. **Open the scene** at `Assets/Samples/VOSK XR Speech Recognition/<version>/Basic Transcription/BasicTranscription.unity`.
+3. **Open the scene** at `Assets/Samples/VoXR Speech Recognition/<version>/Basic Transcription/BasicTranscription.unity`.
 
 4. **Run:**
    - **Windows Editor:** press Play. Speak into your PC mic — you'll see transcription on screen and per-word confidence in the right panel. Requires the four `libvosk*.dll` files in `Runtime/Plugins/x86_64/` (see the package README's *Windows Editor Setup*).
@@ -21,11 +21,11 @@ per-word confidence and timing, n-best alternatives, and error reporting.
 
 | GameObject | Role |
 |---|---|
-| `Recogniser` | `VoskSpeechRecogniser` with `Max Alternatives = 3` so the n-best panel populates. |
+| `Recogniser` | `VoxrSpeechRecogniser` with `Max Alternatives = 3` so the n-best panel populates. |
 | `VoiceDemo` | Subscribes to `OnPartialResult`, `OnFinalResult`, `OnResult`, `OnError`. Drives the four UI text fields. |
 | `Canvas/TranscriptText` | Shows the live transcript (partial during speech, final on utterance boundary). |
-| `Canvas/WordsText` | Per-word table: `word | confidence | start–end seconds`. Populated from `VoskResult.Words`. |
-| `Canvas/AlternativesText` | Ranked alternative hypotheses from `VoskResult.Alternatives`. Hidden message until `Max Alternatives > 0`. |
+| `Canvas/WordsText` | Per-word table: `word | confidence | start–end seconds`. Populated from `VoxrResult.Words`. |
+| `Canvas/AlternativesText` | Ranked alternative hypotheses from `VoxrResult.Alternatives`. Hidden message until `Max Alternatives > 0`. |
 | `Canvas/ErrorText` | Hidden by default; shown for ~4 s on `OnError`. |
 
 ## Notes

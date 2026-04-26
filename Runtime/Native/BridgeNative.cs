@@ -8,7 +8,7 @@ using System;
 using System.Runtime.InteropServices;
 using UnityEngine.Scripting;
 
-namespace VoskXR.Native
+namespace VoXR.Native
 {
     [Preserve]
     internal static class BridgeNative

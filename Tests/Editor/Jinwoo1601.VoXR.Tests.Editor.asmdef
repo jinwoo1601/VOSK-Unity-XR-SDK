@@ -1,0 +1,24 @@
+{
+    "name": "Jinwoo1601.VoXR.Tests.Editor",
+    "rootNamespace": "VoXR.Tests.Editor",
+    "references": [
+        "Jinwoo1601.VoXR.Runtime",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

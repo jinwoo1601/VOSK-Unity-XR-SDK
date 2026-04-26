@@ -1,0 +1,14 @@
+{
+    "name": "Jinwoo1601.VoXR.Runtime",
+    "rootNamespace": "VoXR",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

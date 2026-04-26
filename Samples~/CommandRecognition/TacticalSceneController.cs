@@ -4,11 +4,11 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
-using VoskXR.Commands;
+using VoXR.Commands;
 
 // Drives the visual side of the CommandRecognition_Tactical scene:
 //   - Maps the "target" slot value to a renderer and flashes it on relevant intents.
-//   - Updates the mode chip from VoskCommandRecogniser.ActiveSetNames.
+//   - Updates the mode chip from VoxrCommandRecogniser.ActiveSetNames.
 //   - Maintains a rolling command log and a last-command inspector panel.
 //
 // Wire this component to the same GameObject as CommandDemo (or any GameObject
@@ -25,7 +25,7 @@ public class TacticalSceneController : MonoBehaviour
         public Renderer renderer;
     }
 
-    [SerializeField] VoskCommandRecogniser commandRecogniser;
+    [SerializeField] VoxrCommandRecogniser commandRecogniser;
 
     [Header("Targets")]
     [SerializeField] TargetMapping[] targets;
@@ -96,7 +96,7 @@ public class TacticalSceneController : MonoBehaviour
         return string.Join(" + ", sets);
     }
 
-    void OnCommand(VoskCommand cmd)
+    void OnCommand(VoxrCommand cmd)
     {
         AppendLog($"{cmd.Intent} (score {cmd.Score:F2})");
         UpdateLastCommandPanel(cmd);
@@ -162,7 +162,7 @@ public class TacticalSceneController : MonoBehaviour
         commandLogText.text = _logBuilder.ToString();
     }
 
-    void UpdateLastCommandPanel(VoskCommand cmd)
+    void UpdateLastCommandPanel(VoxrCommand cmd)
     {
         if (lastCommandText == null) return;
 

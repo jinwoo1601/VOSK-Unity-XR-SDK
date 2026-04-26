@@ -1,16 +1,16 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using VoskXR;
-using VoskXR.Commands;
+using VoXR;
+using VoXR.Commands;
 
 public class CommandDemo : MonoBehaviour
 {
-    [SerializeField] VoskSpeechRecogniser recogniser;
-    [SerializeField] VoskCommandRecogniser commandRecogniser;
+    [SerializeField] VoxrSpeechRecogniser recogniser;
+    [SerializeField] VoxrCommandRecogniser commandRecogniser;
 
     [Tooltip("When enabled, skip the code-based Configure() call and rely on " +
-             "ScriptableObject assets wired on VoskCommandRecogniser instead. " +
+             "ScriptableObject assets wired on VoxrCommandRecogniser instead. " +
              "Used for v2.5 Inspector authoring tests.")]
     [SerializeField] bool useInspectorAuthoring = false;
 
@@ -43,44 +43,44 @@ public class CommandDemo : MonoBehaviour
             return;
         }
 
-        var targets = new VoskSlotDefinition("target",
+        var targets = new VoxrSlotDefinition("target",
             new[] { "hotel one", "hotel two", "alpha one", "alpha three", "bravo two" });
 
-        var weapons = new VoskSlotDefinition("weapon",
+        var weapons = new VoxrSlotDefinition("weapon",
             new[] { "missiles", "torpedoes", "jackal" },
             aliases: new Dictionary<string, string>
             {
                 { "jackals", "jackal" },
             });
 
-        var quantity = new VoskSlotDefinition("quantity",
+        var quantity = new VoxrSlotDefinition("quantity",
             new[] { "all", "one", "two", "three" },
             aliases: new Dictionary<string, string>
             {
                 { "a", "one" },
             });
 
-        var namedRange = new VoskSlotDefinition("range",
+        var namedRange = new VoxrSlotDefinition("range",
             new[] { "cqb", "safe range", "torpedo range", "pdc range", "railgun range" });
 
-        var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
-        var elevation = VoskSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2);
+        var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
+        var elevation = VoxrSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2);
 
-        var weaponsSet = new VoskCommandSet("weapons", new[]
+        var weaponsSet = new VoxrCommandSet("weapons", new[]
         {
-            new VoskCommandDefinition(Intents.LaunchWeapon, new[]
+            new VoxrCommandDefinition(Intents.LaunchWeapon, new[]
             {
                 new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
                 new[] { "fire", "{?quantity}", "{weapon}", "at", "{target}" },
                 new[] { "shoot", "{weapon}" },
             }),
-            new VoskCommandDefinition(Intents.CeaseFire, new[]
+            new VoxrCommandDefinition(Intents.CeaseFire, new[]
             {
                 new[] { "cease", "fire" },
                 new[] { "stop", "firing" },
                 new[] { "disengage" },
             }),
-            new VoskCommandDefinition(Intents.ResumeFire, new[]
+            new VoxrCommandDefinition(Intents.ResumeFire, new[]
             {
                 new[] { "resume", "fire" },
                 new[] { "resume", "firing" },
@@ -88,22 +88,22 @@ public class CommandDemo : MonoBehaviour
             }),
         });
 
-        var navigationSet = new VoskCommandSet("navigation", new[]
+        var navigationSet = new VoxrCommandSet("navigation", new[]
         {
-            new VoskCommandDefinition(Intents.SetDistanceNamed, new[]
+            new VoxrCommandDefinition(Intents.SetDistanceNamed, new[]
             {
                 new[] { "close", "distance", "{range}", "target", "{target}" },
                 new[] { "set", "distance", "{range}", "target", "{target}" },
                 new[] { "make", "distance", "{range}", "target", "{target}" },
                 new[] { "open", "distance", "{range}", "target", "{target}" },
             }),
-            new VoskCommandDefinition(Intents.ApproachTarget, new[]
+            new VoxrCommandDefinition(Intents.ApproachTarget, new[]
             {
                 new[] { "close", "on", "target", "{target}" },
                 new[] { "close", "in", "on", "target", "{target}" },
                 new[] { "approach", "target", "{target}" },
             }),
-            new VoskCommandDefinition(Intents.RetreatFromTarget, new[]
+            new VoxrCommandDefinition(Intents.RetreatFromTarget, new[]
             {
                 new[] { "fall", "back", "from", "target", "{target}" },
                 new[] { "pull", "back", "from", "target", "{target}" },
@@ -111,7 +111,7 @@ public class CommandDemo : MonoBehaviour
                 new[] { "move", "away", "from", "target", "{target}" },
                 new[] { "open", "distance", "from", "target", "{target}" },
             }),
-            new VoskCommandDefinition(Intents.SetHeading, new[]
+            new VoxrCommandDefinition(Intents.SetHeading, new[]
             {
                 new[] { "orient", "heading", "{heading}" },
                 new[] { "orient", "heading", "{heading}", "mark", "{?elevation}" },
@@ -119,24 +119,24 @@ public class CommandDemo : MonoBehaviour
             }),
         });
 
-        var commonSet = new VoskCommandSet("common", new[]
+        var commonSet = new VoxrCommandSet("common", new[]
         {
-            new VoskCommandDefinition(Intents.ModeWeapons, new[]
+            new VoxrCommandDefinition(Intents.ModeWeapons, new[]
             {
                 new[] { "weapons", "mode" },
                 new[] { "switch", "to", "weapons" },
             }),
-            new VoskCommandDefinition(Intents.ModeNavigation, new[]
+            new VoxrCommandDefinition(Intents.ModeNavigation, new[]
             {
                 new[] { "navigation", "mode" },
                 new[] { "switch", "to", "navigation" },
             }),
-            new VoskCommandDefinition(Intents.ModeAll, new[]
+            new VoxrCommandDefinition(Intents.ModeAll, new[]
             {
                 new[] { "all", "modes" },
                 new[] { "enable", "all" },
             }),
-            new VoskCommandDefinition(Intents.ModeDisable, new[]
+            new VoxrCommandDefinition(Intents.ModeDisable, new[]
             {
                 new[] { "disable", "all" },
                 new[] { "disable", "commands" },
@@ -167,7 +167,7 @@ public class CommandDemo : MonoBehaviour
         }
     }
 
-    void OnCommand(VoskCommand cmd)
+    void OnCommand(VoxrCommand cmd)
     {
         switch (cmd.Intent)
         {
@@ -189,7 +189,7 @@ public class CommandDemo : MonoBehaviour
         }
     }
 
-    void OnCommandBatch(VoskCommand[] commands) { }
+    void OnCommandBatch(VoxrCommand[] commands) { }
 
     void OnUnrecognised(string text)
     {

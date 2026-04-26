@@ -1,8 +1,8 @@
-# VoskBridgeErrorCode
+# VoxrBridgeErrorCode
 
-`public enum VoskBridgeErrorCode` -- Namespace: `VoskXR`
+`public enum VoxrBridgeErrorCode` -- Namespace: `VoXR`
 
-Error codes reported by the native bridge via `VoskSpeechRecogniser.OnError`.
+Error codes reported by the native bridge via `VoxrSpeechRecogniser.OnError`.
 
 ## Values
 
@@ -28,10 +28,10 @@ recogniser.OnError += (code, message) =>
 {
     switch (code)
     {
-        case VoskBridgeErrorCode.PermissionDenied:
+        case VoxrBridgeErrorCode.PermissionDenied:
             ShowPermissionDialog();
             break;
-        case VoskBridgeErrorCode.AudioDeviceUnavailable:
+        case VoxrBridgeErrorCode.AudioDeviceUnavailable:
             Debug.LogError($"Audio device error: {code.ToDescription()}");
             break;
         default:
@@ -44,4 +44,4 @@ recogniser.OnError += (code, message) =>
 ## See Also
 
 - [Push-to-Talk #error-handling](../push-to-talk.md#error-handling) -- worked examples for the codes most relevant during press/release flows
-- [VoskSpeechRecogniser](speech-recogniser.md) -- `OnError` event
+- [VoxrSpeechRecogniser](speech-recogniser.md) -- `OnError` event

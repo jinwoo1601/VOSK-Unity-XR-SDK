@@ -1,4 +1,4 @@
-# VOSK XR Speech Recognition
+# VoXR Speech Recognition
 
 Offline speech recognition and voice command parsing for Unity XR applications. Wraps the [VOSK](https://alphacephei.com/vosk/) toolkit behind a Unity-native C# API with native audio capture on Android arm64 and live microphone capture in the Unity Editor on Windows.
 
@@ -18,14 +18,14 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 ## API Reference
 
-- [VoskSpeechRecogniser](api/speech-recogniser.md) -- Core speech recognition component: events, properties, methods
-- [VoskCommandRecogniser](api/command-recogniser.md) -- Command parsing component: configuration, events, injection
-- [Data Types](api/data-types.md) -- VoskResult, VoskWord, VoskCommand, and related structs
-- [Command Definitions](api/command-definitions.md) -- VoskCommandDefinition, VoskSlotDefinition, VoskCommandSet
-- [ScriptableObject Assets](api/scriptable-objects.md) -- VoskSlotAsset, VoskCommandAsset, VoskCommandSetAsset, VoskTestSuiteAsset
-- [VoskNumberParser](api/number-parser.md) -- Digit word to integer conversion
-- [VoskBridgeErrorCode](api/error-codes.md) -- Structured error codes for all failure modes
-- [VoskBatchTestRunner](api/batch-test-runner.md) -- Regression-testing runner, test cases, batch results
+- [VoxrSpeechRecogniser](api/speech-recogniser.md) -- Core speech recognition component: events, properties, methods
+- [VoxrCommandRecogniser](api/command-recogniser.md) -- Command parsing component: configuration, events, injection
+- [Data Types](api/data-types.md) -- VoxrResult, VoxrWord, VoxrCommand, and related structs
+- [Command Definitions](api/command-definitions.md) -- VoxrCommandDefinition, VoxrSlotDefinition, VoxrCommandSet
+- [ScriptableObject Assets](api/scriptable-objects.md) -- VoxrSlotAsset, VoxrCommandAsset, VoxrCommandSetAsset, VoxrTestSuiteAsset
+- [VoxrNumberParser](api/number-parser.md) -- Digit word to integer conversion
+- [VoxrBridgeErrorCode](api/error-codes.md) -- Structured error codes for all failure modes
+- [VoxrBatchTestRunner](api/batch-test-runner.md) -- Regression-testing runner, test cases, batch results
 
 ## Support
 

@@ -2,26 +2,26 @@
 // Purpose:  Registers named command sets and aggregates active definitions on activation
 // Layer:    Runtime.Commands
 // Owns:     CommandSetManager (internal sealed class)
-// Depends:  VoskCommandSet, VoskCommandDefinition
+// Depends:  VoxrCommandSet, VoxrCommandDefinition
 // ============================================================================
 using System;
 using System.Collections.Generic;
 
-namespace VoskXR.Commands
+namespace VoXR.Commands
 {
     internal sealed class CommandSetManager
     {
-        Dictionary<string, VoskCommandSet> _sets;
+        Dictionary<string, VoxrCommandSet> _sets;
         string[] _activeSetNames = Array.Empty<string>();
-        Dictionary<string, VoskCommandDefinition> _commandLookup;
+        Dictionary<string, VoxrCommandDefinition> _commandLookup;
 
         internal string[] ActiveSetNames => _activeSetNames;
 
         internal bool HasSets => _sets != null;
 
-        internal void Configure(VoskCommandSet[] sets)
+        internal void Configure(VoxrCommandSet[] sets)
         {
-            _sets = new Dictionary<string, VoskCommandSet>(sets.Length, StringComparer.Ordinal);
+            _sets = new Dictionary<string, VoxrCommandSet>(sets.Length, StringComparer.Ordinal);
 
             for (int i = 0; i < sets.Length; i++)
             {
@@ -34,7 +34,7 @@ namespace VoskXR.Commands
             _commandLookup = null;
         }
 
-        internal VoskCommandDefinition[] Activate(params string[] setNames)
+        internal VoxrCommandDefinition[] Activate(params string[] setNames)
         {
             if (_sets == null)
                 throw new InvalidOperationException(
@@ -54,14 +54,14 @@ namespace VoskXR.Commands
             for (int i = 0; i < setNames.Length; i++)
                 total += _sets[setNames[i]].Commands.Length;
 
-            VoskCommandDefinition[] commands;
+            VoxrCommandDefinition[] commands;
             if (total == 0)
             {
-                commands = Array.Empty<VoskCommandDefinition>();
+                commands = Array.Empty<VoxrCommandDefinition>();
             }
             else
             {
-                commands = new VoskCommandDefinition[total];
+                commands = new VoxrCommandDefinition[total];
                 int offset = 0;
                 for (int i = 0; i < setNames.Length; i++)
                 {
@@ -79,10 +79,10 @@ namespace VoskXR.Commands
             return commands;
         }
 
-        internal void BuildLookup(VoskCommandDefinition[] commands)
+        internal void BuildLookup(VoxrCommandDefinition[] commands)
         {
             if (_commandLookup == null)
-                _commandLookup = new Dictionary<string, VoskCommandDefinition>(
+                _commandLookup = new Dictionary<string, VoxrCommandDefinition>(
                     commands.Length, StringComparer.Ordinal);
             else
                 _commandLookup.Clear();
@@ -91,7 +91,7 @@ namespace VoskXR.Commands
                 _commandLookup[commands[i].Intent] = commands[i];
         }
 
-        internal bool TryLookupCommand(string intent, out VoskCommandDefinition definition)
+        internal bool TryLookupCommand(string intent, out VoxrCommandDefinition definition)
         {
             if (_commandLookup != null)
                 return _commandLookup.TryGetValue(intent, out definition);

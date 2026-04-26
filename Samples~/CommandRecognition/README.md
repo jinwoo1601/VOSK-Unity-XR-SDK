@@ -1,18 +1,18 @@
 # Command Recognition Sample
 
 Voice-driven command parsing with slots, command sets, and runtime mode
-switching. Demonstrates the `VoskCommandRecogniser` pipeline on top of
-`VoskSpeechRecogniser`.
+switching. Demonstrates the `VoxrCommandRecogniser` pipeline on top of
+`VoxrSpeechRecogniser`.
 
 ## Setup
 
-1. **Import the sample** via Package Manager > VOSK XR Speech Recognition > Samples > Command Recognition > Import.
+1. **Import the sample** via Package Manager > VoXR Speech Recognition > Samples > Command Recognition > Import.
 
 2. **Download a VOSK model:**
    - Get [vosk-model-small-en-us-0.15](https://alphacephei.com/vosk/models) (~50 MB).
    - Place the `.zip` in `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`.
 
-3. **Open the scene** at `Assets/Samples/VOSK XR Speech Recognition/<version>/Command Recognition/CommandRecognition_Tactical.unity`.
+3. **Open the scene** at `Assets/Samples/VoXR Speech Recognition/<version>/Command Recognition/CommandRecognition_Tactical.unity`.
 
 4. **Run:**
    - **Windows Editor:** press Play. Speak commands into your PC mic and watch the cubes flash, the mode chip change, and the command log update.
@@ -25,8 +25,8 @@ The scene is a tiny "tactical console" with four labelled target cubes
 
 | Panel | Role |
 |---|---|
-| Title | `VOSK XR — Tactical Command Recognition` |
-| ModeChip (top-right) | Live read-out of `VoskCommandRecogniser.ActiveSetNames` |
+| Title | `VoXR — Tactical Command Recognition` |
+| ModeChip (top-right) | Live read-out of `VoxrCommandRecogniser.ActiveSetNames` |
 | HelpText (top-left) | Targets and a list of try-saying commands |
 | CommandLog (bottom-left) | Rolling log of recognised intents and unrecognised speech |
 | LastCommand (bottom-right) | Intent, score, and slot values from the most recent match |
@@ -35,8 +35,8 @@ GameObjects:
 
 | GameObject | Role |
 |---|---|
-| `Recogniser` | `VoskSpeechRecogniser` |
-| `CommandRecogniser` | `VoskCommandRecogniser` (`bufferWindow = 2.0` for Quest 3 latency) |
+| `Recogniser` | `VoxrSpeechRecogniser` |
+| `CommandRecogniser` | `VoxrCommandRecogniser` (`bufferWindow = 2.0` for Quest 3 latency) |
 | `TacticalDemo` | Holds two scripts: `CommandDemo` (defines slots/sets via code in `Start`) and `TacticalSceneController` (drives the UI panels and flashes the cubes) |
 | `Target_HotelOne` … `Target_BravoTwo` | Cubes whose `MeshRenderer` is wired into `TacticalSceneController.targets` so the colour flashes resolve to the right cube via the `target` slot value |
 
@@ -79,7 +79,7 @@ build cycle.
 
 ### Live microphone in the Windows Editor
 
-On the Windows Unity Editor, `VoskSpeechRecogniser.StartRecognition()`
+On the Windows Unity Editor, `VoxrSpeechRecogniser.StartRecognition()`
 transparently routes audio through `UnityEngine.Microphone` and a desktop
 build of `libvosk.dll` — the sample runs end-to-end in Play Mode with zero
 code changes. Speak into your PC microphone, watch commands fire.
@@ -91,14 +91,14 @@ Requires `libvosk.dll` and its three MinGW runtime dependencies in
 
 For unit tests, CI, replay scenarios, and threshold-tuning without a mic:
 
-- `VoskCommandRecogniser.InjectText(text, words)` — pushes a string through
+- `VoxrCommandRecogniser.InjectText(text, words)` — pushes a string through
   the same parser → threshold → buffer → debounce path as real audio.
-- `VoskCommandRecogniser.FlushPendingBuffer()` — forces buffered text to
+- `VoxrCommandRecogniser.FlushPendingBuffer()` — forces buffered text to
   parse immediately.
-- `VoskSpeechRecogniser.InjectResult(...)` / `InjectPartialResult(...)` —
+- `VoxrSpeechRecogniser.InjectResult(...)` / `InjectPartialResult(...)` —
   fire raw recogniser events directly, bypassing the command pipeline.
-- `VoskSpeechRecogniser.CreateSimulatedWords(text, confidence)` — synthesise
-  a `VoskWord[]` for confidence-threshold tests.
+- `VoxrSpeechRecogniser.CreateSimulatedWords(text, confidence)` — synthesise
+  a `VoxrWord[]` for confidence-threshold tests.
 
 All injection methods are main-thread only. See the test classes in `Tests/`
 for executable usage examples.

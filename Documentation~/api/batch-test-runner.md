@@ -1,49 +1,49 @@
-# VoskBatchTestRunner
+# VoxrBatchTestRunner
 
-`public class VoskBatchTestRunner` -- Namespace: `VoskXR.Testing`
+`public class VoxrBatchTestRunner` -- Namespace: `VoXR.Testing`
 
-Pure C# runner for regression-testing command definitions. No MonoBehaviour dependency -- works in Edit Mode without Play Mode or audio hardware. Instantiates a `VoskCommandParser` directly (the same path that `InjectText` uses internally).
+Pure C# runner for regression-testing command definitions. No MonoBehaviour dependency -- works in Edit Mode without Play Mode or audio hardware. Instantiates a `VoxrCommandParser` directly (the same path that `InjectText` uses internally).
 
 ## Constructors
 
 | Constructor | Description |
 |-------------|-------------|
-| `VoskBatchTestRunner(slots, commands, minScore, minConfidence)` | All commands active as a flat list. |
-| `VoskBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence)` | Named command sets with explicit active set selection. |
+| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence)` | All commands active as a flat list. |
+| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence)` | Named command sets with explicit active set selection. |
 
 ## Methods
 
 | Method | Description |
 |--------|-------------|
-| `RunAll(VoskTestCase[])` | Returns `VoskBatchResults` with per-case pass/fail. |
-| `Run(VoskTestCase)` | Returns a single `VoskTestResult`. |
-| `ToCsv(VoskBatchResults)` | Static. Exports results as a CSV string for diffing across runs. |
+| `RunAll(VoxrTestCase[])` | Returns `VoxrBatchResults` with per-case pass/fail. |
+| `Run(VoxrTestCase)` | Returns a single `VoxrTestResult`. |
+| `ToCsv(VoxrBatchResults)` | Static. Exports results as a CSV string for diffing across runs. |
 
-## VoskBatchResults
+## VoxrBatchResults
 
-`public class VoskBatchResults` -- Namespace: `VoskXR.Testing`
+`public class VoxrBatchResults` -- Namespace: `VoXR.Testing`
 
 Aggregated results from `RunAll`.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Results` | `VoskTestResult[]` | Individual results for each test case, in input order. |
+| `Results` | `VoxrTestResult[]` | Individual results for each test case, in input order. |
 | `AllPassed` | `bool` | True when every test case passed. |
 | `FailureSummary` | `string` | Multi-line summary of all failures for NUnit assertion messages. Empty when all passed. |
 | `PassCount` | `int` | Number of passing test cases. |
 | `FailCount` | `int` | Number of failing test cases. |
 
-## VoskTestResult
+## VoxrTestResult
 
-`public class VoskTestResult` -- Namespace: `VoskXR.Testing`
+`public class VoxrTestResult` -- Namespace: `VoXR.Testing`
 
-Result of running a single `VoskTestCase` through the batch test runner.
+Result of running a single `VoxrTestCase` through the batch test runner.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `TestCase` | `VoskTestCase` | The test case that produced this result. |
+| `TestCase` | `VoxrTestCase` | The test case that produced this result. |
 | `ActualIntent` | `string` | The intent that was accepted, or null if no command passed thresholds. |
-| `ActualSlots` | `VoskSlotMatch[]` | Slot matches from the accepted command. |
+| `ActualSlots` | `VoxrSlotMatch[]` | Slot matches from the accepted command. |
 | `Score` | `float` | Best match score from the parser (0 if no match). |
 | `Confidence` | `float` | Minimum word confidence across matched tokens (-1 if unavailable). |
 | `Passed` | `bool` | True if the actual result matches expectations. |
@@ -52,10 +52,10 @@ Result of running a single `VoskTestCase` through the batch test runner.
 ## Example
 
 ```csharp
-using VoskXR.Commands;
-using VoskXR.Testing;
+using VoXR.Commands;
+using VoXR.Testing;
 
-var runner = new VoskBatchTestRunner(slots, commands, minScore: 0.6f, minConfidence: 0.4f);
+var runner = new VoxrBatchTestRunner(slots, commands, minScore: 0.6f, minConfidence: 0.4f);
 var results = runner.RunAll(testCases);
 Assert.IsTrue(results.AllPassed, results.FailureSummary);
 ```
@@ -89,11 +89,11 @@ Test cases can be authored in JSON for portability and version control:
 }
 ```
 
-Use `VoskTestSuiteAsset.ToJson()` and `VoskTestSuiteAsset.FromJson()` to import/export.
+Use `VoxrTestSuiteAsset.ToJson()` and `VoxrTestSuiteAsset.FromJson()` to import/export.
 
 ## See Also
 
 - [Editor Testing](../editor-testing.md) -- visual Batch Test Runner UI guide
-- [ScriptableObject Assets](scriptable-objects.md) -- `VoskTestSuiteAsset`, `VoskTestCase`
-- [VoskCommandRecogniser](command-recogniser.md) -- runtime command pipeline
+- [ScriptableObject Assets](scriptable-objects.md) -- `VoxrTestSuiteAsset`, `VoxrTestCase`
+- [VoxrCommandRecogniser](command-recogniser.md) -- runtime command pipeline
 - [Command Definitions](command-definitions.md) -- defining commands and slots under test

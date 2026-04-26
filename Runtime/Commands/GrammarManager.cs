@@ -2,11 +2,11 @@
 // Purpose:  Generates VOSK grammar JSON and coordinates stop/set/start lifecycle
 // Layer:    Runtime.Commands
 // Owns:     GrammarManager (internal sealed class)
-// Depends:  VoskCommandParser, VoskSpeechRecogniser, VoskSlotDefinition, VoskCommandDefinition
+// Depends:  VoxrCommandParser, VoxrSpeechRecogniser, VoxrSlotDefinition, VoxrCommandDefinition
 // ============================================================================
 using System;
 
-namespace VoskXR.Commands
+namespace VoXR.Commands
 {
     internal sealed class GrammarManager
     {
@@ -16,14 +16,14 @@ namespace VoskXR.Commands
 
         internal bool GrammarRebuildDeferred { get; set; }
 
-        internal void Rebuild(VoskSlotDefinition[] slots, VoskCommandDefinition[] commands,
+        internal void Rebuild(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
             string[] followUpWords)
         {
-            CurrentJson = VoskCommandParser.GenerateGrammarJson(slots, commands, followUpWords);
+            CurrentJson = VoxrCommandParser.GenerateGrammarJson(slots, commands, followUpWords);
             IsApplied = false;
         }
 
-        internal void ApplyIfReady(VoskSpeechRecogniser recogniser, bool freeSpeechMode)
+        internal void ApplyIfReady(VoxrSpeechRecogniser recogniser, bool freeSpeechMode)
         {
             if (freeSpeechMode || IsApplied || CurrentJson == null)
                 return;
@@ -35,7 +35,7 @@ namespace VoskXR.Commands
             IsApplied = true;
         }
 
-        internal void ForceApply(VoskSpeechRecogniser recogniser, bool freeSpeechMode)
+        internal void ForceApply(VoxrSpeechRecogniser recogniser, bool freeSpeechMode)
         {
             if (freeSpeechMode || recogniser == null || !recogniser.IsModelReady)
                 return;

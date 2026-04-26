@@ -6,7 +6,7 @@
 // ============================================================================
 using System;
 
-namespace VoskXR.Dsp
+namespace VoXR.Dsp
 {
     internal sealed class Downsampler
     {

@@ -2,24 +2,24 @@
 // Purpose:  Accumulates split VOSK results into a single utterance before parsing
 // Layer:    Runtime.Commands
 // Owns:     UtteranceBuffer (internal sealed class)
-// Depends:  VoskWord
+// Depends:  VoxrWord
 // ============================================================================
 using System;
 using System.Collections.Generic;
 
-namespace VoskXR.Commands
+namespace VoXR.Commands
 {
     internal sealed class UtteranceBuffer
     {
         readonly List<string> _texts = new List<string>();
-        VoskWord[] _wordBuf = new VoskWord[32];
+        VoxrWord[] _wordBuf = new VoxrWord[32];
         int _wordCount;
         readonly System.Text.StringBuilder _sb = new System.Text.StringBuilder();
         float _lastResultTime;
 
         internal bool IsActive { get; private set; }
 
-        internal void Append(string text, VoskWord[] words, float currentTime)
+        internal void Append(string text, VoxrWord[] words, float currentTime)
         {
             _texts.Add(text);
             if (words != null && words.Length > 0)
@@ -67,11 +67,11 @@ namespace VoskXR.Commands
             return text;
         }
 
-        internal ReadOnlySpan<VoskWord> GetWordsSpan()
+        internal ReadOnlySpan<VoxrWord> GetWordsSpan()
         {
             return _wordCount > 0
-                ? new ReadOnlySpan<VoskWord>(_wordBuf, 0, _wordCount)
-                : ReadOnlySpan<VoskWord>.Empty;
+                ? new ReadOnlySpan<VoxrWord>(_wordBuf, 0, _wordCount)
+                : ReadOnlySpan<VoxrWord>.Empty;
         }
 
         internal void ClearWords()

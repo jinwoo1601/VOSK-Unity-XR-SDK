@@ -1,6 +1,6 @@
-# VoskNumberParser
+# VoxrNumberParser
 
-`public static class VoskNumberParser` -- Namespace: `VoskXR.Commands`
+`public static class VoxrNumberParser` -- Namespace: `VoXR.Commands`
 
 Converts spoken digit words into integers. Used internally by `NumberSequence` slots and available for direct use in command handlers.
 
@@ -15,12 +15,12 @@ Converts spoken digit words into integers. Used internally by `NumberSequence` s
 ## Example
 
 ```csharp
-void OnCommand(VoskCommand cmd)
+void OnCommand(VoxrCommand cmd)
 {
     if (cmd.Intent == "set_heading")
     {
         string raw = cmd.GetSlot("heading");
-        int heading = VoskNumberParser.ParseDigitSequence(raw);
+        int heading = VoxrNumberParser.ParseDigitSequence(raw);
         Debug.Log($"Setting heading to {heading}");
     }
 }
@@ -29,5 +29,5 @@ void OnCommand(VoskCommand cmd)
 ## See Also
 
 - [Command Recognition](../command-recognition.md) -- NumberSequence slot type
-- [Command Definitions](command-definitions.md) -- `VoskSlotDefinition.NumberSequence()` factory method
-- [Data Types](data-types.md) -- `VoskCommand.GetSlot()`
+- [Command Definitions](command-definitions.md) -- `VoxrSlotDefinition.NumberSequence()` factory method
+- [Data Types](data-types.md) -- `VoxrCommand.GetSlot()`

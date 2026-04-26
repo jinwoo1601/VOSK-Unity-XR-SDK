@@ -2,12 +2,12 @@
 // Purpose:  Manages runtime slot value providers that filter which values the parser accepts
 // Layer:    Runtime.Commands
 // Owns:     DynamicSlotManager (internal sealed class)
-// Depends:  VoskSlotDefinition, VoskSlotType
+// Depends:  VoxrSlotDefinition, VoxrSlotType
 // ============================================================================
 using System;
 using System.Collections.Generic;
 
-namespace VoskXR.Commands
+namespace VoXR.Commands
 {
     internal sealed class DynamicSlotManager
     {
@@ -32,18 +32,18 @@ namespace VoskXR.Commands
             return _providers != null && _providers.Remove(slotName);
         }
 
-        internal VoskSlotDefinition[] BuildEffectiveSlots(VoskSlotDefinition[] baseSlots)
+        internal VoxrSlotDefinition[] BuildEffectiveSlots(VoxrSlotDefinition[] baseSlots)
         {
             if (_providers == null || _providers.Count == 0)
                 return baseSlots;
 
-            VoskSlotDefinition[] effective = null;
+            VoxrSlotDefinition[] effective = null;
 
             for (int i = 0; i < baseSlots.Length; i++)
             {
                 var slot = baseSlots[i];
 
-                if (slot.Type == VoskSlotType.NumberSequence ||
+                if (slot.Type == VoxrSlotType.NumberSequence ||
                     !_providers.TryGetValue(slot.Name, out var provider))
                 {
                     if (effective != null)
@@ -61,13 +61,13 @@ namespace VoskXR.Commands
 
                 if (effective == null)
                 {
-                    effective = new VoskSlotDefinition[baseSlots.Length];
+                    effective = new VoxrSlotDefinition[baseSlots.Length];
                     Array.Copy(baseSlots, effective, i);
                 }
 
                 if (activeValues.Length == 0)
                 {
-                    effective[i] = new VoskSlotDefinition(slot.Name, Array.Empty<string>(), null);
+                    effective[i] = new VoxrSlotDefinition(slot.Name, Array.Empty<string>(), null);
                     continue;
                 }
 
@@ -87,7 +87,7 @@ namespace VoskXR.Commands
                     }
                 }
 
-                effective[i] = new VoskSlotDefinition(slot.Name, activeValues, filteredAliases);
+                effective[i] = new VoxrSlotDefinition(slot.Name, activeValues, filteredAliases);
             }
 
             return effective ?? baseSlots;

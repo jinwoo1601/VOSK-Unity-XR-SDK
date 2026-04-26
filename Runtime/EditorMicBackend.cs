@@ -2,17 +2,17 @@
 // Purpose:  Editor-only Windows microphone capture via Unity.Microphone and libvosk P/Invoke
 // Layer:    Runtime (UNITY_EDITOR_WIN only)
 // Owns:     EditorMicBackend (internal sealed class)
-// Depends:  Downsampler, Agc, VoskNative, BridgeNative, VoskBridgeErrorCode
+// Depends:  Downsampler, Agc, VoxrNative, BridgeNative, VoxrBridgeErrorCode
 // ============================================================================
 #if UNITY_EDITOR_WIN
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
-using VoskXR.Dsp;
-using VoskXR.Native;
+using VoXR.Dsp;
+using VoXR.Native;
 
-namespace VoskXR
+namespace VoXR
 {
     internal sealed class EditorMicBackend
     {
@@ -57,7 +57,7 @@ namespace VoskXR
             float sampleRate,
             float micGainTargetDb,
             int maxAlternatives,
-            Action<VoskBridgeErrorCode, string> fireError)
+            Action<VoxrBridgeErrorCode, string> fireError)
         {
             if (IsInitialised) return true;
 
@@ -66,12 +66,12 @@ namespace VoskXR
 
             try
             {
-                VoskNative.vosk_set_log_level(-1);
+                VoxrNative.vosk_set_log_level(-1);
 
                 // vosk_model_new loads and parses the acoustic model from disk
                 // and can take 1–3 seconds. Run on a background thread to keep
                 // the Editor main thread responsive.
-                IntPtr model = await Task.Run(() => VoskNative.vosk_model_new(modelPath));
+                IntPtr model = await Task.Run(() => VoxrNative.vosk_model_new(modelPath));
 
                 // If Release() fired while the model was loading, the continuation
                 // is resuming on a torn-down instance. Free the just-loaded model
@@ -79,31 +79,31 @@ namespace VoskXR
                 if (_released)
                 {
                     if (model != IntPtr.Zero)
-                        VoskNative.vosk_model_free(model);
+                        VoxrNative.vosk_model_free(model);
                     return false;
                 }
 
                 if (model == IntPtr.Zero)
                 {
-                    fireError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                    fireError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                         $"vosk_model_new returned NULL for path: {modelPath}");
                     return false;
                 }
                 _model = model;
 
-                _recognizer = VoskNative.vosk_recognizer_new(_model, _sampleRate);
+                _recognizer = VoxrNative.vosk_recognizer_new(_model, _sampleRate);
                 if (_recognizer == IntPtr.Zero)
                 {
-                    fireError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                    fireError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                         "vosk_recognizer_new returned NULL");
-                    VoskNative.vosk_model_free(_model);
+                    VoxrNative.vosk_model_free(_model);
                     _model = IntPtr.Zero;
                     return false;
                 }
 
-                VoskNative.vosk_recognizer_set_words(_recognizer, 1);
+                VoxrNative.vosk_recognizer_set_words(_recognizer, 1);
                 if (_maxAlternatives > 0)
-                    VoskNative.vosk_recognizer_set_max_alternatives(_recognizer, _maxAlternatives);
+                    VoxrNative.vosk_recognizer_set_max_alternatives(_recognizer, _maxAlternatives);
 
                 _agc.Configure(micGainTargetDb, _sampleRate);
 
@@ -112,7 +112,7 @@ namespace VoskXR
             }
             catch (DllNotFoundException ex)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                fireError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                     "libvosk.dll (or a MinGW runtime dependency) not found in " +
                     "Runtime/Plugins/x86_64/. Download vosk-win64 from " +
                     $"https://github.com/alphacep/vosk-api/releases and drop the " +
@@ -121,24 +121,24 @@ namespace VoskXR
             }
             catch (EntryPointNotFoundException ex)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                fireError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                     $"libvosk.dll is missing an expected export — version mismatch? " +
                     $"Details: {ex.Message}");
                 return false;
             }
             catch (Exception ex)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                fireError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                     $"EditorMicBackend.InitialiseAsync failed: {ex.Message}");
                 return false;
             }
         }
 
-        internal bool Start(Action<VoskBridgeErrorCode, string> fireError)
+        internal bool Start(Action<VoxrBridgeErrorCode, string> fireError)
         {
             if (!IsInitialised)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.NotInitialised,
+                fireError?.Invoke(VoxrBridgeErrorCode.NotInitialised,
                     "EditorMicBackend.Start called before InitialiseAsync.");
                 return false;
             }
@@ -146,7 +146,7 @@ namespace VoskXR
 
             if (Microphone.devices.Length == 0)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.AudioDeviceUnavailable,
+                fireError?.Invoke(VoxrBridgeErrorCode.AudioDeviceUnavailable,
                     "No microphone devices detected on this system.");
                 return false;
             }
@@ -159,7 +159,7 @@ namespace VoskXR
 
             if (_clip == null)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.AudioDeviceUnavailable,
+                fireError?.Invoke(VoxrBridgeErrorCode.AudioDeviceUnavailable,
                     "Microphone.Start returned null — audio device unavailable or " +
                     "Windows microphone permission denied.");
                 return false;
@@ -182,7 +182,7 @@ namespace VoskXR
 
             _downsampler.Reset();
             _agc.Reset();
-            VoskNative.vosk_recognizer_reset(_recognizer);
+            VoxrNative.vosk_recognizer_reset(_recognizer);
 
             IsRunning = true;
             return true;
@@ -199,7 +199,7 @@ namespace VoskXR
             if (_recognizer != IntPtr.Zero)
             {
                 string finalJson = BridgeNative.MarshalResult(
-                    VoskNative.vosk_recognizer_final_result(_recognizer));
+                    VoxrNative.vosk_recognizer_final_result(_recognizer));
                 if (!string.IsNullOrEmpty(finalJson))
                     _resultQueue.Enqueue((finalJson, true));
             }
@@ -214,7 +214,7 @@ namespace VoskXR
         internal void Reset()
         {
             if (!IsInitialised) return;
-            VoskNative.vosk_recognizer_reset(_recognizer);
+            VoxrNative.vosk_recognizer_reset(_recognizer);
             _downsampler.Reset();
             _agc.Reset();
             _lastPartialJson = null;
@@ -223,17 +223,17 @@ namespace VoskXR
 
         internal void SetGrammar(
             string grammarJson,
-            Action<VoskBridgeErrorCode, string> fireError)
+            Action<VoxrBridgeErrorCode, string> fireError)
         {
             if (!IsInitialised)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.NotInitialised,
+                fireError?.Invoke(VoxrBridgeErrorCode.NotInitialised,
                     "EditorMicBackend.SetGrammar called before InitialiseAsync.");
                 return;
             }
             if (IsRunning)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.AlreadyRunning,
+                fireError?.Invoke(VoxrBridgeErrorCode.AlreadyRunning,
                     "EditorMicBackend.SetGrammar called while recognition is running. " +
                     "Stop recognition first.");
                 return;
@@ -242,32 +242,32 @@ namespace VoskXR
             // VOSK has no grammar-swap API — we must free and recreate the recognizer.
             if (_recognizer != IntPtr.Zero)
             {
-                VoskNative.vosk_recognizer_free(_recognizer);
+                VoxrNative.vosk_recognizer_free(_recognizer);
                 _recognizer = IntPtr.Zero;
             }
 
             if (!string.IsNullOrEmpty(grammarJson))
             {
-                _recognizer = VoskNative.vosk_recognizer_new_grm(
+                _recognizer = VoxrNative.vosk_recognizer_new_grm(
                     _model, _sampleRate, grammarJson);
                 // Grammar mode + alternatives produces unreliable results in the
                 // Android bridge; match that by skipping set_max_alternatives here.
             }
             else
             {
-                _recognizer = VoskNative.vosk_recognizer_new(_model, _sampleRate);
+                _recognizer = VoxrNative.vosk_recognizer_new(_model, _sampleRate);
                 if (_recognizer != IntPtr.Zero && _maxAlternatives > 0)
-                    VoskNative.vosk_recognizer_set_max_alternatives(_recognizer, _maxAlternatives);
+                    VoxrNative.vosk_recognizer_set_max_alternatives(_recognizer, _maxAlternatives);
             }
 
             if (_recognizer == IntPtr.Zero)
             {
-                fireError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                fireError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                     "vosk_recognizer_new failed during SetGrammar.");
                 return;
             }
 
-            VoskNative.vosk_recognizer_set_words(_recognizer, 1);
+            VoxrNative.vosk_recognizer_set_words(_recognizer, 1);
         }
 
         internal void Release()
@@ -277,12 +277,12 @@ namespace VoskXR
 
             if (_recognizer != IntPtr.Zero)
             {
-                VoskNative.vosk_recognizer_free(_recognizer);
+                VoxrNative.vosk_recognizer_free(_recognizer);
                 _recognizer = IntPtr.Zero;
             }
             if (_model != IntPtr.Zero)
             {
-                VoskNative.vosk_model_free(_model);
+                VoxrNative.vosk_model_free(_model);
                 _model = IntPtr.Zero;
             }
 
@@ -296,7 +296,7 @@ namespace VoskXR
             IsInitialised = false;
         }
 
-        internal void Tick(Action<VoskBridgeErrorCode, string> fireError)
+        internal void Tick(Action<VoxrBridgeErrorCode, string> fireError)
         {
             if (!IsRunning || _clip == null) return;
 
@@ -306,7 +306,7 @@ namespace VoskXR
                 int actualRate = _clip.frequency;
                 if (actualRate != SourceSampleRate)
                 {
-                    fireError?.Invoke(VoskBridgeErrorCode.AudioDeviceUnavailable,
+                    fireError?.Invoke(VoxrBridgeErrorCode.AudioDeviceUnavailable,
                         $"Microphone returned {actualRate} Hz; {SourceSampleRate} Hz is required. " +
                         "The 48 kHz → 16 kHz downsampler cannot handle other input rates in v3.1.");
                     Stop();
@@ -347,20 +347,20 @@ namespace VoskXR
 
             FloatToInt16(_downsampledBuffer, _int16Buffer, dsCount);
 
-            int result = VoskNative.vosk_recognizer_accept_waveform_s(
+            int result = VoxrNative.vosk_recognizer_accept_waveform_s(
                 _recognizer, _int16Buffer, dsCount);
 
             if (result == 1)
             {
                 string json = BridgeNative.MarshalResult(
-                    VoskNative.vosk_recognizer_result(_recognizer));
+                    VoxrNative.vosk_recognizer_result(_recognizer));
                 if (!string.IsNullOrEmpty(json))
                     _resultQueue.Enqueue((json, true));
             }
             else
             {
                 string json = BridgeNative.MarshalResult(
-                    VoskNative.vosk_recognizer_partial_result(_recognizer));
+                    VoxrNative.vosk_recognizer_partial_result(_recognizer));
                 if (!string.IsNullOrEmpty(json) && json != _lastPartialJson)
                 {
                     _lastPartialJson = json;

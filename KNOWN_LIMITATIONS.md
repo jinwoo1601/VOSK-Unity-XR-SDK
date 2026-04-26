@@ -1,6 +1,6 @@
 # Known Limitations
 
-This document collects known limitations of the VOSK Unity XR SDK that aren't
+This document collects known limitations of the VoXR that aren't
 bugs to fix but rather constraints rooted in the underlying VOSK acoustic model,
 voice recognition in general, or deliberate architectural choices. The goal is
 to give consumers (and our future selves) a single place to look when something
@@ -150,7 +150,7 @@ model you use.
   phoneme space, they are the most frequent false triggers.
 - **Workaround**:
   - Gate recognition with a push-to-talk button: call
-    `VoskSpeechRecogniser.StopRecognition()` / `StartRecognition()` around
+    `VoxrSpeechRecogniser.StopRecognition()` / `StartRecognition()` around
     the button press so the parser only looks at intentional speech. This
     is the recommended approach for noisy environments.
   - Tune `minConfidence` upward — noise-derived matches usually have
@@ -247,11 +247,11 @@ deliberate trade-offs rather than oversights.
 
 - **Repro**: Wire any slot with a single-character alias (e.g. `a` → `one`)
   and call `SetActiveSets()` repeatedly. The
-  `[VoskCommandParser] Slot 'quantity' has single-character alias "a"...`
+  `[VoxrCommandParser] Slot 'quantity' has single-character alias "a"...`
   warning fires on every switch, not just at initial Configure.
 - **Where seen**: v2.5 test matrix Phases 5–8. Visible in logcat after every
   mode-switch command.
-- **Root cause**: `SetActiveSets()` constructs a fresh `VoskCommandParser` via
+- **Root cause**: `SetActiveSets()` constructs a fresh `VoxrCommandParser` via
   `RebuildParserAndGrammar()`, and the parser ctor unconditionally re-runs
   `RunValidationWarnings()`. The warnings are correct, just noisier than they
   should be.
@@ -300,7 +300,7 @@ deliberate trade-offs rather than oversights.
 - **Root cause**: When the matched span of the transcript contains only
   `[unk]` tokens (or no VOSK confidence data at all), the parser cannot
   compute a meaningful average. It returns `-1.0` as a sentinel meaning
-  "no data" and `VoskCommandRecogniser` treats this as *not subject to*
+  "no data" and `VoxrCommandRecogniser` treats this as *not subject to*
   `minConfidence`, so the command still fires based on pattern-match score.
   Without this sentinel (v2.0 used raw `0.0`), genuine noise that drove
   confidence to 0 was indistinguishable from "no data" and either bypassed
@@ -359,7 +359,7 @@ future device port.
   speech.
 - **Workaround**: Already applied — an AGC stage in `vosk_bridge.cpp`
   targets a configurable dB level before converting to int16. The target is
-  exposed on `VoskSpeechRecogniser` as the `micGainTargetDb` inspector field
+  exposed on `VoxrSpeechRecogniser` as the `micGainTargetDb` inspector field
   (default `-18 dB`, calibrated for Quest 3). Tune it if you observe clipping
   or under-gain on a different device.
 

@@ -20,7 +20,7 @@ Common issues, platform support details, and solutions for problems you may enco
 
 ### "Model archive not found in StreamingAssets"
 
-Ensure the model `.zip` is at `Assets/StreamingAssets/<modelName>.zip` where `<modelName>` matches the `modelRelativePath` field on the `VoskSpeechRecogniser` component. The default path expects `vosk-model-small-en-us-0.15.zip`.
+Ensure the model `.zip` is at `Assets/StreamingAssets/<modelName>.zip` where `<modelName>` matches the `modelRelativePath` field on the `VoxrSpeechRecogniser` component. The default path expects `vosk-model-small-en-us-0.15.zip`.
 
 ### "Microphone permission (RECORD_AUDIO) was not granted"
 

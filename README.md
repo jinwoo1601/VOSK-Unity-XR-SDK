@@ -1,4 +1,4 @@
-# VOSK XR Speech Recognition
+# VoXR Speech Recognition
 
 Offline speech recognition and voice command parsing for Unity XR applications. Wraps the [VOSK](https://alphacephei.com/vosk/) toolkit behind a Unity-native C# API with native audio capture on Android arm64 and live microphone capture in the Unity Editor on Windows.
 
@@ -29,7 +29,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 **Authoring**
 - Code-based `Configure()` API for full programmatic control
-- ScriptableObject assets (`VoskSlotAsset`, `VoskCommandAsset`, `VoskCommandSetAsset`) for zero-code Inspector setup
+- ScriptableObject assets (`VoxrSlotAsset`, `VoxrCommandAsset`, `VoxrCommandSetAsset`) for zero-code Inspector setup
 - Mix and match: Inspector authoring and code-based configuration on the same recogniser
 
 **Testing & Iteration**
@@ -52,12 +52,12 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 1. Open Unity Package Manager (Window > Package Manager).
 2. Click **+** > "Add package from git URL..."
-3. Enter: `https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git`
+3. Enter: `https://github.com/jinwoo1601/VoXR-Speech-Recognition.git`
 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0
+https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0
 ```
 
 **Via manifest.json:**
@@ -65,7 +65,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0"
   }
 }
 ```
@@ -92,17 +92,17 @@ Required only if you want the live microphone backend in the Unity Editor on Win
    - `libwinpthread-1.dll`
 3. Plugin importer meta files are pre-configured for Editor-only loading on Windows x86_64 -- no build settings changes needed. These DLLs are excluded from Android and standalone builds.
 
-If the DLLs are missing, `VoskSpeechRecogniser.OnError` fires with `ModelLoadFailed` on the first `StartRecognition()` call in the Editor. See [Editor Testing](Documentation~/editor-testing.md) for the full live-mic workflow.
+If the DLLs are missing, `VoxrSpeechRecogniser.OnError` fires with `ModelLoadFailed` on the first `StartRecognition()` call in the Editor. See [Editor Testing](Documentation~/editor-testing.md) for the full live-mic workflow.
 
 ## Quick Start -- Basic Transcription
 
 ```csharp
 using UnityEngine;
-using VoskXR;
+using VoXR;
 
 public class VoiceDemo : MonoBehaviour
 {
-    [SerializeField] private VoskSpeechRecogniser recogniser;
+    [SerializeField] private VoxrSpeechRecogniser recogniser;
 
     private void OnEnable()
     {
@@ -129,29 +129,29 @@ public class VoiceDemo : MonoBehaviour
 ```csharp
 using System.Collections.Generic;
 using UnityEngine;
-using VoskXR;
-using VoskXR.Commands;
+using VoXR;
+using VoXR.Commands;
 
 public class CommandDemo : MonoBehaviour
 {
-    [SerializeField] private VoskSpeechRecogniser recogniser;
-    [SerializeField] private VoskCommandRecogniser commandRecogniser;
+    [SerializeField] private VoxrSpeechRecogniser recogniser;
+    [SerializeField] private VoxrCommandRecogniser commandRecogniser;
 
     private void Start()
     {
         // Define slots
-        var targets = VoskSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
-        var weapons = VoskSlotDefinition.OneOf("weapon", "missiles", "torpedoes");
-        var quantity = new VoskSlotDefinition("quantity",
+        var targets = VoxrSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
+        var weapons = VoxrSlotDefinition.OneOf("weapon", "missiles", "torpedoes");
+        var quantity = new VoxrSlotDefinition("quantity",
             new[] { "one", "two", "three", "all" },
             new Dictionary<string, string> { { "a", "one" } });
 
         // Define commands
         var commands = new[]
         {
-            new VoskCommandDefinition("launch_weapon",
+            new VoxrCommandDefinition("launch_weapon",
                 new[] { new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" } }),
-            new VoskCommandDefinition("cease_fire",
+            new VoxrCommandDefinition("cease_fire",
                 new[] { new[] { "cease", "fire" } }),
         };
 
@@ -184,31 +184,31 @@ For full documentation, see the [documentation index](Documentation~/index.md).
 
 ## Samples
 
-Import samples via **Package Manager > VOSK XR Speech Recognition > Samples**.
+Import samples via **Package Manager > VoXR Speech Recognition > Samples**.
 
 | Sample | Description |
 |---|---|
-| **Basic Transcription** | Live speech-to-text with on-screen display. Demonstrates `VoskSpeechRecogniser` events, partial/final results, and per-word confidence. |
+| **Basic Transcription** | Live speech-to-text with on-screen display. Demonstrates `VoxrSpeechRecogniser` events, partial/final results, and per-word confidence. |
 | **Command Recognition** | Full command parsing with slots, command sets, mode switching, utterance buffering, and sequential extraction. Includes an Inspector authoring toggle and 20 ScriptableObject assets covering every slot type and pattern form. |
-| **Push-to-Talk** | Hold-to-talk gating with `VoskPushToTalkController`, runtime switching between push-to-talk and continuous modes, `UnityEvent` wiring for a recording indicator, and optional command-recogniser flush on release. |
+| **Push-to-Talk** | Hold-to-talk gating with `VoxrPushToTalkController`, runtime switching between push-to-talk and continuous modes, `UnityEvent` wiring for a recording indicator, and optional command-recogniser flush on release. |
 
 ## Running Tests
 
-The package includes 21 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.vosk-xr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
+The package includes 21 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.voxr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
 
 ## Architecture
 
 ```
-VoskSpeechRecogniser          -- MonoBehaviour, owns the native lifecycle
+VoxrSpeechRecogniser          -- MonoBehaviour, owns the native lifecycle
   |
   |-- [Android] BridgeNative  -- JNI -> C++ bridge -> AudioRecord + libvosk.so
   |-- [Editor]  EditorMicBackend -- UnityEngine.Microphone -> C# DSP -> libvosk.dll P/Invoke
   |
   +-- Events: OnPartialResult, OnFinalResult, OnResult, OnError
        |
-VoskCommandRecogniser         -- MonoBehaviour, subscribes to speech events
+VoxrCommandRecogniser         -- MonoBehaviour, subscribes to speech events
   |
-  |-- VoskCommandParser       -- grammar-constrained pattern matching
+  |-- VoxrCommandParser       -- grammar-constrained pattern matching
   |-- Utterance buffer        -- merges split VOSK results
   |-- Debounce                -- suppresses duplicate intents
   |
@@ -243,7 +243,7 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
-| 0.17.0 | `VoskPushToTalkController` and `VoskListeningMode` for runtime-switchable push-to-talk |
+| 0.17.0 | `VoxrPushToTalkController` and `VoxrListeningMode` for runtime-switchable push-to-talk |
 | 0.16.0 | Internal refactoring and per-utterance allocation reduction |
 | 0.15.0 | Pending commands: partial match, confirmation, follow-up slot-fill |
 | 0.14.0 | Dynamic slot value providers for runtime parser filtering |

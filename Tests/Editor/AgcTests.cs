@@ -1,7 +1,7 @@
 using NUnit.Framework;
-using VoskXR.Dsp;
+using VoXR.Dsp;
 
-namespace VoskXR.Tests.Editor
+namespace VoXR.Tests.Editor
 {
     public class AgcTests
     {

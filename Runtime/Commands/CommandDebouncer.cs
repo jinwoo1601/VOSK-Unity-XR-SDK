@@ -7,7 +7,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace VoskXR.Commands
+namespace VoXR.Commands
 {
     internal sealed class CommandDebouncer
     {

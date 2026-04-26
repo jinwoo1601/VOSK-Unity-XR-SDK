@@ -1,12 +1,12 @@
 # Push-to-Talk
 
-`VoskPushToTalkController` is a drop-in MonoBehaviour that gates `VoskSpeechRecogniser` behind a talk button and optionally flushes buffered commands on release. It also exposes a runtime-switchable listening mode so you can offer both hold-to-talk and always-on listening in the same build.
+`VoxrPushToTalkController` is a drop-in MonoBehaviour that gates `VoxrSpeechRecogniser` behind a talk button and optionally flushes buffered commands on release. It also exposes a runtime-switchable listening mode so you can offer both hold-to-talk and always-on listening in the same build.
 
 ## Overview
 
 Use push-to-talk when false triggers from ambient noise, coughs, or background conversation are unacceptable — that is, for most serious XR applications. In grammar mode, VOSK has no "silence" output and must map every detected audio frame to an in-vocabulary word, so push-to-talk is the cleanest way to suppress spurious matches.
 
-`VoskPushToTalkController` wraps the recommended pattern (`Initialise` on scene load, `Start/Stop` on press/release, `FlushPendingBuffer` on release) and adds:
+`VoxrPushToTalkController` wraps the recommended pattern (`Initialise` on scene load, `Start/Stop` on press/release, `FlushPendingBuffer` on release) and adds:
 
 - A best-effort guard for the Android mic-permission race (the dialog can resolve *after* the user released).
 - Runtime switching between `PushToTalk` and `Continuous` modes via the `ListeningMode` property.
@@ -15,20 +15,20 @@ Use push-to-talk when false triggers from ambient noise, coughs, or background c
 
 ## Quick Setup
 
-1. Add `VoskSpeechRecogniser` and `VoskPushToTalkController` to a GameObject in your scene. If you are using command parsing, add `VoskCommandRecogniser` to the same GameObject.
+1. Add `VoxrSpeechRecogniser` and `VoxrPushToTalkController` to a GameObject in your scene. If you are using command parsing, add `VoxrCommandRecogniser` to the same GameObject.
 2. On the controller, assign the `Speech Recogniser` reference, and optionally the `Command Recogniser`.
 3. Wire your input to the controller's public methods:
-   - On press: `VoskPushToTalkController.PressTalk()`
-   - On release: `VoskPushToTalkController.ReleaseTalk()`
+   - On press: `VoxrPushToTalkController.PressTalk()`
+   - On release: `VoxrPushToTalkController.ReleaseTalk()`
    - A UI `Button.onClick` fires on release only. For true press/release, use an `EventTrigger` component (`PointerDown` → `PressTalk`, `PointerUp` → `ReleaseTalk`), an XRI `InteractableUnityEventsWrapper`, or an `InputAction` with `started`/`canceled` callbacks.
 4. (Optional) Wire `On Talk Started` and `On Talk Ended` in the controller's Inspector to your recording indicator (e.g. toggle an `Image.color`).
 
-The controller pre-warms the model on `Start` via `VoskSpeechRecogniser.Initialise()`. Disable `Initialise On Start` if your code calls `Initialise()` elsewhere.
+The controller pre-warms the model on `Start` via `VoxrSpeechRecogniser.Initialise()`. Disable `Initialise On Start` if your code calls `Initialise()` elsewhere.
 
 ## Listening Modes
 
 ```csharp
-public enum VoskListeningMode { Continuous, PushToTalk }
+public enum VoxrListeningMode { Continuous, PushToTalk }
 ```
 
 - **`PushToTalk`** (default) — recognition only runs between `PressTalk()` and `ReleaseTalk()`.
@@ -37,7 +37,7 @@ public enum VoskListeningMode { Continuous, PushToTalk }
 Switch at runtime by assigning the property:
 
 ```csharp
-controller.ListeningMode = VoskListeningMode.Continuous;
+controller.ListeningMode = VoxrListeningMode.Continuous;
 ```
 
 Setter semantics:
@@ -52,25 +52,25 @@ Setter semantics:
 
 | Field                         | Purpose                                                                                 |
 |-------------------------------|-----------------------------------------------------------------------------------------|
-| `Speech Recogniser`           | The `VoskSpeechRecogniser` the controller drives. Required.                              |
+| `Speech Recogniser`           | The `VoxrSpeechRecogniser` the controller drives. Required.                              |
 | `Command Recogniser`          | Optional. When assigned, `ReleaseTalk` calls `FlushPendingBuffer` so trailing speech parses immediately rather than waiting for the buffer window. |
 | `Listening Mode`              | Initial mode (`PushToTalk` or `Continuous`). Can be changed at runtime via the property. |
-| `Initialise On Start`         | When enabled, calls `VoskSpeechRecogniser.Initialise()` in `Start` so the model is pre-warmed before the first press. |
+| `Initialise On Start`         | When enabled, calls `VoxrSpeechRecogniser.Initialise()` in `Start` so the model is pre-warmed before the first press. |
 | `Cancel Pending On Release`   | When enabled, `ReleaseTalk` also cancels any pending command on the command recogniser (see below). |
 | `On Talk Started`             | `UnityEvent` fired when recognition begins (first press, or switch to Continuous).      |
 | `On Talk Ended`               | `UnityEvent` fired when recognition ends (release, or switch from Continuous).          |
 
 ## Cancel Pending On Release
 
-`VoskCommandRecogniser` can hold a command in a *pending* state when it waits for confirmation (`RequiresConfirmation`) or for a follow-up slot-fill (`AllowPartialMatch`). Pending commands normally resolve on their own — via follow-up speech, a confirm/cancel phrase, or the configurable `pendingTimeout` (default 5 s).
+`VoxrCommandRecogniser` can hold a command in a *pending* state when it waits for confirmation (`RequiresConfirmation`) or for a follow-up slot-fill (`AllowPartialMatch`). Pending commands normally resolve on their own — via follow-up speech, a confirm/cancel phrase, or the configurable `pendingTimeout` (default 5 s).
 
 With `Cancel Pending On Release` enabled, lifting the talk button immediately cancels any pending command, firing `OnCommandCancelled`. Use this when you want the talk button to act as a hard reset for partial utterances. Leave it disabled if you want pending commands to survive release and resolve on their own timer.
 
 ## Android Permission Race
 
-`VoskSpeechRecogniser.StartRecognition` requests `RECORD_AUDIO` on first use. The request is asynchronous — a user who presses and releases the talk button faster than the permission dialog resolves would, without this controller, end up with recognition running *after* they released.
+`VoxrSpeechRecogniser.StartRecognition` requests `RECORD_AUDIO` on first use. The request is asynchronous — a user who presses and releases the talk button faster than the permission dialog resolves would, without this controller, end up with recognition running *after* they released.
 
-The controller reconciles this in `Update`: if it observes `IsRecognising == true` while the user is not asking to listen, it calls `StopRecognition`. The window between the native start and the reconciling stop is at most one frame. Fully closing the race would require cancelling the permission coroutine from inside `VoskSpeechRecogniser` itself; the `Update` check is additive and keeps the low-level API unchanged.
+The controller reconciles this in `Update`: if it observes `IsRecognising == true` while the user is not asking to listen, it calls `StopRecognition`. The window between the native start and the reconciling stop is at most one frame. Fully closing the race would require cancelling the permission coroutine from inside `VoxrSpeechRecogniser` itself; the `Update` check is additive and keeps the low-level API unchanged.
 
 (The guard cannot fire in the editor test runner — without the native DLL, `IsRecognising` is always false. Verification is manual, on a Quest device, using `logcat -s vosk-bridge:*`.)
 
@@ -87,8 +87,8 @@ If you want full control — or you are adding push-to-talk behind a feature fla
 ```csharp
 public class PushToTalk : MonoBehaviour
 {
-    [SerializeField] VoskSpeechRecogniser recogniser;
-    [SerializeField] VoskCommandRecogniser commandRecogniser;
+    [SerializeField] VoxrSpeechRecogniser recogniser;
+    [SerializeField] VoxrCommandRecogniser commandRecogniser;
 
     void Start()
     {
@@ -123,29 +123,29 @@ Push-to-talk eliminates this problem entirely by only running recognition during
 - Call `FlushPendingBuffer()` on button release to ensure any speech still in the utterance buffer is parsed immediately, rather than waiting for the buffer window to expire.
 - Wire the button press to an XR controller input (e.g. grip or trigger) using Unity's Input System or XR Interaction Toolkit.
 - Provide visual feedback (e.g. a microphone icon or recording indicator) so the user knows when the system is listening.
-- The manual pattern does **not** close the Android permission race (see above). If you hit it in practice, either switch to `VoskPushToTalkController` or add the same `Update` guard yourself.
+- The manual pattern does **not** close the Android permission race (see above). If you hit it in practice, either switch to `VoxrPushToTalkController` or add the same `Update` guard yourself.
 
 ---
 
 ## Error Handling
 
-All errors are surfaced via the `OnError` event on `VoskSpeechRecogniser` with a structured `VoskBridgeErrorCode` and a human-readable description.
+All errors are surfaced via the `OnError` event on `VoxrSpeechRecogniser` with a structured `VoxrBridgeErrorCode` and a human-readable description.
 
 ```csharp
 recogniser.OnError += (code, message) =>
 {
     switch (code)
     {
-        case VoskBridgeErrorCode.PermissionDenied:
+        case VoxrBridgeErrorCode.PermissionDenied:
             // Prompt user to grant microphone permission
             break;
-        case VoskBridgeErrorCode.ModelLoadFailed:
+        case VoxrBridgeErrorCode.ModelLoadFailed:
             // Check model archive in StreamingAssets
             break;
-        case VoskBridgeErrorCode.AudioDeviceUnavailable:
+        case VoxrBridgeErrorCode.AudioDeviceUnavailable:
             // Mic hardware not found or in use
             break;
-        case VoskBridgeErrorCode.RingBufferOverflow:
+        case VoxrBridgeErrorCode.RingBufferOverflow:
             // Audio buffer overflowed -- recognition may have gaps
             // Typically transient, no action needed
             break;
@@ -162,13 +162,13 @@ recogniser.OnError += (code, message) =>
 - **`AudioDeviceUnavailable`** -- Audio input device could not be opened -- mic not found or in use.
 - **`AlreadyRunning`** -- `StartRecognition()` called while recognition is already running (e.g. double button press).
 
-For the complete error code reference, see [VoskBridgeErrorCode](api/error-codes.md).
+For the complete error code reference, see [VoxrBridgeErrorCode](api/error-codes.md).
 
 ### Common Error Scenarios
 
 **PermissionDenied on Quest:** Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > Android > Other Settings. The SDK requests the permission at runtime, but the manifest entry must be present.
 
-**ModelLoadFailed:** Verify the `.zip` is at `Assets/StreamingAssets/<modelName>.zip` where `<modelName>` matches the `modelRelativePath` field on `VoskSpeechRecogniser`. Check `OnModelReady` to confirm extraction succeeded.
+**ModelLoadFailed:** Verify the `.zip` is at `Assets/StreamingAssets/<modelName>.zip` where `<modelName>` matches the `modelRelativePath` field on `VoxrSpeechRecogniser`. Check `OnModelReady` to confirm extraction succeeded.
 
 **AudioDeviceUnavailable in Editor:** Ensure the four `libvosk.dll` DLLs are placed correctly and a microphone is connected as the Windows default input device. See [Editor Testing](editor-testing.md) for setup details.
 
