@@ -52,12 +52,12 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 1. Open Unity Package Manager (Window > Package Manager).
 2. Click **+** > "Add package from git URL..."
-3. Enter: `https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git`
+3. Enter: `https://github.com/jinwoo1601/VoXR-Speech-Recognition.git`
 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0
+https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0
 ```
 
 **Via manifest.json:**
@@ -65,7 +65,7 @@ https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0"
   }
 }
 ```
