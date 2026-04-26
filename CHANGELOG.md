@@ -9,10 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-04-26
 
+### Added
+
+- Bundled prebuilt Windows VOSK DLLs (`libvosk.dll` plus the three MinGW runtime deps `libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`) under `Runtime/Plugins/x86_64/`. The Editor live-mic backend on Windows now works out of the box — no manual download from alphacep/vosk-api required.
+
 ### Changed
 
 - **First stable release.** The public API surface (`VoxrSpeechRecogniser`, `VoxrCommandRecogniser`, `VoxrPushToTalkController`, command/slot definitions, asset types, error codes) is now committed for the v1.x series. Breaking changes will require a v2.x major bump.
 - Excluded internal test sources from package import by renaming `Tests/` to `Tests~/`. Tests remain in the repository for development but no longer load in consumer projects.
+- Stripped `NativeBridge~/` (C++ bridge sources) and `Tests~/` from the published `v1.0.0` tag. Sources remain on `main` for ongoing development; consumer-facing distributions ship from a `release/1.0.0` branch.
 
 ## [0.17.0] - 2026-04-25
 
