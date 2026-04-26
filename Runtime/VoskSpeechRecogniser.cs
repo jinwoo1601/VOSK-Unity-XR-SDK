@@ -243,12 +243,28 @@ namespace VoskXR
         {
             _isRecognising = false;
 #if UNITY_EDITOR_WIN
-            _editorBackend?.Stop();
+            if (_editorBackend != null)
+            {
+                _editorBackend.Stop();
+                // EditorMicBackend.Stop pushes vosk_recognizer_final_result onto
+                // the queue. Update() bails early once _isRecognising is false,
+                // so drain here or the last utterance is silently dropped.
+                DrainEditorResults();
+            }
 #else
             if (!_bridgeAvailable) return;
             try
             {
                 BridgeNative.vosk_bridge_stop();
+                // vosk_bridge_stop joins the recognition thread, which pushes
+                // vosk_recognizer_final_result before exit (vosk_bridge.cpp:130-134).
+                // Drain it now for the same reason as the Editor branch above.
+                IntPtr ptr;
+                while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt)) != IntPtr.Zero)
+                {
+                    string json = BridgeNative.MarshalResult(ptr);
+                    DispatchJsonResult(json, isFinalInt == 1);
+                }
             }
             catch (DllNotFoundException)
             {
