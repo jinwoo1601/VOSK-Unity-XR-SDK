@@ -34,10 +34,9 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 **Testing & Iteration**
 - Editor command debug window with live audio meters, match breakdowns, and match history
-- Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe Edit Mode API
+- Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe pure-C# API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
-- 21 automated test suites (Edit Mode + Play Mode) covering parser, injection, lifecycle, DSP, diagnostics, batch testing, asset conversion, pending commands, and push-to-talk
 - Extensively tested on Quest 3 with published test matrices for every release
 
 ## Requirements
@@ -57,7 +56,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0
+https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.0.0
 ```
 
 **Via manifest.json:**
@@ -65,7 +64,7 @@ https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.0.0"
   }
 }
 ```
@@ -192,10 +191,6 @@ Import samples via **Package Manager > VoXR Speech Recognition > Samples**.
 | **Command Recognition** | Full command parsing with slots, command sets, mode switching, utterance buffering, and sequential extraction. Includes an Inspector authoring toggle and 20 ScriptableObject assets covering every slot type and pattern form. |
 | **Push-to-Talk** | Hold-to-talk gating with `VoxrPushToTalkController`, runtime switching between push-to-talk and continuous modes, `UnityEvent` wiring for a recording indicator, and optional command-recogniser flush on release. |
 
-## Running Tests
-
-The package includes 21 test suites (Edit Mode and Play Mode) that run without audio hardware or a VOSK model. Add `"testables": ["com.jinwoo1601.voxr"]` to your project's `Packages/manifest.json`, then open **Window > General > Test Runner**. See [Getting Started](Documentation~/getting-started.md) for details.
-
 ## Architecture
 
 ```
@@ -243,6 +238,7 @@ This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.
 
 | Version | Milestone |
 |---|---|
+| 1.0.0 | First stable release -- public API committed for the v1.x series |
 | 0.17.0 | `VoxrPushToTalkController` and `VoxrListeningMode` for runtime-switchable push-to-talk |
 | 0.16.0 | Internal refactoring and per-utterance allocation reduction |
 | 0.15.0 | Pending commands: partial match, confirmation, follow-up slot-fill |

@@ -100,8 +100,7 @@ For unit tests, CI, replay scenarios, and threshold-tuning without a mic:
 - `VoxrSpeechRecogniser.CreateSimulatedWords(text, confidence)` — synthesise
   a `VoxrWord[]` for confidence-threshold tests.
 
-All injection methods are main-thread only. See the test classes in `Tests/`
-for executable usage examples.
+All injection methods are main-thread only.
 
 ## See Also
 

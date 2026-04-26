@@ -2,7 +2,7 @@
 
 `public class VoxrBatchTestRunner` -- Namespace: `VoXR.Testing`
 
-Pure C# runner for regression-testing command definitions. No MonoBehaviour dependency -- works in Edit Mode without Play Mode or audio hardware. Instantiates a `VoxrCommandParser` directly (the same path that `InjectText` uses internally).
+Pure C# runner for regression-testing command definitions. No MonoBehaviour dependency and no audio hardware required. Instantiates a `VoxrCommandParser` directly (the same path that `InjectText` uses internally).
 
 ## Constructors
 
