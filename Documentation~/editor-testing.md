@@ -38,15 +38,7 @@ The debug window is Editor-only (`#if UNITY_EDITOR`) and has zero cost in builds
 
 On Windows, `VoxrSpeechRecogniser.StartRecognition()` transparently auto-routes audio through `UnityEngine.Microphone` and a desktop build of `libvosk.dll` via P/Invoke. Existing scenes and user code work with zero changes -- speak into your PC microphone and watch commands fire in the Console.
 
-### Setup
-
-1. Download `vosk-win64-*.zip` from [alphacep/vosk-api releases](https://github.com/alphacep/vosk-api/releases).
-2. Extract and place these four DLLs into the package's `Runtime/Plugins/x86_64/` folder:
-   - `libvosk.dll`
-   - `libgcc_s_seh-1.dll`
-   - `libstdc++-6.dll`
-   - `libwinpthread-1.dll`
-3. The plugin importer meta files are pre-configured for Editor-only loading on Windows x86_64. No build settings changes needed.
+The required Windows DLLs (`libvosk.dll` plus three MinGW runtime dependencies) ship inside the package under `Runtime/Plugins/x86_64/`. No manual download or extra setup is needed -- press Play in the Editor and the live-mic backend takes over.
 
 ### How It Works
 

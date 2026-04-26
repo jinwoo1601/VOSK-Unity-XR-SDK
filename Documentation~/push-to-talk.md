@@ -170,7 +170,7 @@ For the complete error code reference, see [VoxrBridgeErrorCode](api/error-codes
 
 **ModelLoadFailed:** Verify the `.zip` is at `Assets/StreamingAssets/<modelName>.zip` where `<modelName>` matches the `modelRelativePath` field on `VoxrSpeechRecogniser`. Check `OnModelReady` to confirm extraction succeeded.
 
-**AudioDeviceUnavailable in Editor:** Ensure the four `libvosk.dll` DLLs are placed correctly and a microphone is connected as the Windows default input device. See [Editor Testing](editor-testing.md) for setup details.
+**AudioDeviceUnavailable in Editor:** Ensure a microphone is connected and set as the Windows default input device. See [Editor Testing](editor-testing.md) for the live-mic backend overview.
 
 ---
 

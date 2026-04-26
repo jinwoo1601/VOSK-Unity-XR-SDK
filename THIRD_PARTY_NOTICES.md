@@ -9,7 +9,7 @@ This package includes or depends on the following third-party software.
 - **Project:** https://github.com/alphacep/vosk-api
 - **Author:** Alpha Cephei Inc. (https://alphacephei.com/)
 - **License:** Apache License 2.0
-- **Usage:** This package uses prebuilt VOSK native libraries for offline speech recognition. `libvosk.so` for Android arm64 is bundled in this package under `Runtime/Plugins/Android/arm64-v8a/`. `libvosk.dll` for Windows x86_64 (and its three MinGW runtime dependencies) is not bundled -- developers using the Editor live-microphone backend download it from the [VOSK releases](https://github.com/alphacep/vosk-api/releases) page and drop it into `Runtime/Plugins/x86_64/`.
+- **Usage:** This package bundles prebuilt VOSK native libraries for offline speech recognition. `libvosk.so` for Android arm64 ships under `Runtime/Plugins/Android/arm64-v8a/`. `libvosk.dll` for Windows x86_64 -- together with its three MinGW runtime dependencies (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`) -- ships under `Runtime/Plugins/x86_64/` for the Editor live-microphone backend. Sources for both are available at the [VOSK releases](https://github.com/alphacep/vosk-api/releases) page.
 - **Models:** VOSK language models (e.g. `vosk-model-small-en-us-0.15`) are downloaded separately by the developer and are not included in this package. Models are provided by Alpha Cephei under the Apache 2.0 license.
 
 ### Apache License 2.0

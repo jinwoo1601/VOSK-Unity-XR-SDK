@@ -14,7 +14,7 @@ per-word confidence and timing, n-best alternatives, and error reporting.
 3. **Open the scene** at `Assets/Samples/VoXR Speech Recognition/<version>/Basic Transcription/BasicTranscription.unity`.
 
 4. **Run:**
-   - **Windows Editor:** press Play. Speak into your PC mic — you'll see transcription on screen and per-word confidence in the right panel. Requires the four `libvosk*.dll` files in `Runtime/Plugins/x86_64/` (see the package README's *Windows Editor Setup*).
+   - **Windows Editor:** press Play. Speak into your PC mic — you'll see transcription on screen and per-word confidence in the right panel.
    - **Quest:** switch platform to Android (arm64), enable `RECORD_AUDIO` in Player Settings, build, deploy.
 
 ## What's in the scene

@@ -82,10 +82,8 @@ build cycle.
 On the Windows Unity Editor, `VoxrSpeechRecogniser.StartRecognition()`
 transparently routes audio through `UnityEngine.Microphone` and a desktop
 build of `libvosk.dll` — the sample runs end-to-end in Play Mode with zero
-code changes. Speak into your PC microphone, watch commands fire.
-
-Requires `libvosk.dll` and its three MinGW runtime dependencies in
-`Runtime/Plugins/x86_64/`. See the package README for download details.
+code changes. The Windows DLLs ship inside the package, so just press
+Play and speak into your PC microphone.
 
 ### Text injection API
 

@@ -35,7 +35,6 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 
 ### No transcription output in Editor
 
-- Ensure the four `libvosk.dll` DLLs are in `Runtime/Plugins/x86_64/`. See [Editor Testing](editor-testing.md) for the full setup steps.
 - Check the Console for VOSK model loading errors.
 - Verify a microphone is connected and set as the default Windows input device.
 - On macOS or Linux, the live mic backend is not available -- use the [Text Injection API](editor-testing.md) instead.
