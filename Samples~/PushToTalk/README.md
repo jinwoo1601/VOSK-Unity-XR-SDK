@@ -1,6 +1,19 @@
 # Push-to-Talk Sample
 
-Hold-to-talk gating with the `VoskPushToTalkController` component. Includes a runtime toggle between push-to-talk and continuous listening modes.
+Hold-to-talk gating with the `VoskPushToTalkController` component. Includes a
+runtime toggle between push-to-talk and continuous listening modes.
+
+## Requirements
+
+This sample uses Unity's new Input System for keyboard input and pointer
+events on the Hold-to-Talk button:
+
+- `com.unity.inputsystem` package installed (Window > Package Manager)
+- Project Settings > Player > **Active Input Handling** = `Input System Package (New)` or `Both`
+
+If you're on legacy input only, replace `Input System UI Input Module` on
+the `EventSystem` GameObject with `Standalone Input Module`, and edit
+`PushToTalkDemo.cs` to use `Input.GetKey` for keyboard polling.
 
 ## Setup
 
@@ -10,56 +23,65 @@ Hold-to-talk gating with the `VoskPushToTalkController` component. Includes a ru
    - Get [vosk-model-small-en-us-0.15](https://alphacephei.com/vosk/models) (~50 MB).
    - Place the `.zip` in `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`.
 
-3. **Build the scene:**
-   - Create a new scene.
-   - Add a GameObject named `VoskRig`. Attach:
-     - `VoskSpeechRecogniser`
-     - `VoskPushToTalkController`
-     - `VoskCommandRecogniser` (optional — enables pending-buffer flush on release)
-   - In the `VoskPushToTalkController` Inspector:
-     - Drag the `VoskSpeechRecogniser` into the `Speech Recogniser` slot.
-     - Drag the `VoskCommandRecogniser` into the `Command Recogniser` slot (optional).
-     - Leave `Listening Mode` on `PushToTalk` (default).
-   - Add a Canvas with:
-     - A `Button` labelled "Hold to Talk".
-     - A `TextMeshPro - Text (UI)` element for live transcription.
-     - A small `Image` (recording indicator).
-   - Add the `PushToTalkDemo` script to any GameObject and wire the `recogniser`, `controller`, `transcriptText`, and `recordingIndicator` references in the Inspector.
+3. **Open the scene** at `Assets/Samples/VOSK XR Speech Recognition/<version>/Push-to-Talk/PushToTalk.unity`.
 
-4. **Wire the talk button:**
-   - Select the Button > Inspector > add an `EventTrigger` component.
-   - Add `PointerDown` event → drag the `VoskPushToTalkController` → select `PressTalk()`.
-   - Add `PointerUp` event → drag the `VoskPushToTalkController` → select `ReleaseTalk()`.
-   - (Plain `onClick` fires on release only; use `EventTrigger` for true press/release semantics.)
+4. **Run:**
+   - **Windows Editor:** press Play. Hold `Space` (or click and hold the on-screen "Hold to Talk" button) to talk; release to stop. Press `Tab` to toggle Push-to-Talk vs Continuous mode.
+   - **Quest:** switch platform to Android (arm64), enable `RECORD_AUDIO` in Player Settings, build, deploy. The on-screen button is pointer-driven and works with controller raycast input.
 
-5. **Optional — Mode toggle:**
-   - Add a second Button labelled "Toggle Mode".
-   - On its `onClick`, call `PushToTalkDemo.TogglePushToTalkMode()`.
+## What's in the scene
 
-6. **Optional — Recording indicator via UnityEvents:**
-   - In the controller's `On Talk Started` list, add a callback on the indicator's `Image.color` setter pointing to your active colour.
-   - In `On Talk Ended`, point it back to your idle colour.
-   - The demo script does the same thing in code — use whichever approach fits your project.
+| GameObject | Role |
+|---|---|
+| `Recogniser` | `VoskSpeechRecogniser` |
+| `Controller` | `VoskPushToTalkController` with `Listening Mode = PushToTalk` and `Initialise On Start = true` so the model pre-warms before the first press |
+| `PushToTalkDemo` | Wires `Space` / `Tab` keyboard input, drives the recording indicator colour, and updates the mode label |
+| `Canvas/HoldToTalkButton` | `Image` raycast target with the small `HoldToTalkButton` component. Its `onPointerDown` UnityEvent calls `Controller.PressTalk()`, and `onPointerUp` calls `Controller.ReleaseTalk()` |
+| `Canvas/RecordingIndicator` | Square `Image` whose colour is set by `PushToTalkDemo.ShowRecording`/`ShowIdle` (subscribed to `OnTalkStarted` / `OnTalkEnded`) |
+| `Canvas/TranscriptText` | Live transcript |
+| `Canvas/ModeLabel` | Reads from `controller.ListeningMode` |
 
-7. **Build and deploy:**
-   - Switch platform to Android (arm64).
-   - Ensure `RECORD_AUDIO` is enabled in Player Settings > Android > Other Settings.
-   - Build and run on a Meta Quest headset.
+The scene does not wire `_commandRecogniser` on the controller. Drop a
+`VoskCommandRecogniser` into your scene and assign it to enable utterance-buffer
+flush on release.
 
-## Wiring XR controllers
+## Wiring an XR controller
 
-For XR Interaction Toolkit, bind a controller button (e.g. grip) to a press/release action:
+The shipped scene is screen+keyboard so the sample doesn't pull in
+`com.unity.xr.interaction.toolkit` as a dependency. To drive `PressTalk` /
+`ReleaseTalk` from a real XR controller, add an Input System action and:
 
 ```csharp
-[SerializeField] UnityEngine.InputSystem.InputActionReference talkAction;
-[SerializeField] VoskPushToTalkController controller;
+using UnityEngine;
+using UnityEngine.InputSystem;
+using VoskXR;
 
-void OnEnable()
+public class XrPushToTalkBinding : MonoBehaviour
 {
-    talkAction.action.started  += _ => controller.PressTalk();
-    talkAction.action.canceled += _ => controller.ReleaseTalk();
-    talkAction.action.Enable();
+    [SerializeField] InputActionReference talkAction;   // e.g. trigger / grip
+    [SerializeField] VoskPushToTalkController controller;
+
+    void OnEnable()
+    {
+        talkAction.action.started  += _ => controller.PressTalk();
+        talkAction.action.canceled += _ => controller.ReleaseTalk();
+        talkAction.action.Enable();
+    }
+
+    void OnDisable()
+    {
+        talkAction.action.started  -= _ => controller.PressTalk();
+        talkAction.action.canceled -= _ => controller.ReleaseTalk();
+        talkAction.action.Disable();
+    }
 }
+```
+
+Or, with XRI's `XRBaseInteractor`:
+
+```csharp
+interactor.selectEntered.AddListener(_ => controller.PressTalk());
+interactor.selectExited .AddListener(_ => controller.ReleaseTalk());
 ```
 
 ## Runtime mode switching
@@ -72,7 +94,8 @@ controller.ListeningMode = VoskListeningMode.Continuous;
 controller.ListeningMode = VoskListeningMode.PushToTalk;
 ```
 
-Switching to `Continuous` fires `OnTalkStarted`; switching away while recognising fires `OnTalkEnded`. Setting the same mode twice is a no-op.
+Switching to `Continuous` fires `OnTalkStarted`; switching away while
+recognising fires `OnTalkEnded`. Setting the same mode twice is a no-op.
 
 ## See Also
 

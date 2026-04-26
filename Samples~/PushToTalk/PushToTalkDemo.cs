@@ -1,16 +1,29 @@
+// Requires the Unity Input System package (com.unity.inputsystem).
+// Project must have "Active Input Handling" set to "Input System Package (New)" or "Both".
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
-using TMPro;
 using VoskXR;
 
 public class PushToTalkDemo : MonoBehaviour
 {
     [SerializeField] VoskSpeechRecogniser recogniser;
     [SerializeField] VoskPushToTalkController controller;
-    [SerializeField] TextMeshProUGUI transcriptText;
+
+    [Header("UI (optional)")]
+    [SerializeField] Text transcriptText;
+    [SerializeField] Text modeLabel;
     [SerializeField] Image recordingIndicator;
+
+    [Header("Indicator Colours")]
     [SerializeField] Color idleColor = new Color(0.2f, 0.2f, 0.2f, 1f);
     [SerializeField] Color activeColor = new Color(0.9f, 0.2f, 0.2f, 1f);
+
+    [Header("Keyboard")]
+    [Tooltip("Hold this key to talk while in PushToTalk mode.")]
+    [SerializeField] Key talkKey = Key.Space;
+    [Tooltip("Press this key to toggle between PushToTalk and Continuous.")]
+    [SerializeField] Key toggleModeKey = Key.Tab;
 
     void OnEnable()
     {
@@ -28,6 +41,7 @@ public class PushToTalkDemo : MonoBehaviour
         }
 
         ShowIdle();
+        RefreshModeLabel();
     }
 
     void OnDisable()
@@ -46,6 +60,25 @@ public class PushToTalkDemo : MonoBehaviour
         }
     }
 
+    void Update()
+    {
+        if (controller == null) return;
+
+        var kb = Keyboard.current;
+        if (kb == null) return;
+
+        if (controller.ListeningMode == VoskListeningMode.PushToTalk)
+        {
+            if (kb[talkKey].wasPressedThisFrame)
+                controller.PressTalk();
+            if (kb[talkKey].wasReleasedThisFrame)
+                controller.ReleaseTalk();
+        }
+
+        if (kb[toggleModeKey].wasPressedThisFrame)
+            TogglePushToTalkMode();
+    }
+
     public void TogglePushToTalkMode()
     {
         if (controller == null) return;
@@ -55,6 +88,25 @@ public class PushToTalkDemo : MonoBehaviour
             : VoskListeningMode.PushToTalk;
 
         Debug.Log($"[PushToTalkDemo] Listening mode: {controller.ListeningMode}");
+        RefreshModeLabel();
+    }
+
+    public void OnHoldButtonPointerDown()
+    {
+        if (controller != null) controller.PressTalk();
+    }
+
+    public void OnHoldButtonPointerUp()
+    {
+        if (controller != null) controller.ReleaseTalk();
+    }
+
+    void RefreshModeLabel()
+    {
+        if (modeLabel == null || controller == null) return;
+        modeLabel.text = controller.ListeningMode == VoskListeningMode.PushToTalk
+            ? "Mode: Push-to-Talk (press Tab for Continuous)"
+            : "Mode: Continuous (press Tab for Push-to-Talk)";
     }
 
     void ShowRecording()
