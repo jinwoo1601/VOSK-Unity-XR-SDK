@@ -234,7 +234,7 @@ See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for the full list with repro st
 
 ## Versioning
 
-This project follows [Semantic Versioning](https://semver.org/). See [CHANGELOG.md](CHANGELOG.md) for the full release history.
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 | Version | Milestone |
 |---|---|
