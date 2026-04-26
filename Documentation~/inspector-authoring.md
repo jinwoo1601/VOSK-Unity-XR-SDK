@@ -1,6 +1,6 @@
 # Inspector Authoring
 
-The SDK supports zero-code command setup using ScriptableObject assets. Instead of writing `Configure()` calls, you create slot, command, and command set assets in the Unity Inspector, then drag them onto your `VoskCommandRecogniser` component.
+The SDK supports zero-code command setup using ScriptableObject assets. Instead of writing `Configure()` calls, you create slot, command, and command set assets in the Unity Inspector, then drag them onto your `VoxrCommandRecogniser` component.
 
 ---
 
@@ -13,7 +13,7 @@ Inspector authoring provides:
 - **Reusable assets** that can be shared across scenes and prefabs
 - **Version-control-friendly** ScriptableObjects serialised as `.asset` files
 
-At runtime, the assets are automatically converted to the same `VoskSlotDefinition`, `VoskCommandDefinition`, and `VoskCommandSet` structs that the code-based API uses. There is no performance difference.
+At runtime, the assets are automatically converted to the same `VoxrSlotDefinition`, `VoxrCommandDefinition`, and `VoxrCommandSet` structs that the code-based API uses. There is no performance difference.
 
 ---
 
@@ -21,7 +21,7 @@ At runtime, the assets are automatically converted to the same `VoskSlotDefiniti
 
 ### 1. Create Slot Assets
 
-Right-click in the Project window and select **Assets > Create > VOSK XR > Slot Definition**.
+Right-click in the Project window and select **Assets > Create > VoXR > Slot Definition**.
 
 Configure each slot asset in the Inspector:
 - **Slot Name** -- the name referenced in patterns (e.g. `target`, `weapon`, `heading`)
@@ -32,7 +32,7 @@ Configure each slot asset in the Inspector:
 
 ### 2. Create Command Assets
 
-Select **Assets > Create > VOSK XR > Command Definition**.
+Select **Assets > Create > VoXR > Command Definition**.
 
 Configure each command asset:
 - **Intent** -- the intent name that fires in `OnCommandRecognised` (e.g. `launch_weapon`)
@@ -42,21 +42,21 @@ Pattern strings are split on whitespace into token arrays at runtime. Each strin
 
 ### 3. Create Command Set Assets
 
-Select **Assets > Create > VOSK XR > Command Set**.
+Select **Assets > Create > VoXR > Command Set**.
 
 Configure each set asset:
 - **Set Name** -- the name used with `SetActiveSets()` (e.g. `weapons`, `navigation`, `common`)
 - **Commands** -- drag in the command assets that belong to this set
 
-### 4. Wire Assets onto VoskCommandRecogniser
+### 4. Wire Assets onto VoxrCommandRecogniser
 
-Select the GameObject with your `VoskCommandRecogniser` component and assign:
+Select the GameObject with your `VoxrCommandRecogniser` component and assign:
 
 - **Slot Assets** -- drag in all slot assets used by your commands
 - **Command Set Assets** -- drag in your command set assets
 - **Initial Active Set Names** -- enter the names of sets to activate on startup (e.g. `weapons`, `common`)
 
-`VoskCommandRecogniser.Awake()` converts the assets to runtime structs and calls `Configure()` + `SetActiveSets()` automatically.
+`VoxrCommandRecogniser.Awake()` converts the assets to runtime structs and calls `Configure()` + `SetActiveSets()` automatically.
 
 ---
 
@@ -79,7 +79,7 @@ The Command Recognition sample includes a complete set of 20 ScriptableObject as
 - 11 command assets (single pattern, multi-pattern, optional slots, number slots)
 - 3 command set assets (weapons, navigation, common)
 
-Import the sample via **Package Manager > VOSK XR Speech Recognition > Samples > Command Recognition**, then look under `Samples~/CommandRecognition/AssetAuthoring/` for the full working example.
+Import the sample via **Package Manager > VoXR Speech Recognition > Samples > Command Recognition**, then look under `Samples~/CommandRecognition/AssetAuthoring/` for the full working example.
 
 ---
 

@@ -6,7 +6,7 @@ The SDK provides multiple tools for iterating on speech commands without deployi
 
 ## Command Debug Window
 
-Open **Window > VOSK XR > Command Debug** during Play Mode to inspect the full command pipeline in real time.
+Open **Window > VoXR > Command Debug** during Play Mode to inspect the full command pipeline in real time.
 
 ### Left Panel (recognition state)
 
@@ -14,7 +14,7 @@ Open **Window > VOSK XR > Command Debug** during Play Mode to inspect the full c
 - **Partial result** -- the live VOSK partial transcript, updated continuously as you speak.
 - **Final result** -- the completed transcript text at utterance boundaries.
 - **Per-word confidence bars** -- each word with a colour-coded confidence bar (green > yellow > red). Shows `[n/a]` when VOSK omits per-word confidence (happens with `maxAlternatives > 0`).
-- **N-best alternatives** -- alternative recognition hypotheses with confidence scores (requires `maxAlternatives > 0` on `VoskSpeechRecogniser`).
+- **N-best alternatives** -- alternative recognition hypotheses with confidence scores (requires `maxAlternatives > 0` on `VoxrSpeechRecogniser`).
 
 ### Right Panel (command matching)
 
@@ -30,13 +30,13 @@ Open **Window > VOSK XR > Command Debug** during Play Mode to inspect the full c
 - **Clear** -- clears match history and resets the display.
 - **Pause / Resume** -- freezes the display so you can inspect a result without it being overwritten by the next utterance. On resume, stale results are skipped so the display jumps to the next genuinely new result.
 
-The debug window is Editor-only (`#if UNITY_EDITOR`) and has zero cost in builds. The underlying diagnostic structs (`VoskMatchDiagnostics`, `VoskMatchAttempt`, `VoskDiagnosticSlotMatch`) are compiled out of non-Editor builds.
+The debug window is Editor-only (`#if UNITY_EDITOR`) and has zero cost in builds. The underlying diagnostic structs (`VoxrMatchDiagnostics`, `VoxrMatchAttempt`, `VoxrDiagnosticSlotMatch`) are compiled out of non-Editor builds.
 
 ---
 
 ## Live Microphone (Windows Editor)
 
-On Windows, `VoskSpeechRecogniser.StartRecognition()` transparently auto-routes audio through `UnityEngine.Microphone` and a desktop build of `libvosk.dll` via P/Invoke. Existing scenes and user code work with zero changes -- speak into your PC microphone and watch commands fire in the Console.
+On Windows, `VoxrSpeechRecogniser.StartRecognition()` transparently auto-routes audio through `UnityEngine.Microphone` and a desktop build of `libvosk.dll` via P/Invoke. Existing scenes and user code work with zero changes -- speak into your PC microphone and watch commands fire in the Console.
 
 ### Setup
 
@@ -76,7 +76,7 @@ commandRecogniser.FlushPendingBuffer(); // Force immediate parse
 
 ```csharp
 // Test threshold behaviour with specific confidence values
-var words = VoskSpeechRecogniser.CreateSimulatedWords("cease fire", confidence: 0.85f);
+var words = VoxrSpeechRecogniser.CreateSimulatedWords("cease fire", confidence: 0.85f);
 commandRecogniser.InjectText("cease fire", words);
 ```
 
@@ -91,10 +91,10 @@ recogniser.InjectPartialResult("hel");
 ### Notes
 
 - `InjectText` feeds text through the full command pipeline (parser, threshold, buffer, debounce). Call `FlushPendingBuffer()` after injection if you need synchronous results (e.g. in tests).
-- `InjectResult` and `InjectPartialResult` fire events on `VoskSpeechRecogniser` directly, bypassing the command recogniser. Use these to test speech-level event handling.
-- `CreateSimulatedWords` generates `VoskWord[]` with uniform confidence and sequential timing. Useful for testing `minConfidence` threshold behaviour.
+- `InjectResult` and `InjectPartialResult` fire events on `VoxrSpeechRecogniser` directly, bypassing the command recogniser. Use these to test speech-level event handling.
+- `CreateSimulatedWords` generates `VoxrWord[]` with uniform confidence and sequential timing. Useful for testing `minConfidence` threshold behaviour.
 
-See `Tests/Runtime/VoskCommandRecogniserInjectionTests.cs` and `VoskSpeechRecogniserInjectionTests.cs` for executable usage examples.
+See `Tests/Runtime/VoxrCommandRecogniserInjectionTests.cs` and `VoxrSpeechRecogniserInjectionTests.cs` for executable usage examples.
 
 ---
 
@@ -104,30 +104,30 @@ Regression-test command definitions after changing thresholds, aliases, or slot 
 
 ### Visual UI
 
-Open **Window > VOSK XR > Batch Test Runner**. Assign slot/command assets and a `VoskTestSuiteAsset`, then click **Run All**. Results appear in a table with per-row expansion for diagnostics. Export results as CSV for diffing across runs.
+Open **Window > VoXR > Batch Test Runner**. Assign slot/command assets and a `VoxrTestSuiteAsset`, then click **Run All**. Results appear in a table with per-row expansion for diagnostics. Export results as CSV for diffing across runs.
 
 ### Programmatic API (Edit Mode tests / CI)
 
 ```csharp
-using VoskXR.Commands;
-using VoskXR.Testing;
+using VoXR.Commands;
+using VoXR.Testing;
 
-var runner = new VoskBatchTestRunner(slots, commands, minScore: 0.6f, minConfidence: 0.4f);
+var runner = new VoxrBatchTestRunner(slots, commands, minScore: 0.6f, minConfidence: 0.4f);
 var results = runner.RunAll(testCases);
 Assert.IsTrue(results.AllPassed, results.FailureSummary);
 ```
 
-`VoskBatchTestRunner` is pure C# -- no MonoBehaviour dependency, works in Edit Mode without Play Mode or audio hardware. It instantiates a `VoskCommandParser` directly (the same code path that `InjectText` uses internally).
+`VoxrBatchTestRunner` is pure C# -- no MonoBehaviour dependency, works in Edit Mode without Play Mode or audio hardware. It instantiates a `VoxrCommandParser` directly (the same code path that `InjectText` uses internally).
 
 For command-set-aware testing:
 
 ```csharp
-var runner = new VoskBatchTestRunner(slots, sets, activeSetNames, minScore: 0.6f, minConfidence: 0.4f);
+var runner = new VoxrBatchTestRunner(slots, sets, activeSetNames, minScore: 0.6f, minConfidence: 0.4f);
 ```
 
 ### Test Case Authoring
 
-Create a `VoskTestSuiteAsset` via **Assets > Create > VOSK XR > Test Suite** and author test cases in the Inspector. Or import/export as JSON for portability and version control:
+Create a `VoxrTestSuiteAsset` via **Assets > Create > VoXR > Test Suite** and author test cases in the Inspector. Or import/export as JSON for portability and version control:
 
 ```json
 {
@@ -166,18 +166,18 @@ Create a `VoskTestSuiteAsset` via **Assets > Create > VOSK XR > Test Suite** and
 
 | Method | Description |
 |--------|-------------|
-| `VoskBatchTestRunner(slots, commands, minScore, minConfidence)` | Constructor. All commands active. |
-| `VoskBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence)` | Constructor with named command sets. |
-| `RunAll(VoskTestCase[])` | Returns `VoskBatchResults` with per-case pass/fail. |
-| `Run(VoskTestCase)` | Returns a single `VoskTestResult`. |
-| `ToCsv(VoskBatchResults)` | Static. Exports results as a CSV string. |
+| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence)` | Constructor. All commands active. |
+| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence)` | Constructor with named command sets. |
+| `RunAll(VoxrTestCase[])` | Returns `VoxrBatchResults` with per-case pass/fail. |
+| `Run(VoxrTestCase)` | Returns a single `VoxrTestResult`. |
+| `ToCsv(VoxrBatchResults)` | Static. Exports results as a CSV string. |
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `VoskBatchResults.AllPassed` | `bool` | True when every test case passed. |
-| `VoskBatchResults.FailureSummary` | `string` | Multi-line summary of all failures for NUnit assertion messages. |
-| `VoskBatchResults.PassCount` | `int` | Number of passing test cases. |
-| `VoskBatchResults.FailCount` | `int` | Number of failing test cases. |
+| `VoxrBatchResults.AllPassed` | `bool` | True when every test case passed. |
+| `VoxrBatchResults.FailureSummary` | `string` | Multi-line summary of all failures for NUnit assertion messages. |
+| `VoxrBatchResults.PassCount` | `int` | Number of passing test cases. |
+| `VoxrBatchResults.FailCount` | `int` | Number of failing test cases. |
 
 ---
 

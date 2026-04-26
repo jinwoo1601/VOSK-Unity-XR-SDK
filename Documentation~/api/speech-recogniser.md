@@ -1,6 +1,6 @@
-# VoskSpeechRecogniser
+# VoxrSpeechRecogniser
 
-`public class VoskSpeechRecogniser : MonoBehaviour` -- Namespace: `VoskXR`
+`public class VoxrSpeechRecogniser : MonoBehaviour` -- Namespace: `VoXR`
 
 The core speech recognition MonoBehaviour. Attach to a GameObject, configure via Inspector, subscribe to events.
 
@@ -19,8 +19,8 @@ The core speech recognition MonoBehaviour. Attach to a GameObject, configure via
 |-------|-----------|-------------|
 | `OnPartialResult` | `Action<string>` | Fired on the main thread with partial transcript text as speech is being recognised |
 | `OnFinalResult` | `Action<string>` | Fired on the main thread with final transcript text at utterance boundaries |
-| `OnResult` | `Action<VoskResult>` | Fired with final result including per-word confidence, timing, and n-best alternatives |
-| `OnError` | `Action<VoskBridgeErrorCode, string>` | Fired on the main thread with error code and human-readable description |
+| `OnResult` | `Action<VoxrResult>` | Fired with final result including per-word confidence, timing, and n-best alternatives |
+| `OnError` | `Action<VoxrBridgeErrorCode, string>` | Fired on the main thread with error code and human-readable description |
 | `OnModelReady` | `Action` | Fired when model extraction and initialisation completes |
 
 ## Properties
@@ -42,15 +42,15 @@ The core speech recognition MonoBehaviour. Attach to a GameObject, configure via
 | `StartRecognitionAsync()` | `async Task`. Asynchronously starts recognition with permission handling. |
 | `StopRecognition()` | Stops audio capture. Model stays loaded for fast restart. |
 | `ResetRecogniser()` | Clears recogniser state without stopping audio. |
-| `SetGrammar(string grammarJson)` | Sets a VOSK grammar JSON string for constrained recognition. Typically called by `VoskCommandRecogniser` internally. |
+| `SetGrammar(string grammarJson)` | Sets a VOSK grammar JSON string for constrained recognition. Typically called by `VoxrCommandRecogniser` internally. |
 
 ### Injection Methods
 
 | Method | Description |
 |--------|-------------|
-| `InjectResult(string text, VoskWord[] words, VoskAlternative[] alternatives)` | Fires `OnFinalResult` and `OnResult` as if VOSK recognised the text. Bypasses native bridge state -- use for Editor testing, replay, and CI. All parameters except `text` are optional. |
+| `InjectResult(string text, VoxrWord[] words, VoxrAlternative[] alternatives)` | Fires `OnFinalResult` and `OnResult` as if VOSK recognised the text. Bypasses native bridge state -- use for Editor testing, replay, and CI. All parameters except `text` are optional. |
 | `InjectPartialResult(string text)` | Fires `OnPartialResult` as if VOSK produced the partial text. |
-| `CreateSimulatedWords(string text, float confidence)` | **Static.** Generates `VoskWord[]` from text with uniform confidence and sequential timing. Useful for threshold testing via injection. Default confidence is `1.0f`. |
+| `CreateSimulatedWords(string text, float confidence)` | **Static.** Generates `VoxrWord[]` from text with uniform confidence and sequential timing. Useful for threshold testing via injection. Default confidence is `1.0f`. |
 
 ## Usage
 
@@ -61,6 +61,6 @@ For full setup and lifecycle examples, see the [Getting Started](../getting-star
 - [Getting Started](../getting-started.md) -- setup walkthrough and first recognition
 - [Push-to-Talk](../push-to-talk.md) -- start/stop lifecycle pattern
 - [Editor Testing](../editor-testing.md) -- injection workflows
-- [VoskCommandRecogniser](command-recogniser.md) -- command parsing layer
-- [Data Types](data-types.md) -- `VoskResult`, `VoskWord`, `VoskAlternative`
-- [Error Codes](error-codes.md) -- `VoskBridgeErrorCode` values
+- [VoxrCommandRecogniser](command-recogniser.md) -- command parsing layer
+- [Data Types](data-types.md) -- `VoxrResult`, `VoxrWord`, `VoxrAlternative`
+- [Error Codes](error-codes.md) -- `VoxrBridgeErrorCode` values

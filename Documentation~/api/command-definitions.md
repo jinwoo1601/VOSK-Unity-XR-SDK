@@ -2,9 +2,9 @@
 
 Types used to declare commands, slots, and command sets.
 
-## VoskCommandDefinition
+## VoxrCommandDefinition
 
-`public readonly struct VoskCommandDefinition` -- Namespace: `VoskXR.Commands`
+`public readonly struct VoxrCommandDefinition` -- Namespace: `VoXR.Commands`
 
 Declares a command pattern with an intent name and one or more token arrays.
 
@@ -21,23 +21,23 @@ Declares a command pattern with an intent name and one or more token arrays.
 
 ```csharp
 // Single pattern
-new VoskCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } })
+new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } })
 
 // Multiple patterns (alternative phrasings)
-new VoskCommandDefinition("launch_weapon", new[] {
+new VoxrCommandDefinition("launch_weapon", new[] {
     new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
     new[] { "fire", "{weapon}", "at", "{target}" },
 })
 
 // Partial match + confirmation
-new VoskCommandDefinition("launch_weapon", new[] {
+new VoxrCommandDefinition("launch_weapon", new[] {
     new[] { "launch", "{weapon}", "target", "{target}" },
 }, allowPartialMatch: true, requiresConfirmation: true)
 ```
 
-## VoskSlotDefinition
+## VoxrSlotDefinition
 
-`public readonly struct VoskSlotDefinition` -- Namespace: `VoskXR.Commands`
+`public readonly struct VoxrSlotDefinition` -- Namespace: `VoXR.Commands`
 
 Declares a named slot with allowed values or number-sequence behaviour.
 
@@ -46,7 +46,7 @@ Declares a named slot with allowed values or number-sequence behaviour.
 | Field | Type | Description |
 |-------|------|-------------|
 | `Name` | `string` | Slot name referenced in patterns as `{name}` or `{?name}` |
-| `Type` | `VoskSlotType` | `Enumerated` (fixed values) or `NumberSequence` (digit words) |
+| `Type` | `VoxrSlotType` | `Enumerated` (fixed values) or `NumberSequence` (digit words) |
 | `Values` | `string[]` | Allowed values (Enumerated only) |
 | `Aliases` | `Dictionary<string, string>` | Maps variant words to canonical values |
 | `MinWords` | `int` | Minimum digit words to consume (NumberSequence only) |
@@ -56,30 +56,30 @@ Declares a named slot with allowed values or number-sequence behaviour.
 
 ```csharp
 // Enumerated slot with fixed values
-var targets = VoskSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
+var targets = VoxrSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
 
 // Enumerated slot with aliases (constructor)
-var quantity = new VoskSlotDefinition("quantity",
+var quantity = new VoxrSlotDefinition("quantity",
     new[] { "one", "two", "three", "all" },
     new Dictionary<string, string> { { "a", "one" } });
 
 // NumberSequence slot for digit words
-var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
+var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
 // Matches: "two seven zero" -> 270, "one eight" -> 18
 ```
 
-## VoskSlotType
+## VoxrSlotType
 
-`public enum VoskSlotType` -- Namespace: `VoskXR.Commands`
+`public enum VoxrSlotType` -- Namespace: `VoXR.Commands`
 
 | Value | Description |
 |-------|-------------|
 | `Enumerated` | Matches against a fixed set of allowed values and aliases |
 | `NumberSequence` | Greedily consumes consecutive digit-word tokens ("zero" through "nine") |
 
-## VoskCommandSet
+## VoxrCommandSet
 
-`public readonly struct VoskCommandSet` -- Namespace: `VoskXR.Commands`
+`public readonly struct VoxrCommandSet` -- Namespace: `VoXR.Commands`
 
 A named group of commands for mode-specific grammar.
 
@@ -88,14 +88,14 @@ A named group of commands for mode-specific grammar.
 | Field | Type | Description |
 |-------|------|-------------|
 | `Name` | `string` | Set name (e.g. `"weapons"`, `"navigation"`) |
-| `Commands` | `VoskCommandDefinition[]` | Commands in this set |
+| `Commands` | `VoxrCommandDefinition[]` | Commands in this set |
 
 ### Example
 
 ```csharp
-var weaponsSet = new VoskCommandSet("weapons", new[] {
-    new VoskCommandDefinition("launch_weapon", ...),
-    new VoskCommandDefinition("cease_fire", ...),
+var weaponsSet = new VoxrCommandSet("weapons", new[] {
+    new VoxrCommandDefinition("launch_weapon", ...),
+    new VoxrCommandDefinition("cease_fire", ...),
 });
 ```
 
@@ -104,6 +104,6 @@ var weaponsSet = new VoskCommandSet("weapons", new[] {
 - [Command Recognition](../command-recognition.md) -- how patterns and slots are matched
 - [Command Sets](../command-sets.md) -- mode-specific grammar switching
 - [Inspector Authoring](../inspector-authoring.md) -- zero-code alternative via ScriptableObjects
-- [ScriptableObject Assets](scriptable-objects.md) -- `VoskCommandAsset`, `VoskSlotAsset`, `VoskCommandSetAsset`
-- [Data Types](data-types.md) -- `VoskCommand`, `VoskSlotMatch` result types
+- [ScriptableObject Assets](scriptable-objects.md) -- `VoxrCommandAsset`, `VoxrSlotAsset`, `VoxrCommandSetAsset`
+- [Data Types](data-types.md) -- `VoxrCommand`, `VoxrSlotMatch` result types
 - [Number Parser](number-parser.md) -- parsing `NumberSequence` slot values

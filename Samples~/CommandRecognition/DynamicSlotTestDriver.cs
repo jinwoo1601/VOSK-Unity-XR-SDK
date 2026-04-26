@@ -1,9 +1,9 @@
 using UnityEngine;
-using VoskXR.Commands;
+using VoXR.Commands;
 
 public class DynamicSlotTestDriver : MonoBehaviour
 {
-    [SerializeField] VoskCommandRecogniser commandRecogniser;
+    [SerializeField] VoxrCommandRecogniser commandRecogniser;
 
     // -------- Phase 1: Dynamic Slot Filtering --------
 

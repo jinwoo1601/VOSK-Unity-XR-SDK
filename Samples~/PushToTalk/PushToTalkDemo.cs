@@ -3,12 +3,12 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
-using VoskXR;
+using VoXR;
 
 public class PushToTalkDemo : MonoBehaviour
 {
-    [SerializeField] VoskSpeechRecogniser recogniser;
-    [SerializeField] VoskPushToTalkController controller;
+    [SerializeField] VoxrSpeechRecogniser recogniser;
+    [SerializeField] VoxrPushToTalkController controller;
 
     [Header("UI (optional)")]
     [SerializeField] Text transcriptText;
@@ -67,7 +67,7 @@ public class PushToTalkDemo : MonoBehaviour
         var kb = Keyboard.current;
         if (kb == null) return;
 
-        if (controller.ListeningMode == VoskListeningMode.PushToTalk)
+        if (controller.ListeningMode == VoxrListeningMode.PushToTalk)
         {
             if (kb[talkKey].wasPressedThisFrame)
                 controller.PressTalk();
@@ -83,9 +83,9 @@ public class PushToTalkDemo : MonoBehaviour
     {
         if (controller == null) return;
 
-        controller.ListeningMode = controller.ListeningMode == VoskListeningMode.PushToTalk
-            ? VoskListeningMode.Continuous
-            : VoskListeningMode.PushToTalk;
+        controller.ListeningMode = controller.ListeningMode == VoxrListeningMode.PushToTalk
+            ? VoxrListeningMode.Continuous
+            : VoxrListeningMode.PushToTalk;
 
         Debug.Log($"[PushToTalkDemo] Listening mode: {controller.ListeningMode}");
         RefreshModeLabel();
@@ -104,7 +104,7 @@ public class PushToTalkDemo : MonoBehaviour
     void RefreshModeLabel()
     {
         if (modeLabel == null || controller == null) return;
-        modeLabel.text = controller.ListeningMode == VoskListeningMode.PushToTalk
+        modeLabel.text = controller.ListeningMode == VoxrListeningMode.PushToTalk
             ? "Mode: Push-to-Talk (press Tab for Continuous)"
             : "Mode: Continuous (press Tab for Push-to-Talk)";
     }
@@ -134,7 +134,7 @@ public class PushToTalkDemo : MonoBehaviour
         Debug.Log($"[PushToTalkDemo] Final: {text}");
     }
 
-    void OnError(VoskBridgeErrorCode code, string message)
+    void OnError(VoxrBridgeErrorCode code, string message)
     {
         Debug.LogError($"[PushToTalkDemo] VOSK [{code}] {code.ToDescription()}: {message}");
     }

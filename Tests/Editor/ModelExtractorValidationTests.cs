@@ -1,9 +1,9 @@
 using System.IO;
 using NUnit.Framework;
 using UnityEngine;
-using VoskXR;
+using VoXR;
 
-namespace VoskXR.Tests.Editor
+namespace VoXR.Tests.Editor
 {
     public class ModelExtractorValidationTests
     {
@@ -12,7 +12,7 @@ namespace VoskXR.Tests.Editor
         [SetUp]
         public void SetUp()
         {
-            _testDir = Path.Combine(Application.temporaryCachePath, "VoskTestModel_" + System.Guid.NewGuid().ToString("N"));
+            _testDir = Path.Combine(Application.temporaryCachePath, "VoxrTestModel_" + System.Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_testDir);
         }
 

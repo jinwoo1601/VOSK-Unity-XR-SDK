@@ -1,9 +1,9 @@
 #if UNITY_EDITOR_WIN
 using NUnit.Framework;
 using UnityEngine;
-using VoskXR;
+using VoXR;
 
-namespace VoskXR.Tests.Editor
+namespace VoXR.Tests.Editor
 {
     public class AudioMetricTests
     {
@@ -35,7 +35,7 @@ namespace VoskXR.Tests.Editor
             var go = new GameObject("SpeechTest");
             try
             {
-                var speech = go.AddComponent<VoskSpeechRecogniser>();
+                var speech = go.AddComponent<VoxrSpeechRecogniser>();
                 // _editorBackend is null before InitialiseAsync
                 Assert.AreEqual(0f, speech.EditorPreAgcRms);
             }
@@ -52,7 +52,7 @@ namespace VoskXR.Tests.Editor
             var go = new GameObject("SpeechTest");
             try
             {
-                var speech = go.AddComponent<VoskSpeechRecogniser>();
+                var speech = go.AddComponent<VoxrSpeechRecogniser>();
                 Assert.AreEqual(0f, speech.EditorPostAgcRms);
             }
             finally
@@ -68,7 +68,7 @@ namespace VoskXR.Tests.Editor
             var go = new GameObject("SpeechTest");
             try
             {
-                var speech = go.AddComponent<VoskSpeechRecogniser>();
+                var speech = go.AddComponent<VoxrSpeechRecogniser>();
                 Assert.AreEqual(1f, speech.EditorAgcGain);
             }
             finally

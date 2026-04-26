@@ -1,7 +1,7 @@
 using NUnit.Framework;
-using VoskXR;
+using VoXR;
 
-namespace VoskXR.Tests.Runtime
+namespace VoXR.Tests.Runtime
 {
     public class ParseAlternativesFromJsonTests
     {
@@ -20,7 +20,7 @@ namespace VoskXR.Tests.Runtime
                 "\"text\":\"yellow world\"}" +
                 "]}";
 
-            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
+            var alts = VoxrJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(2, alts.Length);
 
@@ -47,7 +47,7 @@ namespace VoskXR.Tests.Runtime
                 "\"text\":\"yes\"}" +
                 "]}";
 
-            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
+            var alts = VoxrJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(1, alts.Length);
             Assert.AreEqual("yes", alts[0].Text);
@@ -61,7 +61,7 @@ namespace VoskXR.Tests.Runtime
                 "{\"result\":[{\"conf\":0.9,\"end\":0.5,\"start\":0.1,\"word\":\"hello\"}]," +
                 "\"text\":\"hello\"}";
 
-            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
+            var alts = VoxrJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(0, alts.Length);
         }
@@ -74,7 +74,7 @@ namespace VoskXR.Tests.Runtime
                 "{\"confidence\":100.0,\"text\":\"hello\"}" +
                 "]}";
 
-            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
+            var alts = VoxrJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(1, alts.Length);
             Assert.AreEqual("hello", alts[0].Text);
@@ -98,7 +98,7 @@ namespace VoskXR.Tests.Runtime
                 "    }]\n" +
                 "}";
 
-            var alts = VoskJsonParser.ParseAlternativesFromJson(json);
+            var alts = VoxrJsonParser.ParseAlternativesFromJson(json);
 
             Assert.AreEqual(1, alts.Length);
             Assert.AreEqual("test", alts[0].Text);
@@ -107,9 +107,9 @@ namespace VoskXR.Tests.Runtime
         }
 
         [Test]
-        public void VoskAlternativeToString_ShowsTextAndScore()
+        public void VoxrAlternativeToString_ShowsTextAndScore()
         {
-            var alt = new VoskAlternative("hello", 1234.5f, System.Array.Empty<VoskWord>());
+            var alt = new VoxrAlternative("hello", 1234.5f, System.Array.Empty<VoxrWord>());
             Assert.AreEqual("hello (score 1234.5)", alt.ToString());
         }
     }

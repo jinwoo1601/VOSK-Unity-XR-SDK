@@ -1,11 +1,11 @@
 using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
-using VoskXR;
+using VoXR;
 
 public class VoiceDemo : MonoBehaviour
 {
-    [SerializeField] VoskSpeechRecogniser recogniser;
+    [SerializeField] VoxrSpeechRecogniser recogniser;
 
     [Header("UI (optional)")]
     [SerializeField] Text transcriptText;
@@ -20,7 +20,7 @@ public class VoiceDemo : MonoBehaviour
     readonly StringBuilder _altsBuilder = new StringBuilder(256);
     float _errorClearAt;
 
-    // The VoskSpeechRecogniser keeps its native model loaded between
+    // The VoxrSpeechRecogniser keeps its native model loaded between
     // OnDisable/OnEnable cycles so re-enabling is fast. Call
     // recogniser.ReleaseNativeResources() only when you want to fully
     // unload the model (e.g. OnDestroy).
@@ -66,7 +66,7 @@ public class VoiceDemo : MonoBehaviour
             transcriptText.text = string.IsNullOrEmpty(text) ? "<silence>" : text;
     }
 
-    void OnResult(VoskResult result)
+    void OnResult(VoxrResult result)
     {
         UpdateWordsPanel(result);
         UpdateAlternativesPanel(result);
@@ -90,7 +90,7 @@ public class VoiceDemo : MonoBehaviour
         }
     }
 
-    void UpdateWordsPanel(VoskResult result)
+    void UpdateWordsPanel(VoxrResult result)
     {
         if (wordsText == null) return;
 
@@ -108,7 +108,7 @@ public class VoiceDemo : MonoBehaviour
         wordsText.text = _wordsBuilder.ToString();
     }
 
-    void UpdateAlternativesPanel(VoskResult result)
+    void UpdateAlternativesPanel(VoxrResult result)
     {
         if (alternativesText == null) return;
 
@@ -116,7 +116,7 @@ public class VoiceDemo : MonoBehaviour
         if (result.Alternatives.Length == 0)
         {
             alternativesText.text =
-                "(set 'Max Alternatives' > 0 on VoskSpeechRecogniser to see ranked hypotheses)";
+                "(set 'Max Alternatives' > 0 on VoxrSpeechRecogniser to see ranked hypotheses)";
             return;
         }
 
@@ -130,7 +130,7 @@ public class VoiceDemo : MonoBehaviour
         alternativesText.text = _altsBuilder.ToString();
     }
 
-    void OnError(VoskBridgeErrorCode code, string message)
+    void OnError(VoxrBridgeErrorCode code, string message)
     {
         Debug.LogError($"[VoiceDemo] VOSK [{code}]: {message}");
 

@@ -11,23 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `VoskPushToTalkController` MonoBehaviour and `VoskListeningMode` enum — hold-to-talk gating with runtime-switchable continuous mode, optional command-recogniser integration, `UnityEvent` hooks, and a guard for the Android mic-permission race. See [Push-to-Talk guide](Documentation~/push-to-talk.md).
-- Push-to-talk sample at `Samples~/PushToTalk/` and `VoskPushToTalkControllerTests` (16 Play Mode tests).
-- `VoskSlotDefinition.OneOf(name, params values)` factory method for concise enumerated-slot construction.
+- `VoxrPushToTalkController` MonoBehaviour and `VoxrListeningMode` enum — hold-to-talk gating with runtime-switchable continuous mode, optional command-recogniser integration, `UnityEvent` hooks, and a guard for the Android mic-permission race. See [Push-to-Talk guide](Documentation~/push-to-talk.md).
+- Push-to-talk sample at `Samples~/PushToTalk/` and `VoxrPushToTalkControllerTests` (16 Play Mode tests).
+- `VoxrSlotDefinition.OneOf(name, params values)` factory method for concise enumerated-slot construction.
 
 ## [0.16.0] - 2026-04-13
 
 ### Changed
 
-- Extracted `VoskCommandRecogniser` responsibilities into single-purpose internal classes: `CommandDebouncer`, `CommandSetManager`, `DynamicSlotManager`, `GrammarManager`, `PendingCommandHandler`, `UtteranceBuffer`.
-- Pulled JSON result/word/alternative parsing out of `VoskSpeechRecogniser` into `VoskJsonParser`.
-- Unified `SplitSeparator` declarations — `VoskCommandAsset` and `VoskNumberParser` now use `VoskCommandParser.SplitSeparator`.
+- Extracted `VoxrCommandRecogniser` responsibilities into single-purpose internal classes: `CommandDebouncer`, `CommandSetManager`, `DynamicSlotManager`, `GrammarManager`, `PendingCommandHandler`, `UtteranceBuffer`.
+- Pulled JSON result/word/alternative parsing out of `VoxrSpeechRecogniser` into `VoxrJsonParser`.
+- Unified `SplitSeparator` declarations — `VoxrCommandAsset` and `VoxrNumberParser` now use `VoxrCommandParser.SplitSeparator`.
 - Simplified pending command resolution pipeline: all event dispatch goes through `InterpretResolution`; grammar drain based on outcome type instead of explicit flag.
-- `UtteranceBuffer.Flush()` returns text only; word data accessed via `GetWordsSpan()` (zero-copy `ReadOnlySpan<VoskWord>` via `CollectionsMarshal.AsSpan`).
-- `VoskCommandParser.ParseInternal()` accepts pre-split tokens and pre-built word-confidence dictionary, avoiding duplicate `string.Split` and `Dictionary` allocations per utterance.
-- Pre-allocated reusable buffers replace per-utterance `List` allocations: `_matchSlotBuf`/`_bestSlotBuf` in `TryMatchScored`, `_acceptedBuf` in the recogniser, `_followUpSlotBuf`/`_unfilledBuf` in `PendingCommandHandler`, pooled `StringBuilder` in `UtteranceBuffer` and `TryMatchNumberSequence`, pooled word-confidence dictionary in `VoskCommandParser`.
+- `UtteranceBuffer.Flush()` returns text only; word data accessed via `GetWordsSpan()` (zero-copy `ReadOnlySpan<VoxrWord>` via `CollectionsMarshal.AsSpan`).
+- `VoxrCommandParser.ParseInternal()` accepts pre-split tokens and pre-built word-confidence dictionary, avoiding duplicate `string.Split` and `Dictionary` allocations per utterance.
+- Pre-allocated reusable buffers replace per-utterance `List` allocations: `_matchSlotBuf`/`_bestSlotBuf` in `TryMatchScored`, `_acceptedBuf` in the recogniser, `_followUpSlotBuf`/`_unfilledBuf` in `PendingCommandHandler`, pooled `StringBuilder` in `UtteranceBuffer` and `TryMatchNumberSequence`, pooled word-confidence dictionary in `VoxrCommandParser`.
 - Pre-computed `_slotNameCache` and `_optionalSlotElements` replace runtime `ExtractSlotName`/`IsOptionalSlot` calls in the match loop.
-- `VoskJsonParser.ParseAlternativesFromJson` pre-counts depth-1 objects for exact-size array allocation, replacing `List<VoskAlternative>`.
+- `VoxrJsonParser.ParseAlternativesFromJson` pre-counts depth-1 objects for exact-size array allocation, replacing `List<VoxrAlternative>`.
 - Vocabulary confirm/cancel matching uses span-based `MatchPhraseAgainstTokens` instead of joining tokens into a temporary string.
 
 ### Fixed
@@ -39,32 +39,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Pending command system for partial match, confirmation, and follow-up slot-fill:
-  - `AllowPartialMatch` on `VoskCommandDefinition` — when a command matches with unfilled required slots, it enters pending state instead of being rejected. Follow-up speech fills the missing slots.
-  - `RequiresConfirmation` on `VoskCommandDefinition` — fully-matched commands enter pending state awaiting explicit voice confirmation before firing.
+  - `AllowPartialMatch` on `VoxrCommandDefinition` — when a command matches with unfilled required slots, it enters pending state instead of being rejected. Follow-up speech fills the missing slots.
+  - `RequiresConfirmation` on `VoxrCommandDefinition` — fully-matched commands enter pending state awaiting explicit voice confirmation before firing.
   - Commands that are both `AllowPartialMatch` and `RequiresConfirmation` go through two pending stages: first slot-fill, then confirmation.
-  - Configurable `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` (`Cancel` or `FireAsIs`) on `VoskCommandRecogniser`.
+  - Configurable `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` (`Cancel` or `FireAsIs`) on `VoxrCommandRecogniser`.
   - Custom confirm/cancel vocabulary via `confirmVocabulary` and `cancelVocabulary` Inspector arrays. Defaults: confirm = "confirm", "affirmative", "yes", "go ahead", "do it"; cancel = "cancel", "abort", "negative", "belay that", "never mind".
   - Confirm/cancel vocabulary words are automatically merged into the VOSK grammar JSON.
-- `VoskCommandRecogniser` pending command events:
+- `VoxrCommandRecogniser` pending command events:
   - `OnCommandPending` — fires when a command enters pending state (partial match or awaiting confirmation).
   - `OnCommandConfirmed` — fires when a pending command is confirmed. Also fires `OnCommandRecognised` and `OnCommandsRecognised`.
   - `OnCommandCancelled` — fires when a pending command is cancelled (timeout, explicit cancel, or preempted by a new complete command).
-- `VoskCommandRecogniser` pending command API:
+- `VoxrCommandRecogniser` pending command API:
   - `HasPendingCommand` property — true if a command is currently in pending state.
-  - `PendingCommand` property — the currently pending `VoskCommand`, or null.
+  - `PendingCommand` property — the currently pending `VoxrCommand`, or null.
   - `CancelPendingCommand()` — programmatically cancels the pending command.
-- `VoskCommandRecogniser.RebuildGrammar()` defers grammar rebuild while a command is pending, draining the rebuild when the pending command resolves.
-- `VoskCommandParser.TryMatchSlotByName()` — internal method for follow-up slot-fill matching against specific slot names.
-- `VoskPendingTimeoutBehavior` enum (`Cancel`, `FireAsIs`).
-- `VoskPendingCommand`, `VoskPendingReason`, `VoskFollowUpVocabulary` internal types.
-- `VoskCommandAsset` exposes `allowPartialMatch` and `requiresConfirmation` Inspector fields.
-- `VoskDebugWindow` shows pending command state: intent, reason, filled/unfilled slots, and elapsed time.
-- `VoskPendingCommandTests` — 32 Play Mode tests covering partial match entry, follow-up slot-fill, confirmation flow, cancel vocabulary, timeout behaviours, preemption by new commands, dual partial+confirmation flow, custom vocabulary, and grammar rebuild deferral.
+- `VoxrCommandRecogniser.RebuildGrammar()` defers grammar rebuild while a command is pending, draining the rebuild when the pending command resolves.
+- `VoxrCommandParser.TryMatchSlotByName()` — internal method for follow-up slot-fill matching against specific slot names.
+- `VoxrPendingTimeoutBehavior` enum (`Cancel`, `FireAsIs`).
+- `VoxrPendingCommand`, `VoxrPendingReason`, `VoxrFollowUpVocabulary` internal types.
+- `VoxrCommandAsset` exposes `allowPartialMatch` and `requiresConfirmation` Inspector fields.
+- `VoxrDebugWindow` shows pending command state: intent, reason, filled/unfilled slots, and elapsed time.
+- `VoxrPendingCommandTests` — 32 Play Mode tests covering partial match entry, follow-up slot-fill, confirmation flow, cancel vocabulary, timeout behaviours, preemption by new commands, dual partial+confirmation flow, custom vocabulary, and grammar rebuild deferral.
 
 ### Changed
 
-- `VoskCommandDefinition` constructor accepts optional `allowPartialMatch` and `requiresConfirmation` parameters. Existing two-parameter constructor is unchanged.
-- `VoskCommandRecogniser.Configure()` and `SetActiveSets()` cancel any active pending command before rebuilding.
+- `VoxrCommandDefinition` constructor accepts optional `allowPartialMatch` and `requiresConfirmation` parameters. Existing two-parameter constructor is unchanged.
+- `VoxrCommandRecogniser.Configure()` and `SetActiveSets()` cancel any active pending command before rebuilding.
 - Grammar generation includes confirm/cancel vocabulary words so VOSK recognises them in grammar mode.
 
 ## [0.14.0] - 2026-04-12
@@ -78,36 +78,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `RebuildParser()` — explicit parser rebuild from current effective slots and active commands.
   - `RebuildGrammar()` — rebuilds and re-applies the VOSK grammar, performing the stop/set/start cycle when recognition is running.
 - Value providers automatically filter aliases: aliases pointing to excluded canonical values are pruned from the parser. `NumberSequence` slots are unaffected by providers.
-- `VoskCommandParser.GenerateGrammarJson` static overload — generates grammar from explicit slot and command arrays without constructing a parser instance.
-- `VoskDynamicSlotTests` — 14 Edit Mode tests covering registration API, parser narrowing, alias filtering, buffer preservation, grammar independence, provider updates, error paths, and the register-without-notify contract.
+- `VoxrCommandParser.GenerateGrammarJson` static overload — generates grammar from explicit slot and command arrays without constructing a parser instance.
+- `VoxrDynamicSlotTests` — 14 Edit Mode tests covering registration API, parser narrowing, alias filtering, buffer preservation, grammar independence, provider updates, error paths, and the register-without-notify contract.
 
 ## [0.13.0] - 2026-04-11
 
 ### Added
 
 - Batch test runner for regression-testing command definitions after changes. Two interfaces:
-  - `VoskBatchTestRunner` — pure C# runner that instantiates a `VoskCommandParser`, feeds test cases, applies threshold filtering, and compares against expected intents and slots. Works in Edit Mode without Play Mode or audio hardware; CI-safe.
-  - `VoskBatchTestWindow` Editor window (Window > VOSK XR > Batch Test Runner) — visual table with input/expected/actual/score/status columns, Run All and Re-run Failed buttons, per-row diagnostics expansion, CSV export, and JSON import/export.
-- `VoskTestCase` data class for test case authoring: input text, expected intent, expected slots, optional simulated word confidence, and description.
-- `VoskTestResult` and `VoskBatchResults` result classes — per-case pass/fail with failure reason, plus `AllPassed` and `FailureSummary` for NUnit assertion integration.
-- `VoskTestSuiteAsset` ScriptableObject (Assets > Create > VOSK XR > Test Suite) for Inspector-based test case authoring with JSON import/export for portability.
-- `VoskBatchTestRunnerTests` — Edit Mode meta-tests verifying the runner correctly reports pass/fail for matching commands, intent mismatches, slot mismatches, threshold rejection, command sets, CSV export, and edge cases.
+  - `VoxrBatchTestRunner` — pure C# runner that instantiates a `VoxrCommandParser`, feeds test cases, applies threshold filtering, and compares against expected intents and slots. Works in Edit Mode without Play Mode or audio hardware; CI-safe.
+  - `VoxrBatchTestWindow` Editor window (Window > VoXR > Batch Test Runner) — visual table with input/expected/actual/score/status columns, Run All and Re-run Failed buttons, per-row diagnostics expansion, CSV export, and JSON import/export.
+- `VoxrTestCase` data class for test case authoring: input text, expected intent, expected slots, optional simulated word confidence, and description.
+- `VoxrTestResult` and `VoxrBatchResults` result classes — per-case pass/fail with failure reason, plus `AllPassed` and `FailureSummary` for NUnit assertion integration.
+- `VoxrTestSuiteAsset` ScriptableObject (Assets > Create > VoXR > Test Suite) for Inspector-based test case authoring with JSON import/export for portability.
+- `VoxrBatchTestRunnerTests` — Edit Mode meta-tests verifying the runner correctly reports pass/fail for matching commands, intent mismatches, slot mismatches, threshold rejection, command sets, CSV export, and edge cases.
 
 ## [0.12.0] - 2026-04-10
 
 ### Added
 
-- `VoskDebugWindow` Editor window (Window > VOSK XR > Command Debug) for live command pipeline diagnostics during Play Mode. Two-panel layout: left panel shows audio level meters (pre/post-AGC RMS, AGC gain), partial result, final result text, per-word confidence bars, and n-best alternatives; right panel shows active command sets, last match breakdown with score/confidence threshold pass/fail, slot word positions with per-slot confidence, and a scrolling match history (last 20 entries). Bottom bar provides text injection for testing without a microphone, plus pause and clear controls.
-- `VoskMatchDiagnostics`, `VoskMatchAttempt`, and `VoskDiagnosticSlotMatch` diagnostic structs in `Runtime/Commands/VoskMatchDiagnostics.cs` — Editor-only (`#if UNITY_EDITOR`) data captured per utterance by the command pipeline for the debug window to poll.
-- `Jinwoo1601.VoskXR.Editor` assembly definition for Editor-only code with a reference to the runtime assembly.
+- `VoxrDebugWindow` Editor window (Window > VoXR > Command Debug) for live command pipeline diagnostics during Play Mode. Two-panel layout: left panel shows audio level meters (pre/post-AGC RMS, AGC gain), partial result, final result text, per-word confidence bars, and n-best alternatives; right panel shows active command sets, last match breakdown with score/confidence threshold pass/fail, slot word positions with per-slot confidence, and a scrolling match history (last 20 entries). Bottom bar provides text injection for testing without a microphone, plus pause and clear controls.
+- `VoxrMatchDiagnostics`, `VoxrMatchAttempt`, and `VoxrDiagnosticSlotMatch` diagnostic structs in `Runtime/Commands/VoxrMatchDiagnostics.cs` — Editor-only (`#if UNITY_EDITOR`) data captured per utterance by the command pipeline for the debug window to poll.
+- `Jinwoo1601.VoXR.Editor` assembly definition for Editor-only code with a reference to the runtime assembly.
 
 ### Changed
 
-- `VoskCommandParser` now records matched pattern strings, slot word positions (start/end indices), and per-parse diagnostic entries behind `#if UNITY_EDITOR`. `UnkToken`, `SplitSeparator`, and `ComputeConfidence` visibility widened to `internal` for Editor assembly access.
-- `VoskCommandRecogniser` builds a `VoskMatchDiagnostics` snapshot at the end of each parse cycle with per-attempt accept/reject reasons (score, confidence, debounce). Subscribes to `OnPartialResult` in Editor for live partial text display.
+- `VoxrCommandParser` now records matched pattern strings, slot word positions (start/end indices), and per-parse diagnostic entries behind `#if UNITY_EDITOR`. `UnkToken`, `SplitSeparator`, and `ComputeConfidence` visibility widened to `internal` for Editor assembly access.
+- `VoxrCommandRecogniser` builds a `VoxrMatchDiagnostics` snapshot at the end of each parse cycle with per-attempt accept/reject reasons (score, confidence, debounce). Subscribes to `OnPartialResult` in Editor for live partial text display.
 - `EditorMicBackend` exposes `PreAgcRms`, `PostAgcRms`, and `AgcGain` properties for the debug window's audio level meters.
-- `VoskSpeechRecogniser` exposes `EditorLastResult` (Editor-only) and audio level forwarding properties (`EditorPreAgcRms`, `EditorPostAgcRms`, `EditorAgcGain` — Windows Editor only).
-- `VoskCommandRecogniser.SpeechRecogniser` internal setter now manages event subscriptions (unsubscribes from old recogniser, subscribes to new) for Edit Mode test support.
+- `VoxrSpeechRecogniser` exposes `EditorLastResult` (Editor-only) and audio level forwarding properties (`EditorPreAgcRms`, `EditorPostAgcRms`, `EditorAgcGain` — Windows Editor only).
+- `VoxrCommandRecogniser.SpeechRecogniser` internal setter now manages event subscriptions (unsubscribes from old recogniser, subscribes to new) for Edit Mode test support.
 - `EditorMicBackend.ComputeRms` visibility widened from `private` to `internal` for test access.
 - `CommandDemo` sample stripped of verbose `Debug.Log` calls — event handlers are now minimal stubs.
 
@@ -116,30 +116,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Debug window pause/resume now freezes the display with a snapshot and skips stale results on resume instead of jumping to the latest frame.
 - Enter-key text injection works reliably — event is consumed before `TextField`, and `KeypadEnter` is accepted alongside `Return`.
 - Word confidence column shows `[n/a]` when VOSK omits per-word `conf` (happens with `maxAlternatives > 0`) instead of a misleading 0% bar.
-- `VoskSpeechRecogniser` now always parses full result JSON in Editor builds even when `OnResult` has no subscribers, so the debug window receives word and alternative data.
+- `VoxrSpeechRecogniser` now always parses full result JSON in Editor builds even when `OnResult` has no subscribers, so the debug window receives word and alternative data.
 - `ParseWordsFromJson` handles absent `"conf"` field with a -1 sentinel instead of defaulting to 0.
 
 ### Added (tests)
 
 - `AudioMetricTests` — Edit Mode tests for `ComputeRms` (silence, DC, known-amplitude sine).
-- `VoskCommandParserDiagnosticTests` — verifies parser populates `DiagnosticEntries` with matched pattern, slot positions, and score.
-- `VoskCommandRecogniserDiagnosticTests` — end-to-end diagnostic struct population via `InjectText`, covering accept/reject reasons and slot match data.
-- `VoskMatchDiagnosticsTests` — struct-level tests for `VoskMatchDiagnostics`, `VoskMatchAttempt`, and `VoskDiagnosticSlotMatch` defaults and field storage.
+- `VoxrCommandParserDiagnosticTests` — verifies parser populates `DiagnosticEntries` with matched pattern, slot positions, and score.
+- `VoxrCommandRecogniserDiagnosticTests` — end-to-end diagnostic struct population via `InjectText`, covering accept/reject reasons and slot match data.
+- `VoxrMatchDiagnosticsTests` — struct-level tests for `VoxrMatchDiagnostics`, `VoxrMatchAttempt`, and `VoxrDiagnosticSlotMatch` defaults and field storage.
 
 ## [0.11.0] - 2026-04-09
 
 ### Added
 
-- Live microphone capture in the Unity Editor on Windows. Developers can now test voice commands end-to-end without deploying to Quest 3. `VoskSpeechRecogniser.StartRecognition()` transparently auto-routes to a managed `EditorMicBackend` when running in the Windows Editor — existing sample scenes and user code work unchanged. No public API changes.
+- Live microphone capture in the Unity Editor on Windows. Developers can now test voice commands end-to-end without deploying to Quest 3. `VoxrSpeechRecogniser.StartRecognition()` transparently auto-routes to a managed `EditorMicBackend` when running in the Windows Editor — existing sample scenes and user code work unchanged. No public API changes.
 - `Runtime/Dsp/Downsampler.cs` — C# port of the 15-tap FIR downsampler (48 kHz → 16 kHz) from the native bridge, with Edit Mode unit tests covering output count, silence, DC gain, reset, and phase continuity across calls.
 - `Runtime/Dsp/Agc.cs` — C# port of the asymmetric EMA automatic gain control with tanh soft limiter, with Edit Mode unit tests for silence, loud/quiet convergence, extreme-input bounding, and reset behaviour.
-- `Runtime/Native/VoskNative.cs` — P/Invoke bindings for the upstream `libvosk.dll` desktop build, bound with `CallingConvention.Cdecl` to match the MinGW GCC ABI of the alphacep/vosk-api Windows releases.
+- `Runtime/Native/VoxrNative.cs` — P/Invoke bindings for the upstream `libvosk.dll` desktop build, bound with `CallingConvention.Cdecl` to match the MinGW GCC ABI of the alphacep/vosk-api Windows releases.
 - `Runtime/EditorMicBackend.cs` — Editor-only backend that wires `UnityEngine.Microphone` capture into the ported DSP and VOSK recognizer, fed synchronously from the main-thread `Update()` loop. `vosk_model_new` is wrapped in `Task.Run` to avoid a main-thread hitch during the 1–3 second model load.
 - `Runtime/Plugins/x86_64/` folder with plugin importer meta files for `libvosk.dll` and three MinGW runtime DLLs (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`). Meta files are configured for Editor-only loading on Windows x86_64 — explicitly excluded from Android, standalone Windows, Linux, and macOS builds.
 
 ### Changed
 
-- `VoskSpeechRecogniser` lifecycle methods (`IsInitialised`, `IsRecognising`, `InitialiseAsync`, `StartRecognitionInternal`, `StopRecognition`, `ResetRecogniser`, `SetGrammar`, `ReleaseNativeResources`, `Update`) are now `#if UNITY_EDITOR_WIN` / `#else` gated so that the Windows Editor path routes exclusively through `EditorMicBackend` and other platforms continue to use the existing `BridgeNative` calls with zero behavioural change.
+- `VoxrSpeechRecogniser` lifecycle methods (`IsInitialised`, `IsRecognising`, `InitialiseAsync`, `StartRecognitionInternal`, `StopRecognition`, `ResetRecogniser`, `SetGrammar`, `ReleaseNativeResources`, `Update`) are now `#if UNITY_EDITOR_WIN` / `#else` gated so that the Windows Editor path routes exclusively through `EditorMicBackend` and other platforms continue to use the existing `BridgeNative` calls with zero behavioural change.
 
 ### Notes
 
@@ -151,11 +151,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `VoskSpeechRecogniser.InjectResult(text, words, alternatives)` — fires `OnFinalResult` and `OnResult` events as if VOSK had recognised the text. Bypasses native bridge state for Editor testing, replay, and CI.
-- `VoskSpeechRecogniser.InjectPartialResult(text)` — fires `OnPartialResult`.
-- `VoskSpeechRecogniser.CreateSimulatedWords(text, confidence)` — generates `VoskWord[]` with uniform confidence and sequential timing for threshold testing.
-- `VoskCommandRecogniser.InjectText(text, words)` — injects text into the full command pipeline (parser, threshold filter, buffer, debounce) as if it had arrived from VOSK.
-- `VoskCommandRecogniser.FlushPendingBuffer()` — immediately flushes any speech held in the utterance buffer. Useful for push-to-talk release, scene transitions, and synchronous test injection.
+- `VoxrSpeechRecogniser.InjectResult(text, words, alternatives)` — fires `OnFinalResult` and `OnResult` events as if VOSK had recognised the text. Bypasses native bridge state for Editor testing, replay, and CI.
+- `VoxrSpeechRecogniser.InjectPartialResult(text)` — fires `OnPartialResult`.
+- `VoxrSpeechRecogniser.CreateSimulatedWords(text, confidence)` — generates `VoxrWord[]` with uniform confidence and sequential timing for threshold testing.
+- `VoxrCommandRecogniser.InjectText(text, words)` — injects text into the full command pipeline (parser, threshold filter, buffer, debounce) as if it had arrived from VOSK.
+- `VoxrCommandRecogniser.FlushPendingBuffer()` — immediately flushes any speech held in the utterance buffer. Useful for push-to-talk release, scene transitions, and synchronous test injection.
 - Play Mode tests covering injection, threshold filtering, debounce, buffered-path flushing, and end-to-end speech-to-command wiring.
 - Editor test matrix (`v3-test-matrix.md`) with 9 automated suites (145 tests) and 36 manual injection rows across 8 phases — 45/45 pass, no Quest device, native bridge, or model required. Verifies every v2.0–v2.5 feature category (literals, aliases, optional slots, NumberSequence, utterance buffer, sequential extraction, debounce, threshold filtering, command sets, asset authoring) is reachable via injection.
 
@@ -163,12 +163,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `VoskSlotAsset` ScriptableObject for Inspector-based slot definition authoring. Create via Assets > Create > VOSK XR > Slot Definition.
-- `VoskCommandAsset` ScriptableObject for command definitions with human-readable pattern strings (e.g. `"launch {?quantity} {weapon} target {target}"`).
-- `VoskCommandSetAsset` ScriptableObject for grouping commands into named sets.
-- Inspector authoring on `VoskCommandRecogniser`: assign slot and command set assets directly in the Inspector for zero-code setup. Code-based `Configure()` takes priority.
-- `initialActiveSetNames` field on `VoskCommandRecogniser` for selecting which sets activate on startup when using Inspector authoring.
-- Null-guard warnings in `VoskCommandRecogniser.Awake()` and `VoskCommandSetAsset.ToSet()` so missing references in inspector arrays are skipped with a clear warning instead of throwing.
+- `VoxrSlotAsset` ScriptableObject for Inspector-based slot definition authoring. Create via Assets > Create > VoXR > Slot Definition.
+- `VoxrCommandAsset` ScriptableObject for command definitions with human-readable pattern strings (e.g. `"launch {?quantity} {weapon} target {target}"`).
+- `VoxrCommandSetAsset` ScriptableObject for grouping commands into named sets.
+- Inspector authoring on `VoxrCommandRecogniser`: assign slot and command set assets directly in the Inspector for zero-code setup. Code-based `Configure()` takes priority.
+- `initialActiveSetNames` field on `VoxrCommandRecogniser` for selecting which sets activate on startup when using Inspector authoring.
+- Null-guard warnings in `VoxrCommandRecogniser.Awake()` and `VoxrCommandSetAsset.ToSet()` so missing references in inspector arrays are skipped with a clear warning instead of throwing.
 - 20-asset Inspector authoring set under `Samples~/CommandRecognition/AssetAuthoring/` (6 slots, 11 commands, 3 sets) covering every slot type and pattern token form.
 - `useInspectorAuthoring` toggle on `CommandDemo` to switch between code-based `Configure()` and asset-driven authoring without editing the script.
 - Unit tests for all ScriptableObject-to-runtime-struct conversions.
@@ -185,8 +185,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `VoskCommandSet` — named groups of command definitions for mode-specific grammar. Activate different command groups per game state to reduce grammar size and improve VOSK accuracy.
-- `Configure(slots, sets)` overload on `VoskCommandRecogniser` registers shared slots and named command sets without activating any.
+- `VoxrCommandSet` — named groups of command definitions for mode-specific grammar. Activate different command groups per game state to reduce grammar size and improve VOSK accuracy.
+- `Configure(slots, sets)` overload on `VoxrCommandRecogniser` registers shared slots and named command sets without activating any.
 - `SetActiveSets(params string[])` activates one or more sets, rebuilding the parser and grammar from only the active commands. Handles stop → set grammar → start if recognition is running.
 - `SetActiveSet(string)` convenience method for single-set activation.
 - `ActiveSetNames` property exposes currently active set names.
@@ -205,7 +205,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Utterance buffer (`bufferWindow`) merges consecutive VOSK results split by mid-command pauses before parsing. Recommended 2.0s on Quest 3.
 - Sequential command extraction — multiple commands in a single utterance are parsed left-to-right (e.g., "cease fire launch missiles target hotel one" → `cease_fire` + `launch_weapon`).
-- `OnCommandsRecognised` batch event fires a `VoskCommand[]` array per utterance alongside per-command `OnCommandRecognised` events.
+- `OnCommandsRecognised` batch event fires a `VoxrCommand[]` array per utterance alongside per-command `OnCommandRecognised` events.
 - Per-intent debounce (`commandCooldown`) suppresses rapid duplicate intents both across VOSK results and within a single parse batch.
 - Quest device test matrix (`v2.3-test-matrix.md`) with 40 tests across 12 phases — 40/40 pass.
 
@@ -218,8 +218,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `NumberSequence` slot type for digit-word commands (e.g., "heading two seven zero" → 270).
-- `VoskNumberParser` with `ParseDigitSequence` and `ParseCardinal` for converting spoken digit words to integers.
-- `VoskSlotDefinition.NumberSequence()` factory with configurable `minWords`/`maxWords` greedy matching.
+- `VoxrNumberParser` with `ParseDigitSequence` and `ParseCardinal` for converting spoken digit words to integers.
+- `VoxrSlotDefinition.NumberSequence()` factory with configurable `minWords`/`maxWords` greedy matching.
 - Digit vocabulary automatically merged into grammar JSON when NumberSequence slots are registered.
 - Sample `set_heading` command with heading + optional elevation NumberSequence slots in `CommandDemo.cs`.
 - Quest device test matrix (`v2.2-test-matrix.md`) with 40 tests across 11 phases — 31 pass, 1 fail (free speech homophone), 4 known limitations/skips.
@@ -248,37 +248,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scored matching replaces binary pass/fail — normalized 0.0–1.0 score per match.
 - Sliding start position — tolerates preamble, hesitations, and false starts.
 - Optional literal tokens (`?a`, `?to`, `?the`) in patterns — consumed if present, skipped if absent.
-- Slot value aliases (`"jackals" → "jackal"`, `"a" → "one"`) on `VoskSlotDefinition`.
-- `minConfidence` and `minScore` threshold fields on `VoskCommandRecogniser` to reject low-quality matches.
-- `Score` field on `VoskCommand` for match quality inspection.
+- Slot value aliases (`"jackals" → "jackal"`, `"a" → "one"`) on `VoxrSlotDefinition`.
+- `minConfidence` and `minScore` threshold fields on `VoxrCommandRecogniser` to reject low-quality matches.
+- `Score` field on `VoxrCommand` for match quality inspection.
 - Definition-time validation warnings for uppercase, punctuation, and single-character slot values.
 - `GetSlot()` debug warning when called with unregistered slot name.
 - Alias and optional literal words included in generated grammar JSON.
 
 ### Changed
 
-- `VoskCommandParser` now uses scored matching with sliding start instead of binary greedy matching.
-- `VoskCommand` constructor takes additional `score` and optional `registeredSlotNames` parameters.
+- `VoxrCommandParser` now uses scored matching with sliding start instead of binary greedy matching.
+- `VoxrCommand` constructor takes additional `score` and optional `registeredSlotNames` parameters.
 
 ## [0.4.0] - 2026-04-02
 
 ### Added
 
-- Command recognition system with intent and slot extraction (`VoskCommandRecogniser`, `VoskCommandParser`).
+- Command recognition system with intent and slot extraction (`VoxrCommandRecogniser`, `VoxrCommandParser`).
 - Grammar-constrained VOSK parsing via `SetGrammar` native bridge call for high-confidence command matching.
-- `VoskCommandDefinition` and `VoskSlotDefinition` ScriptableObjects for declarative command authoring.
+- `VoxrCommandDefinition` and `VoxrSlotDefinition` ScriptableObjects for declarative command authoring.
 - Optional slot support (`{?slotName}`) and multi-word slot values.
-- Free-speech mode toggle on `VoskCommandRecogniser` for unconstrained vocabulary with best-effort matching.
+- Free-speech mode toggle on `VoxrCommandRecogniser` for unconstrained vocabulary with best-effort matching.
 - `OnCommandRecognised` and `OnUnrecognisedSpeech` events.
 - Command Recognition sample scene.
-- Unit tests for command parser (`VoskCommandParserTests`).
+- Unit tests for command parser (`VoxrCommandParserTests`).
 
 ## [0.3.0] - 2026-04-01
 
 ### Added
 
-- Per-word confidence scores and timing via new `OnResult` event and `VoskResult`/`VoskWord` structs.
-- N-best alternative hypotheses via `maxAlternatives` inspector field and `VoskAlternative` struct.
+- Per-word confidence scores and timing via new `OnResult` event and `VoxrResult`/`VoxrWord` structs.
+- N-best alternative hypotheses via `maxAlternatives` inspector field and `VoxrAlternative` struct.
 - `ParseAlternativesFromJson` with depth-aware JSON parsing for nested VOSK output.
 
 ### Changed
@@ -307,7 +307,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Offline speech-to-text via VOSK on Meta Quest (Android arm64).
-- `VoskSpeechRecogniser` MonoBehaviour with event-driven API.
+- `VoxrSpeechRecogniser` MonoBehaviour with event-driven API.
 - Two-tier native lifecycle: heavyweight init/destroy, lightweight start/stop.
 - Async model extraction from StreamingAssets with atomic rename pattern.
 - C++ bridge (`libvosk-bridge`) with AAudio capture and native recognition loop.

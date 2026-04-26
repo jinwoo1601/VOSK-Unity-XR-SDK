@@ -56,7 +56,7 @@ Commands are defined as token arrays. **Literal tokens** must appear in the spee
 // Pattern: "launch {weapon} target {target}"
 // Matches: "launch missiles target alpha one"
 // Extracts: weapon="missiles", target="alpha one"
-new VoskCommandDefinition("launch_weapon",
+new VoxrCommandDefinition("launch_weapon",
     new[] { new[] { "launch", "{weapon}", "target", "{target}" } })
 ```
 
@@ -65,7 +65,7 @@ Multi-word slot values (e.g. `"alpha one"`) are consumed greedily -- the parser 
 A command can have multiple alternative patterns, each representing a different way the user might phrase the same intent:
 
 ```csharp
-new VoskCommandDefinition("launch_weapon", new[] {
+new VoxrCommandDefinition("launch_weapon", new[] {
     new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
     new[] { "fire", "{weapon}", "at", "{target}" },
 })
@@ -99,9 +99,9 @@ commandRecogniser.minScore = 0.6f;       // Reject low-quality pattern matches
 commandRecogniser.minConfidence = 0.4f;   // Reject low VOSK word confidence
 ```
 
-**Score** (`VoskCommand.Score`) is computed by the parser based on how many pattern tokens were satisfied. A perfect match with all required and optional tokens scores 1.0. Missing optional tokens reduce the score proportionally.
+**Score** (`VoxrCommand.Score`) is computed by the parser based on how many pattern tokens were satisfied. A perfect match with all required and optional tokens scores 1.0. Missing optional tokens reduce the score proportionally.
 
-**Confidence** (`VoskCommand.Confidence`) is the minimum per-word VOSK acoustic confidence across matched tokens. This reflects how certain VOSK was about the words it heard. A value of `-1` means no word-level data was available (e.g. the transcript contained only `[unk]` tokens), which bypasses the `minConfidence` check entirely -- the command is accepted or rejected on score alone.
+**Confidence** (`VoxrCommand.Confidence`) is the minimum per-word VOSK acoustic confidence across matched tokens. This reflects how certain VOSK was about the words it heard. A value of `-1` means no word-level data was available (e.g. the transcript contained only `[unk]` tokens), which bypasses the `minConfidence` check entirely -- the command is accepted or rejected on score alone.
 
 When tuning thresholds:
 - Start with the defaults (`minScore=0.6`, `minConfidence=0.4`) and adjust based on testing.
@@ -115,7 +115,7 @@ When tuning thresholds:
 Map variant words to canonical values so the parser normalises them automatically:
 
 ```csharp
-var quantity = new VoskSlotDefinition("quantity",
+var quantity = new VoxrSlotDefinition("quantity",
     new[] { "one", "two", "three", "all" },
     new Dictionary<string, string> { { "a", "one" }, { "jackals", "jackal" } });
 ```
@@ -175,22 +175,22 @@ The two features are complementary. Use command sets for coarse mode switching a
 Parse spoken digit words into concatenated integers for headings, frequencies, grid coordinates, and similar numeric commands:
 
 ```csharp
-var heading = VoskSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
+var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
 
 // "heading two seven zero" -> heading="270"
 // "heading one eight"      -> heading="18"
 ```
 
-The parser greedily consumes consecutive number words within the configured `minWords`/`maxWords` range. The accepted set is the full `VoskNumberParser.DigitVocabulary` — zero through nineteen, the tens (twenty, thirty, …, ninety), plus `hundred` and `thousand`. The full vocabulary is merged into the grammar JSON automatically.
+The parser greedily consumes consecutive number words within the configured `minWords`/`maxWords` range. The accepted set is the full `VoxrNumberParser.DigitVocabulary` — zero through nineteen, the tens (twenty, thirty, …, ninety), plus `hundred` and `thousand`. The full vocabulary is merged into the grammar JSON automatically.
 
-Use `VoskNumberParser.ParseDigitSequence()` when you author commands as digit-by-digit utterances ("two seven zero" → `270`); use `VoskNumberParser.ParseCardinal()` when you want the slot to read as a cardinal number ("two hundred" → `200`). `ParseDigitSequence` rejects anything outside `zero`–`nine`, so design your commands accordingly:
+Use `VoxrNumberParser.ParseDigitSequence()` when you author commands as digit-by-digit utterances ("two seven zero" → `270`); use `VoxrNumberParser.ParseCardinal()` when you want the slot to read as a cardinal number ("two hundred" → `200`). `ParseDigitSequence` rejects anything outside `zero`–`nine`, so design your commands accordingly:
 
 ```csharp
 commandRecogniser.OnCommandRecognised += cmd =>
 {
     if (cmd.Intent == "set_heading")
     {
-        int heading = VoskNumberParser.ParseDigitSequence(cmd.GetSlot("heading"));
+        int heading = VoxrNumberParser.ParseDigitSequence(cmd.GetSlot("heading"));
         Debug.Log($"Heading: {heading}");
     }
 };
@@ -246,7 +246,7 @@ Sometimes a command partially matches (some required slots are unfilled) or need
 Set `allowPartialMatch: true` on a command definition to let it enter pending state when matched with unfilled required slots, instead of being rejected by the score threshold.
 
 ```csharp
-var launchCmd = new VoskCommandDefinition("launch_weapon",
+var launchCmd = new VoxrCommandDefinition("launch_weapon",
     new[] { new[] { "launch", "{weapon}", "target", "{target}" } },
     allowPartialMatch: true);
 ```
@@ -269,14 +269,14 @@ commandRecogniser.OnCommandCancelled += cmd =>
 Set `requiresConfirmation: true` to require the user to say a confirmation phrase before the command fires, even when fully matched.
 
 ```csharp
-var selfDestruct = new VoskCommandDefinition("self_destruct",
+var selfDestruct = new VoxrCommandDefinition("self_destruct",
     new[] { new[] { "self", "destruct" } },
     requiresConfirmation: true);
 ```
 
 After saying "self destruct", the command enters pending state. The user must say "confirm" (or another confirm phrase) to fire it, or "cancel" to discard it.
 
-Default confirm vocabulary: "confirm", "affirmative", "yes", "go ahead", "do it". Default cancel vocabulary: "cancel", "abort", "negative", "belay that", "never mind". Override these with the `confirmVocabulary` and `cancelVocabulary` Inspector arrays on `VoskCommandRecogniser`.
+Default confirm vocabulary: "confirm", "affirmative", "yes", "go ahead", "do it". Default cancel vocabulary: "cancel", "abort", "negative", "belay that", "never mind". Override these with the `confirmVocabulary` and `cancelVocabulary` Inspector arrays on `VoxrCommandRecogniser`.
 
 ### Combined Partial + Confirmation
 
@@ -284,7 +284,7 @@ A command with both `allowPartialMatch` and `requiresConfirmation` goes through 
 
 ### Timeout Behaviour
 
-Configure `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` on `VoskCommandRecogniser`:
+Configure `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` on `VoxrCommandRecogniser`:
 
 - **Cancel** (default) -- the pending command is discarded and `OnCommandCancelled` fires.
 - **FireAsIs** -- the pending command fires with whatever slots were filled, even if some are still missing.
@@ -324,7 +324,7 @@ The `string` parameter is the full buffered transcript (after utterance merging)
 ```csharp
 commandRecogniser.OnUnrecognisedSpeech += text =>
 {
-    Debug.Log($"[VoskXR] Unrecognised: \"{text}\"");
+    Debug.Log($"[VoXR] Unrecognised: \"{text}\"");
 };
 ```
 
@@ -355,7 +355,7 @@ commandRecogniser.OnUnrecognisedSpeech += text =>
 
 ## Grammar Mode vs Free Speech
 
-By default, `VoskCommandRecogniser` constrains VOSK's decoder to only the words that appear in registered commands and slots. This is **grammar mode**, and it dramatically improves recognition accuracy for command-driven UX.
+By default, `VoxrCommandRecogniser` constrains VOSK's decoder to only the words that appear in registered commands and slots. This is **grammar mode**, and it dramatically improves recognition accuracy for command-driven UX.
 
 Setting `freeSpeechMode = true` disables the grammar constraint, allowing VOSK to recognise any word in its vocabulary. Command matching becomes best-effort.
 

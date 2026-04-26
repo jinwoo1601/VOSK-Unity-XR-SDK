@@ -6,6 +6,6 @@
 // ============================================================================
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("Jinwoo1601.VoskXR.Tests.Runtime")]
-[assembly: InternalsVisibleTo("Jinwoo1601.VoskXR.Tests.Editor")]
-[assembly: InternalsVisibleTo("Jinwoo1601.VoskXR.Editor")]
+[assembly: InternalsVisibleTo("Jinwoo1601.VoXR.Tests.Runtime")]
+[assembly: InternalsVisibleTo("Jinwoo1601.VoXR.Tests.Editor")]
+[assembly: InternalsVisibleTo("Jinwoo1601.VoXR.Editor")]

@@ -25,7 +25,7 @@ Add to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.vosk-xr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VOSK-Unity-XR-SDK.git#v0.17.0"
   }
 }
 ```
@@ -57,15 +57,15 @@ If validation fails, the SDK deletes the corrupt cache and re-extracts on next l
 
 ## Quick Start -- Transcription
 
-Attach a `VoskSpeechRecogniser` component to a GameObject, then subscribe to its events:
+Attach a `VoxrSpeechRecogniser` component to a GameObject, then subscribe to its events:
 
 ```csharp
 using UnityEngine;
-using VoskXR;
+using VoXR;
 
 public class VoiceDemo : MonoBehaviour
 {
-    [SerializeField] VoskSpeechRecogniser recogniser;
+    [SerializeField] VoxrSpeechRecogniser recogniser;
 
     void OnEnable()
     {
@@ -93,28 +93,28 @@ public class VoiceDemo : MonoBehaviour
 
 ## Quick Start -- Commands
 
-Add a `VoskCommandRecogniser` component alongside your `VoskSpeechRecogniser`. Define slots (allowed values) and commands (patterns that reference those slots):
+Add a `VoxrCommandRecogniser` component alongside your `VoxrSpeechRecogniser`. Define slots (allowed values) and commands (patterns that reference those slots):
 
 ```csharp
 using UnityEngine;
-using VoskXR;
-using VoskXR.Commands;
+using VoXR;
+using VoXR.Commands;
 
 public class CommandExample : MonoBehaviour
 {
-    [SerializeField] VoskSpeechRecogniser recogniser;
-    [SerializeField] VoskCommandRecogniser commandRecogniser;
+    [SerializeField] VoxrSpeechRecogniser recogniser;
+    [SerializeField] VoxrCommandRecogniser commandRecogniser;
 
     void Start()
     {
-        var targets = VoskSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
-        var weapons = VoskSlotDefinition.OneOf("weapon", "missiles", "torpedoes");
+        var targets = VoxrSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
+        var weapons = VoxrSlotDefinition.OneOf("weapon", "missiles", "torpedoes");
 
         var commands = new[]
         {
-            new VoskCommandDefinition("launch_weapon",
+            new VoxrCommandDefinition("launch_weapon",
                 new[] { new[] { "launch", "{weapon}", "target", "{target}" } }),
-            new VoskCommandDefinition("cease_fire",
+            new VoxrCommandDefinition("cease_fire",
                 new[] { new[] { "cease", "fire" } }),
         };
 

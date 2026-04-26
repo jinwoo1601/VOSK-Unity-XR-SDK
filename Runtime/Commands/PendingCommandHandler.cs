@@ -2,12 +2,12 @@
 // Purpose:  State machine for partial-match follow-up, confirmation, cancellation, and timeout
 // Layer:    Runtime.Commands
 // Owns:     PendingCommandHandler (internal sealed class), PendingOutcome (internal enum), PendingResolution (internal readonly struct)
-// Depends:  VoskCommand, VoskCommandDefinition, VoskPendingCommand, VoskFollowUpVocabulary, VoskCommandParser
+// Depends:  VoxrCommand, VoxrCommandDefinition, VoxrPendingCommand, VoxrFollowUpVocabulary, VoxrCommandParser
 // ============================================================================
 using System;
 using System.Collections.Generic;
 
-namespace VoskXR.Commands
+namespace VoXR.Commands
 {
     internal enum PendingOutcome
     {
@@ -21,24 +21,24 @@ namespace VoskXR.Commands
     internal readonly struct PendingResolution
     {
         internal readonly PendingOutcome Outcome;
-        internal readonly VoskCommand Command;
+        internal readonly VoxrCommand Command;
 
-        PendingResolution(PendingOutcome outcome, VoskCommand command)
+        PendingResolution(PendingOutcome outcome, VoxrCommand command)
         {
             Outcome = outcome;
             Command = command;
         }
 
-        internal static PendingResolution Confirmed(VoskCommand cmd)
+        internal static PendingResolution Confirmed(VoxrCommand cmd)
             => new PendingResolution(PendingOutcome.Confirmed, cmd);
 
-        internal static PendingResolution Cancelled(VoskCommand cmd)
+        internal static PendingResolution Cancelled(VoxrCommand cmd)
             => new PendingResolution(PendingOutcome.Cancelled, cmd);
 
-        internal static PendingResolution Entered(VoskCommand cmd)
+        internal static PendingResolution Entered(VoxrCommand cmd)
             => new PendingResolution(PendingOutcome.Entered, cmd);
 
-        internal static PendingResolution ReEntered(VoskCommand cmd)
+        internal static PendingResolution ReEntered(VoxrCommand cmd)
             => new PendingResolution(PendingOutcome.ReEnteredPending, cmd);
 
         internal static PendingResolution NoAction()
@@ -47,25 +47,25 @@ namespace VoskXR.Commands
 
     internal sealed class PendingCommandHandler
     {
-        VoskPendingCommand? _pendingCommand;
+        VoxrPendingCommand? _pendingCommand;
 
-        readonly List<VoskSlotMatch> _followUpSlotBuf = new List<VoskSlotMatch>();
+        readonly List<VoxrSlotMatch> _followUpSlotBuf = new List<VoxrSlotMatch>();
         readonly List<string> _unfilledBuf = new List<string>();
 
         internal bool HasPending => _pendingCommand.HasValue;
-        internal VoskPendingCommand? Current => _pendingCommand;
-        internal VoskCommand? PendingCommand => _pendingCommand?.Command;
+        internal VoxrPendingCommand? Current => _pendingCommand;
+        internal VoxrCommand? PendingCommand => _pendingCommand?.Command;
 
-        internal PendingResolution EnterPending(VoskCommand command,
-            VoskCommandDefinition definition, string[] unfilledSlots,
-            VoskPendingReason reason, float currentTime,
+        internal PendingResolution EnterPending(VoxrCommand command,
+            VoxrCommandDefinition definition, string[] unfilledSlots,
+            VoxrPendingReason reason, float currentTime,
             out PendingResolution cancelledPrevious)
         {
             cancelledPrevious = _pendingCommand.HasValue
                 ? Cancel()
                 : PendingResolution.NoAction();
 
-            _pendingCommand = new VoskPendingCommand
+            _pendingCommand = new VoxrPendingCommand
             {
                 Command = command,
                 Definition = definition,
@@ -84,9 +84,9 @@ namespace VoskXR.Commands
                 return PendingResolution.NoAction();
 
             string[] effectiveCancel = cancelVocab != null && cancelVocab.Length > 0
-                ? cancelVocab : VoskFollowUpVocabulary.DefaultCancel;
+                ? cancelVocab : VoxrFollowUpVocabulary.DefaultCancel;
             string[] effectiveConfirm = confirmVocab != null && confirmVocab.Length > 0
-                ? confirmVocab : VoskFollowUpVocabulary.DefaultConfirm;
+                ? confirmVocab : VoxrFollowUpVocabulary.DefaultConfirm;
 
             if (IsVocabularyMatchTokens(tokens, effectiveCancel))
                 return Cancel();
@@ -101,8 +101,8 @@ namespace VoskXR.Commands
             return PendingResolution.NoAction();
         }
 
-        internal VoskCommand? TryFollowUpSlotFill(string text, string[] tokens,
-            Dictionary<string, float> wordConfidence, VoskCommandParser parser)
+        internal VoxrCommand? TryFollowUpSlotFill(string text, string[] tokens,
+            Dictionary<string, float> wordConfidence, VoxrCommandParser parser)
         {
             var pending = _pendingCommand.Value;
             if (pending.UnfilledSlots == null || pending.UnfilledSlots.Length == 0)
@@ -123,14 +123,14 @@ namespace VoskXR.Commands
                 bool found = false;
                 for (int startIdx = tokenIdx; startIdx < tokens.Length; startIdx++)
                 {
-                    if (tokens[startIdx] == VoskCommandParser.UnkToken)
+                    if (tokens[startIdx] == VoxrCommandParser.UnkToken)
                         continue;
 
                     string value = parser.TryMatchSlotByName(
                         tokens, startIdx, slotName, out int consumed);
                     if (value != null)
                     {
-                        _followUpSlotBuf.Add(new VoskSlotMatch(slotName, value));
+                        _followUpSlotBuf.Add(new VoxrSlotMatch(slotName, value));
                         tokenIdx = startIdx + consumed;
                         found = true;
                         break;
@@ -145,7 +145,7 @@ namespace VoskXR.Commands
             if (_followUpSlotBuf.Count == existingSlots.Length)
                 return null;
 
-            float followUpConf = VoskCommandParser.ComputeConfidence(
+            float followUpConf = VoxrCommandParser.ComputeConfidence(
                 tokens, 0, tokens.Length, wordConfidence);
 
             float mergedConfidence = pending.Command.Confidence >= 0f && followUpConf >= 0f
@@ -156,7 +156,7 @@ namespace VoskXR.Commands
             // (OnCommandConfirmed/OnCommandRecognised) where subscribers may retain it,
             // so it must not be pool-borrowed.
             int slotCount = _followUpSlotBuf.Count;
-            var slotsArray = new VoskSlotMatch[slotCount];
+            var slotsArray = new VoxrSlotMatch[slotCount];
             for (int i = 0; i < slotCount; i++)
                 slotsArray[i] = _followUpSlotBuf[i];
 
@@ -167,7 +167,7 @@ namespace VoskXR.Commands
                 pending.Command.Intent, pending.Command.MatchedPatternIndex,
                 _followUpSlotBuf);
 
-            return new VoskCommand(
+            return new VoxrCommand(
                 pending.Command.Intent,
                 slotsArray,
                 mergedConfidence,
@@ -177,7 +177,7 @@ namespace VoskXR.Commands
                 pending.Command.MatchedPatternIndex);
         }
 
-        internal PendingResolution Complete(VoskCommand completed)
+        internal PendingResolution Complete(VoxrCommand completed)
         {
             var pending = _pendingCommand.Value;
             _pendingCommand = null;
@@ -185,14 +185,14 @@ namespace VoskXR.Commands
             // If the definition also requires confirmation and we were pending
             // for partial match, re-enter pending for confirmation
             if (pending.Definition.RequiresConfirmation &&
-                pending.Reason == VoskPendingReason.PartialMatch)
+                pending.Reason == VoxrPendingReason.PartialMatch)
             {
-                _pendingCommand = new VoskPendingCommand
+                _pendingCommand = new VoxrPendingCommand
                 {
                     Command = completed,
                     Definition = pending.Definition,
                     UnfilledSlots = Array.Empty<string>(),
-                    Reason = VoskPendingReason.AwaitingConfirmation,
+                    Reason = VoxrPendingReason.AwaitingConfirmation,
                     CreatedTime = pending.CreatedTime,
                 };
                 return PendingResolution.ReEntered(completed);
@@ -201,12 +201,12 @@ namespace VoskXR.Commands
             return PendingResolution.Confirmed(completed);
         }
 
-        internal PendingResolution HandleTimeout(VoskPendingTimeoutBehavior behavior)
+        internal PendingResolution HandleTimeout(VoxrPendingTimeoutBehavior behavior)
         {
             var pending = _pendingCommand.Value;
             _pendingCommand = null;
 
-            if (behavior == VoskPendingTimeoutBehavior.FireAsIs)
+            if (behavior == VoxrPendingTimeoutBehavior.FireAsIs)
                 return PendingResolution.Confirmed(pending.Command);
 
             return PendingResolution.Cancelled(pending.Command);
@@ -222,7 +222,7 @@ namespace VoskXR.Commands
             return PendingResolution.Cancelled(cancelled.Command);
         }
 
-        internal string[] ComputeUnfilledSlots(VoskCommand cmd, VoskCommandDefinition def)
+        internal string[] ComputeUnfilledSlots(VoxrCommand cmd, VoxrCommandDefinition def)
         {
             if (cmd.MatchedPatternIndex < 0 ||
                 cmd.MatchedPatternIndex >= def.Patterns.Length)
@@ -233,8 +233,8 @@ namespace VoskXR.Commands
 
             foreach (string element in pattern)
             {
-                string slotName = VoskCommandParser.ExtractSlotName(element);
-                if (slotName != null && !VoskCommandParser.IsOptionalSlot(element)
+                string slotName = VoxrCommandParser.ExtractSlotName(element);
+                if (slotName != null && !VoxrCommandParser.IsOptionalSlot(element)
                     && !cmd.HasSlot(slotName))
                 {
                     _unfilledBuf.Add(slotName);
@@ -284,7 +284,7 @@ namespace VoskXR.Commands
         }
 
         // Test-only: force-set the pending command state for timeout testing.
-        internal void ForceSetForTest(VoskPendingCommand pending)
+        internal void ForceSetForTest(VoxrPendingCommand pending)
         {
             _pendingCommand = pending;
         }

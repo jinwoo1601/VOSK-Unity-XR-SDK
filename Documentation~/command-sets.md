@@ -6,7 +6,7 @@ Command sets let you group commands into named collections and swap the active g
 
 ## What Are Command Sets and Why Use Them
 
-A `VoskCommandSet` is a named group of `VoskCommandDefinition` entries. When you register multiple sets with `Configure()`, none are active by default. You then call `SetActiveSets()` to choose which sets are live.
+A `VoxrCommandSet` is a named group of `VoxrCommandDefinition` entries. When you register multiple sets with `Configure()`, none are active by default. You then call `SetActiveSets()` to choose which sets are live.
 
 The key benefit: **inactive commands are excluded from the VOSK grammar entirely.** This means VOSK's constrained decoder only considers words from active commands, which:
 
@@ -24,32 +24,32 @@ Define your commands, group them into named sets, and register everything with `
 // Define commands for each mode
 var weaponCommands = new[]
 {
-    new VoskCommandDefinition("launch_weapon",
+    new VoxrCommandDefinition("launch_weapon",
         new[] { new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" } }),
-    new VoskCommandDefinition("cease_fire",
+    new VoxrCommandDefinition("cease_fire",
         new[] { new[] { "cease", "fire" } }),
 };
 
 var navCommands = new[]
 {
-    new VoskCommandDefinition("set_heading",
+    new VoxrCommandDefinition("set_heading",
         new[] { new[] { "heading", "{heading}" } }),
-    new VoskCommandDefinition("approach_target",
+    new VoxrCommandDefinition("approach_target",
         new[] { new[] { "approach", "target", "{target}" } }),
 };
 
 var modeCommands = new[]
 {
-    new VoskCommandDefinition("mode_weapons",
+    new VoxrCommandDefinition("mode_weapons",
         new[] { new[] { "weapons", "mode" } }),
-    new VoskCommandDefinition("mode_navigation",
+    new VoxrCommandDefinition("mode_navigation",
         new[] { new[] { "navigation", "mode" } }),
 };
 
 // Create named sets
-var weaponsSet = new VoskCommandSet("weapons", weaponCommands);
-var navigationSet = new VoskCommandSet("navigation", navCommands);
-var commonSet = new VoskCommandSet("common", modeCommands);
+var weaponsSet = new VoxrCommandSet("weapons", weaponCommands);
+var navigationSet = new VoxrCommandSet("navigation", navCommands);
+var commonSet = new VoxrCommandSet("common", modeCommands);
 
 // Register all sets with shared slots (none active yet)
 commandRecogniser.Configure(slots, new[] { weaponsSet, navigationSet, commonSet });

@@ -2,7 +2,7 @@
 // Purpose:  Extracts ZIP-compressed VOSK models from StreamingAssets to persistent storage
 // Layer:    Runtime
 // Owns:     ModelExtractor (internal static class)
-// Depends:  VoskBridgeErrorCode
+// Depends:  VoxrBridgeErrorCode
 // ============================================================================
 using System;
 using System.IO;
@@ -11,15 +11,15 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
 
-namespace VoskXR
+namespace VoXR
 {
     internal static class ModelExtractor
     {
-        const string ModelCacheFolder = "VoskModels";
+        const string ModelCacheFolder = "VoxrModels";
 
         internal static async Task<string> ExtractModelAsync(
             string modelRelativePath,
-            Action<VoskBridgeErrorCode, string> onError)
+            Action<VoxrBridgeErrorCode, string> onError)
         {
             string modelName = Path.GetFileName(modelRelativePath);
             string basePath = Path.Combine(Application.persistentDataPath, ModelCacheFolder);
@@ -45,7 +45,7 @@ namespace VoskXR
                 byte[] archiveBytes = await ReadStreamingAsset(modelRelativePath + ".zip");
                 if (archiveBytes == null)
                 {
-                    onError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                    onError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                         $"Model archive not found in StreamingAssets: {modelRelativePath}.zip");
                     return null;
                 }
@@ -88,7 +88,7 @@ namespace VoskXR
                     if (Directory.Exists(tempPath))
                         Directory.Delete(tempPath, true);
 
-                    onError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                    onError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                         "Extracted model failed structural validation. The archive may be corrupt.");
                     return null;
                 }
@@ -109,7 +109,7 @@ namespace VoskXR
                     // Best-effort cleanup
                 }
 
-                onError?.Invoke(VoskBridgeErrorCode.ModelLoadFailed,
+                onError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
                     $"Model extraction failed: {ex.Message}");
                 return null;
             }
