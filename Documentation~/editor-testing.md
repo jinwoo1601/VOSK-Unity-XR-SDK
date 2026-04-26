@@ -94,8 +94,6 @@ recogniser.InjectPartialResult("hel");
 - `InjectResult` and `InjectPartialResult` fire events on `VoxrSpeechRecogniser` directly, bypassing the command recogniser. Use these to test speech-level event handling.
 - `CreateSimulatedWords` generates `VoxrWord[]` with uniform confidence and sequential timing. Useful for testing `minConfidence` threshold behaviour.
 
-See `Tests/Runtime/VoxrCommandRecogniserInjectionTests.cs` and `VoxrSpeechRecogniserInjectionTests.cs` for executable usage examples.
-
 ---
 
 ## Batch Test Runner
@@ -106,7 +104,7 @@ Regression-test command definitions after changing thresholds, aliases, or slot 
 
 Open **Window > VoXR > Batch Test Runner**. Assign slot/command assets and a `VoxrTestSuiteAsset`, then click **Run All**. Results appear in a table with per-row expansion for diagnostics. Export results as CSV for diffing across runs.
 
-### Programmatic API (Edit Mode tests / CI)
+### Programmatic API
 
 ```csharp
 using VoXR.Commands;
@@ -117,7 +115,7 @@ var results = runner.RunAll(testCases);
 Assert.IsTrue(results.AllPassed, results.FailureSummary);
 ```
 
-`VoxrBatchTestRunner` is pure C# -- no MonoBehaviour dependency, works in Edit Mode without Play Mode or audio hardware. It instantiates a `VoxrCommandParser` directly (the same code path that `InjectText` uses internally).
+`VoxrBatchTestRunner` is pure C# -- no MonoBehaviour dependency and no audio hardware required. It instantiates a `VoxrCommandParser` directly (the same code path that `InjectText` uses internally).
 
 For command-set-aware testing:
 

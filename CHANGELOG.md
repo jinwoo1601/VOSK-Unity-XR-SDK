@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-26
+
+### Changed
+
+- **First stable release.** The public API surface (`VoxrSpeechRecogniser`, `VoxrCommandRecogniser`, `VoxrPushToTalkController`, command/slot definitions, asset types, error codes) is now committed for the v1.x series. Breaking changes will require a v2.x major bump.
+- Excluded internal test sources from package import by renaming `Tests/` to `Tests~/`. Tests remain in the repository for development but no longer load in consumer projects.
+
 ## [0.17.0] - 2026-04-25
 
 ### Added

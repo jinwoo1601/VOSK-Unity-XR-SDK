@@ -15,7 +15,7 @@ Everything you need to install the SDK, set up a VOSK model, and get your first 
 To pin a specific version (recommended):
 
 ```
-https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0
+https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.0.0
 ```
 
 ### Via manifest.json
@@ -25,7 +25,7 @@ Add to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v0.17.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.0.0"
   }
 }
 ```
