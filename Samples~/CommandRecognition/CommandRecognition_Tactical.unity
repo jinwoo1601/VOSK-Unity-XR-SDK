@@ -1362,7 +1362,6 @@ MonoBehaviour:
   modelRelativePath: vosk-model-small-en-us-0.15
   sampleRate: 16000
   micGainTargetDb: -18
-  maxAlternatives: 0
 --- !u!1 &1700
 GameObject:
   m_ObjectHideFlags: 0

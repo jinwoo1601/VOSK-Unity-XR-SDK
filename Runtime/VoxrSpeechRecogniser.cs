@@ -2,7 +2,7 @@
 // Purpose:  MonoBehaviour orchestrating VOSK speech recognition lifecycle and result dispatch
 // Layer:    Runtime
 // Owns:     VoxrSpeechRecogniser (public MonoBehaviour)
-// Depends:  VoxrResult, VoxrWord, VoxrAlternative, VoxrBridgeErrorCode, EditorMicBackend, BridgeNative, ModelExtractor
+// Depends:  VoxrResult, VoxrWord, VoxrBridgeErrorCode, EditorMicBackend, BridgeNative, ModelExtractor
 // ============================================================================
 using System;
 using System.Collections;
@@ -26,12 +26,6 @@ namespace VoXR
                  "signal for VOSK; lower values (e.g. -24) are more conservative. " +
                  "The default of -18 dBFS works well for typical speech on Quest 3.")]
         [SerializeField] float micGainTargetDb = -18f;
-
-        [Tooltip("Number of alternative hypotheses to return per utterance. " +
-                 "0 (default) disables alternatives. When > 0, OnResult includes " +
-                 "ranked alternative transcriptions that help diagnose which words " +
-                 "VOSK is uncertain about.")]
-        [SerializeField] int maxAlternatives = 0;
 
         public event Action<string> OnPartialResult;
         public event Action<string> OnFinalResult;
@@ -110,7 +104,7 @@ namespace VoXR
 #if UNITY_EDITOR_WIN
                 _editorBackend = new EditorMicBackend();
                 bool editorOk = await _editorBackend.InitialiseAsync(
-                    modelPath, sampleRate, micGainTargetDb, maxAlternatives, FireError);
+                    modelPath, sampleRate, micGainTargetDb, FireError);
                 if (editorOk)
                 {
                     IsModelReady = true;
@@ -122,8 +116,7 @@ namespace VoXR
                 }
                 return;
 #else
-                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb,
-                    maxAlternatives);
+                int result = BridgeNative.vosk_bridge_init(modelPath, sampleRate, micGainTargetDb);
                 CheckBridgeError(result, "Initialise");
 
                 if (result == 0)
@@ -309,13 +302,10 @@ namespace VoXR
 #endif
         }
 
-        public void InjectResult(string text, VoxrWord[] words = null, VoxrAlternative[] alternatives = null)
+        public void InjectResult(string text, VoxrWord[] words = null)
         {
             AssertMainThread(nameof(InjectResult));
-            DispatchFinalResult(
-                text,
-                words ?? Array.Empty<VoxrWord>(),
-                alternatives ?? Array.Empty<VoxrAlternative>());
+            DispatchFinalResult(text, words ?? Array.Empty<VoxrWord>());
         }
 
         public void InjectPartialResult(string text)
@@ -342,9 +332,9 @@ namespace VoXR
             return words;
         }
 
-        void DispatchFinalResult(string text, VoxrWord[] words, VoxrAlternative[] alternatives)
+        void DispatchFinalResult(string text, VoxrWord[] words)
         {
-            var result = new VoxrResult(text, words, alternatives);
+            var result = new VoxrResult(text, words);
 #if UNITY_EDITOR
             EditorLastResult = result;
 #endif
@@ -420,7 +410,6 @@ namespace VoXR
 
             if (isFinal)
             {
-                VoxrAlternative[] alternatives = Array.Empty<VoxrAlternative>();
                 VoxrWord[] words = Array.Empty<VoxrWord>();
 
                 bool needFullParse = OnResult != null;
@@ -428,15 +417,9 @@ namespace VoXR
                 needFullParse = true;
 #endif
                 if (needFullParse)
-                {
-                    alternatives = VoxrJsonParser.ParseAlternativesFromJson(json);
-                    if (alternatives.Length > 0 && alternatives[0].Words.Length > 0)
-                        words = alternatives[0].Words;
-                    else
-                        words = VoxrJsonParser.ParseWordsFromJson(json);
-                }
+                    words = VoxrJsonParser.ParseWordsFromJson(json);
 
-                DispatchFinalResult(text, words, alternatives);
+                DispatchFinalResult(text, words);
             }
             else
             {

@@ -12,7 +12,6 @@ The full recognition result with word-level data.
 |-------|------|-------------|
 | `Text` | `string` | The full recognised text |
 | `Words` | `VoxrWord[]` | Per-word confidence and timing for the best hypothesis (empty if unavailable) |
-| `Alternatives` | `VoxrAlternative[]` | N-best alternative hypotheses ranked best-first (empty when `maxAlternatives` is 0) |
 
 ## VoxrWord
 
@@ -26,18 +25,6 @@ A single recognised word with metadata.
 | `Confidence` | `float` | Confidence score in range [0, 1] |
 | `StartTime` | `float` | Start time in seconds from beginning of utterance |
 | `EndTime` | `float` | End time in seconds from beginning of utterance |
-
-## VoxrAlternative
-
-`public readonly struct VoxrAlternative` -- Namespace: `VoXR`
-
-An alternative recognition hypothesis.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `Text` | `string` | The recognised text for this hypothesis |
-| `Confidence` | `float` | Acoustic model score (higher = better match) |
-| `Words` | `VoxrWord[]` | Per-word data for this hypothesis (may be empty) |
 
 ## VoxrCommand
 

@@ -13,8 +13,7 @@ Open **Window > VoXR > Command Debug** during Play Mode to inspect the full comm
 - **Audio level meters** -- pre-AGC RMS, post-AGC RMS, and current AGC gain. Useful for verifying microphone input and AGC behaviour.
 - **Partial result** -- the live VOSK partial transcript, updated continuously as you speak.
 - **Final result** -- the completed transcript text at utterance boundaries.
-- **Per-word confidence bars** -- each word with a colour-coded confidence bar (green > yellow > red). Shows `[n/a]` when VOSK omits per-word confidence (happens with `maxAlternatives > 0`).
-- **N-best alternatives** -- alternative recognition hypotheses with confidence scores (requires `maxAlternatives > 0` on `VoxrSpeechRecogniser`).
+- **Per-word confidence bars** -- each word with a colour-coded confidence bar (green > yellow > red).
 
 ### Right Panel (command matching)
 
