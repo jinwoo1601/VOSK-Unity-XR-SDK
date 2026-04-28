@@ -56,7 +56,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.0.0
+https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.1.0
 ```
 
 **Via manifest.json:**
@@ -64,7 +64,7 @@ https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.0.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.0.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.1.0"
   }
 }
 ```
@@ -224,6 +224,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 | Version | Milestone |
 |---|---|
+| 1.1.0 | Removed n-best alternatives (breaking change to `VoxrResult` and native ABI) |
 | 1.0.0 | First stable release -- public API committed for the v1.x series |
 | 0.17.0 | `VoxrPushToTalkController` and `VoxrListeningMode` for runtime-switchable push-to-talk |
 | 0.16.0 | Internal refactoring and per-utterance allocation reduction |
