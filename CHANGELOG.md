@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-29
+
+### Changed
+
+- Recognition result polling now parses VOSK JSON directly from the native UTF-8 buffer via `ReadOnlySpan<byte>`, eliminating the per-poll `Marshal.PtrToStringUTF8` allocation and downstream `Substring` allocations inside `VoxrJsonParser`. On a typical partial flow (5–20 polls/sec) only the leaf string returned to consumers is allocated; the rest of the parse path is zero-alloc. Reduces frame-time variance during recognition on Quest, where main-thread GC was the dominant source of recognition-related hitches.
+- `EditorMicBackend` no longer queues result strings — libvosk's null-terminated result buffer is dispatched inline through a delegate that takes `ReadOnlySpan<byte>`, matching the Android path. Partial dedupe switched from `string` equality to byte-buffer `SequenceEqual`.
+- Runtime asmdef now sets `allowUnsafeCode: true` so the new span helpers (`BridgeNative.SpanFromPtr` / `SpanFromNullTerminated`) can wrap raw native pointers.
+
+### Breaking Changes
+
+- **`vosk_bridge_get_result` native ABI changed** — added a trailing `int* out_length` so the C# side can build a span without a separate `strlen` scan. The bundled `Runtime/Plugins/Android/arm64-v8a/libvosk-bridge.so` is rebuilt against the new signature; out-of-tree consumers of the native bridge must rebuild.
+
 ## [1.1.0] - 2026-04-28
 
 ### Removed
