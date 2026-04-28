@@ -181,10 +181,7 @@ namespace VoXR.Commands
                 return;
             }
 
-            HandleResult(new VoxrResult(
-                text,
-                words ?? Array.Empty<VoxrWord>(),
-                Array.Empty<VoxrAlternative>()));
+            HandleResult(new VoxrResult(text, words ?? Array.Empty<VoxrWord>()));
         }
 
         public void FlushPendingBuffer()

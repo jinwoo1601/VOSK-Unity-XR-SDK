@@ -28,7 +28,6 @@ static Agc               g_agc;
 static std::thread       g_recognition_thread;
 static std::atomic<bool> g_running{false};
 static std::atomic<bool> g_initialised{false};
-static int               g_max_alternatives = 0;
 
 static std::string       g_last_error;
 static std::string       g_last_partial;
@@ -141,7 +140,7 @@ static void recognition_loop() {
 extern "C" {
 
 int vosk_bridge_init(const char* model_path, float sample_rate,
-                     float mic_gain_target_db, int max_alternatives) {
+                     float mic_gain_target_db) {
     g_last_error.clear();
 
     if (!model_path) {
@@ -174,17 +173,13 @@ int vosk_bridge_init(const char* model_path, float sample_rate,
     // Include per-word confidence and timing in final results
     vosk_recognizer_set_words(g_recognizer, 1);
 
-    g_max_alternatives = max_alternatives;
-    if (max_alternatives > 0)
-        vosk_recognizer_set_max_alternatives(g_recognizer, max_alternatives);
-
     g_agc.Configure(mic_gain_target_db, g_sample_rate);
 
     reset_pipeline();
 
     g_initialised.store(true, std::memory_order_release);
-    LOGI("Bridge initialised: model=%s, sample_rate=%.0f, agc_target=%.1f dB, max_alts=%d",
-         model_path, sample_rate, mic_gain_target_db, max_alternatives);
+    LOGI("Bridge initialised: model=%s, sample_rate=%.0f, agc_target=%.1f dB",
+         model_path, sample_rate, mic_gain_target_db);
     return VOSK_BRIDGE_OK;
 }
 
@@ -286,14 +281,10 @@ int vosk_bridge_set_grammar(const char* grammar_json) {
     }
 
     // Create new recognizer with or without grammar
-    if (grammar_json && grammar_json[0] != '\0') {
+    if (grammar_json && grammar_json[0] != '\0')
         g_recognizer = vosk_recognizer_new_grm(g_model, g_sample_rate, grammar_json);
-        // Grammar mode + alternatives produces unreliable results, skip set_max_alternatives
-    } else {
+    else
         g_recognizer = vosk_recognizer_new(g_model, g_sample_rate);
-        if (g_recognizer && g_max_alternatives > 0)
-            vosk_recognizer_set_max_alternatives(g_recognizer, g_max_alternatives);
-    }
 
     if (!g_recognizer) {
         g_last_error = "vosk_recognizer_new failed during set_grammar";

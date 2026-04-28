@@ -42,10 +42,6 @@ namespace VoXR.Native
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)] [Preserve]
         internal static extern void vosk_recognizer_set_words(IntPtr recognizer, int words);
 
-        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)] [Preserve]
-        internal static extern void vosk_recognizer_set_max_alternatives(
-            IntPtr recognizer, int maxAlternatives);
-
         // Audio ingestion — int16 path matches the existing Android pipeline.
         // The float variant (accept_waveform_f) is intentionally not bound here;
         // the Android comment in vosk_bridge.cpp notes the float path is unreliable

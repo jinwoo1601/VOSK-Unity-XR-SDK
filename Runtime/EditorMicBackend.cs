@@ -22,7 +22,6 @@ namespace VoXR
         IntPtr _model;
         IntPtr _recognizer;
         float _sampleRate;
-        int _maxAlternatives;
 
         // Set by Release() so a still-in-flight model-load continuation knows
         // to free its result instead of assigning it to a dead instance.
@@ -56,13 +55,11 @@ namespace VoXR
             string modelPath,
             float sampleRate,
             float micGainTargetDb,
-            int maxAlternatives,
             Action<VoxrBridgeErrorCode, string> fireError)
         {
             if (IsInitialised) return true;
 
             _sampleRate = sampleRate;
-            _maxAlternatives = maxAlternatives;
 
             try
             {
@@ -102,8 +99,6 @@ namespace VoXR
                 }
 
                 VoxrNative.vosk_recognizer_set_words(_recognizer, 1);
-                if (_maxAlternatives > 0)
-                    VoxrNative.vosk_recognizer_set_max_alternatives(_recognizer, _maxAlternatives);
 
                 _agc.Configure(micGainTargetDb, _sampleRate);
 
@@ -247,18 +242,10 @@ namespace VoXR
             }
 
             if (!string.IsNullOrEmpty(grammarJson))
-            {
                 _recognizer = VoxrNative.vosk_recognizer_new_grm(
                     _model, _sampleRate, grammarJson);
-                // Grammar mode + alternatives produces unreliable results in the
-                // Android bridge; match that by skipping set_max_alternatives here.
-            }
             else
-            {
                 _recognizer = VoxrNative.vosk_recognizer_new(_model, _sampleRate);
-                if (_recognizer != IntPtr.Zero && _maxAlternatives > 0)
-                    VoxrNative.vosk_recognizer_set_max_alternatives(_recognizer, _maxAlternatives);
-            }
 
             if (_recognizer == IntPtr.Zero)
             {

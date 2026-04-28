@@ -62,32 +62,11 @@ namespace VoXR.Tests.Runtime
             VoxrResult? received = null;
             _recogniser.OnResult += r => received = r;
 
-            _recogniser.InjectResult("hello", words: null, alternatives: null);
+            _recogniser.InjectResult("hello", words: null);
 
             Assert.IsTrue(received.HasValue);
             Assert.IsNotNull(received.Value.Words);
             Assert.AreEqual(0, received.Value.Words.Length);
-            Assert.IsNotNull(received.Value.Alternatives);
-            Assert.AreEqual(0, received.Value.Alternatives.Length);
-        }
-
-        [Test]
-        public void InjectResult_FiresOnResult_WithProvidedAlternatives()
-        {
-            VoxrResult? received = null;
-            _recogniser.OnResult += r => received = r;
-
-            var alternatives = new[]
-            {
-                new VoxrAlternative("hello world", 12.5f, System.Array.Empty<VoxrWord>()),
-                new VoxrAlternative("yellow whirled", 9.1f, System.Array.Empty<VoxrWord>()),
-            };
-            _recogniser.InjectResult("hello world", null, alternatives);
-
-            Assert.IsTrue(received.HasValue);
-            Assert.AreEqual(2, received.Value.Alternatives.Length);
-            Assert.AreEqual("hello world", received.Value.Alternatives[0].Text);
-            Assert.AreEqual("yellow whirled", received.Value.Alternatives[1].Text);
         }
 
         [Test]

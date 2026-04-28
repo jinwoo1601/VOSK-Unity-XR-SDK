@@ -190,8 +190,6 @@ namespace VoXR.Editor
             DrawFinalResult();
             EditorGUILayout.Space(4);
             DrawWordConfidence();
-            EditorGUILayout.Space(4);
-            DrawAlternatives();
         }
 
         void DrawAudioLevels()
@@ -275,15 +273,6 @@ namespace VoXR.Editor
                 // Word text
                 EditorGUI.LabelField(new Rect(rect.x, rect.y, textWidth, rect.height), word.Text);
 
-                if (word.Confidence < 0f)
-                {
-                    // Confidence unavailable (maxAlternatives > 0 omits per-word conf)
-                    EditorGUI.LabelField(
-                        new Rect(rect.x + textWidth, rect.y, confWidth + barWidth, rect.height),
-                        "[n/a]");
-                    continue;
-                }
-
                 // Confidence value
                 EditorGUI.LabelField(
                     new Rect(rect.x + textWidth, rect.y, confWidth, rect.height),
@@ -301,22 +290,6 @@ namespace VoXR.Editor
                 EditorGUI.DrawRect(
                     new Rect(barRect.x, barRect.y, barRect.width * fill, barRect.height),
                     barColor);
-            }
-        }
-
-        void DrawAlternatives()
-        {
-            if (_speechRecogniser == null) return;
-
-            var lastResult = _speechRecogniser.EditorLastResult;
-            if (lastResult.Alternatives == null || lastResult.Alternatives.Length <= 1) return;
-
-            EditorGUILayout.LabelField("Alternatives", EditorStyles.miniLabel);
-            for (int i = 0; i < lastResult.Alternatives.Length; i++)
-            {
-                var alt = lastResult.Alternatives[i];
-                EditorGUILayout.LabelField(
-                    $"  {i}: \"{alt.Text}\" (conf={alt.Confidence:F1})");
             }
         }
 

@@ -8,7 +8,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Fully offline -- no internet, no cloud dependency
 - Native audio capture via AudioRecord JNI on Android (no Meta/OVR SDK dependency)
 - Live microphone capture in the Unity Editor on Windows for rapid iteration
-- Event-driven API: partial results, final results, per-word confidence, timing, and n-best alternatives
+- Event-driven API: partial results, final results, per-word confidence, and timing
 - Two-tier native lifecycle: heavy model load once, then start / stop recognition instantly
 - Adaptive automatic gain control (AGC) with soft saturation
 - Structured error codes for all failure modes

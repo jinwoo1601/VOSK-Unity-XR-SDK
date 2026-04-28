@@ -1,7 +1,7 @@
 # Basic Transcription Sample
 
 Live speech-to-text display using VoXR. Demonstrates partial/final results,
-per-word confidence and timing, n-best alternatives, and error reporting.
+per-word confidence and timing, and error reporting.
 
 ## Setup
 
@@ -21,11 +21,10 @@ per-word confidence and timing, n-best alternatives, and error reporting.
 
 | GameObject | Role |
 |---|---|
-| `Recogniser` | `VoxrSpeechRecogniser` with `Max Alternatives = 3` so the n-best panel populates. |
-| `VoiceDemo` | Subscribes to `OnPartialResult`, `OnFinalResult`, `OnResult`, `OnError`. Drives the four UI text fields. |
+| `Recogniser` | `VoxrSpeechRecogniser` configured with the VOSK model and AGC target. |
+| `VoiceDemo` | Subscribes to `OnPartialResult`, `OnFinalResult`, `OnResult`, `OnError`. Drives the UI text fields. |
 | `Canvas/TranscriptText` | Shows the live transcript (partial during speech, final on utterance boundary). |
 | `Canvas/WordsText` | Per-word table: `word | confidence | start–end seconds`. Populated from `VoxrResult.Words`. |
-| `Canvas/AlternativesText` | Ranked alternative hypotheses from `VoxrResult.Alternatives`. Hidden message until `Max Alternatives > 0`. |
 | `Canvas/ErrorText` | Hidden by default; shown for ~4 s on `OnError`. |
 
 ## Notes

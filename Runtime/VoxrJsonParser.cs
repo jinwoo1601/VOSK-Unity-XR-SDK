@@ -1,8 +1,8 @@
 // ============================================================================
-// Purpose:  Zero-allocation hand-rolled JSON parser for VOSK result/alternative/error JSON
+// Purpose:  Zero-allocation hand-rolled JSON parser for VOSK result/error JSON
 // Layer:    Runtime
 // Owns:     VoxrJsonParser (internal static class)
-// Depends:  VoxrWord, VoxrAlternative, VoxrBridgeErrorCode
+// Depends:  VoxrWord, VoxrBridgeErrorCode
 // ============================================================================
 using System;
 using System.Globalization;
@@ -35,24 +35,20 @@ namespace VoXR
         // {"result": [{"conf":0.95,"end":0.6,"start":0.1,"word":"hello"}, ...], "text":"hello"}
         // When there is no speech the "result" key is absent and "text" is empty.
         internal static VoxrWord[] ParseWordsFromJson(string json)
-            => ParseWordsInRange(json, 0, json.Length);
-
-        internal static VoxrWord[] ParseWordsInRange(string json, int rangeStart, int rangeEnd)
         {
             const string key = "\"result\"";
-            int keyIdx = json.IndexOf(key, rangeStart, rangeEnd - rangeStart, StringComparison.Ordinal);
+            int keyIdx = json.IndexOf(key, StringComparison.Ordinal);
             if (keyIdx < 0)
                 return Array.Empty<VoxrWord>();
 
             int arrayStart = json.IndexOf('[', keyIdx + key.Length);
-            if (arrayStart < 0 || arrayStart >= rangeEnd)
+            if (arrayStart < 0)
                 return Array.Empty<VoxrWord>();
 
             int arrayEnd = json.IndexOf(']', arrayStart);
-            if (arrayEnd < 0 || arrayEnd > rangeEnd)
+            if (arrayEnd < 0)
                 return Array.Empty<VoxrWord>();
 
-            // Count word objects
             int count = 0;
             for (int i = arrayStart; i < arrayEnd; i++)
                 if (json[i] == '{') count++;
@@ -72,10 +68,7 @@ namespace VoXR
                 int objEnd = json.IndexOf('}', objStart);
                 if (objEnd < 0 || objEnd > arrayEnd) break;
 
-                // "conf" is absent when maxAlternatives > 0; use -1 sentinel.
-                bool hasConf = json.IndexOf("\"conf\"", objStart, objEnd - objStart,
-                    StringComparison.Ordinal) >= 0;
-                float conf = hasConf ? ParseFloatValue(json, objStart, objEnd, "\"conf\"") : -1f;
+                float conf = ParseFloatValue(json, objStart, objEnd, "\"conf\"");
                 float start = ParseFloatValue(json, objStart, objEnd, "\"start\"");
                 float end = ParseFloatValue(json, objStart, objEnd, "\"end\"");
                 string word = ParseStringValue(json, objStart, objEnd, "\"word\"");
@@ -85,76 +78,6 @@ namespace VoXR
             }
 
             return words;
-        }
-
-        // When max_alternatives > 0, VOSK wraps results in:
-        // {"alternatives": [{"confidence":123.4,"result":[...],"text":"hello"}, ...]}
-        internal static VoxrAlternative[] ParseAlternativesFromJson(string json)
-        {
-            const string key = "\"alternatives\"";
-            int keyIdx = json.IndexOf(key, StringComparison.Ordinal);
-            if (keyIdx < 0)
-                return Array.Empty<VoxrAlternative>();
-
-            int arrayStart = json.IndexOf('[', keyIdx + key.Length);
-            if (arrayStart < 0)
-                return Array.Empty<VoxrAlternative>();
-
-            // Find matching ']' — must handle nested arrays ("result":[...])
-            int arrayEnd = FindMatchingDelimiter(json, arrayStart, '[', ']');
-            if (arrayEnd < 0)
-                return Array.Empty<VoxrAlternative>();
-
-            // Count depth-1 objects to allocate exact-size array upfront.
-            int count = 0;
-            {
-                int depth = 0;
-                for (int i = arrayStart; i <= arrayEnd; i++)
-                {
-                    if (json[i] == '{')
-                    {
-                        depth++;
-                        if (depth == 1) count++;
-                    }
-                    else if (json[i] == '}') depth--;
-                }
-            }
-
-            if (count == 0)
-                return Array.Empty<VoxrAlternative>();
-
-            var alternatives = new VoxrAlternative[count];
-            int altIdx = 0;
-            int pos = arrayStart + 1;
-
-            while (altIdx < count && pos < arrayEnd)
-            {
-                int objStart = json.IndexOf('{', pos);
-                if (objStart < 0 || objStart >= arrayEnd) break;
-
-                int objEnd = FindMatchingDelimiter(json, objStart, '{', '}');
-                if (objEnd < 0 || objEnd > arrayEnd) break;
-
-                string text = ParseStringValue(json, objStart, objEnd, "\"text\"");
-                float confidence = ParseFloatValue(json, objStart, objEnd, "\"confidence\"");
-                var words = ParseWordsInRange(json, objStart, objEnd);
-
-                alternatives[altIdx++] = new VoxrAlternative(text, confidence, words);
-                pos = objEnd + 1;
-            }
-
-            return altIdx > 0 ? alternatives : Array.Empty<VoxrAlternative>();
-        }
-
-        internal static int FindMatchingDelimiter(string json, int openPos, char open, char close)
-        {
-            int depth = 1;
-            for (int i = openPos + 1; i < json.Length; i++)
-            {
-                if (json[i] == open) depth++;
-                else if (json[i] == close) { depth--; if (depth == 0) return i; }
-            }
-            return -1;
         }
 
         internal static float ParseFloatValue(string json, int start, int end, string key)

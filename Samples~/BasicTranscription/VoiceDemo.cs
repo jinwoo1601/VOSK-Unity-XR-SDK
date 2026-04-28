@@ -10,14 +10,12 @@ public class VoiceDemo : MonoBehaviour
     [Header("UI (optional)")]
     [SerializeField] Text transcriptText;
     [SerializeField] Text wordsText;
-    [SerializeField] Text alternativesText;
     [SerializeField] Text errorText;
 
     [Tooltip("How long the error toast stays visible after the last error fires.")]
     [SerializeField] float errorVisibleSeconds = 4f;
 
     readonly StringBuilder _wordsBuilder = new StringBuilder(256);
-    readonly StringBuilder _altsBuilder = new StringBuilder(256);
     float _errorClearAt;
 
     // The VoxrSpeechRecogniser keeps its native model loaded between
@@ -69,25 +67,10 @@ public class VoiceDemo : MonoBehaviour
     void OnResult(VoxrResult result)
     {
         UpdateWordsPanel(result);
-        UpdateAlternativesPanel(result);
 
-        if (result.Alternatives.Length == 0 && result.Words.Length == 0)
-            return;
-
-        if (result.Alternatives.Length > 0)
-        {
-            for (int i = 0; i < result.Alternatives.Length; i++)
-            {
-                var alt = result.Alternatives[i];
-                Debug.Log($"[VoiceDemo] Alt {i}: \"{alt.Text}\" score={alt.Confidence:F1}");
-            }
-        }
-        else
-        {
-            foreach (var word in result.Words)
-                Debug.Log($"[VoiceDemo]   \"{word.Text}\" conf={word.Confidence:F2} " +
-                          $"({word.StartTime:F2}s - {word.EndTime:F2}s)");
-        }
+        foreach (var word in result.Words)
+            Debug.Log($"[VoiceDemo]   \"{word.Text}\" conf={word.Confidence:F2} " +
+                      $"({word.StartTime:F2}s - {word.EndTime:F2}s)");
     }
 
     void UpdateWordsPanel(VoxrResult result)
@@ -106,28 +89,6 @@ public class VoiceDemo : MonoBehaviour
                 word.Text, word.Confidence, word.StartTime, word.EndTime);
 
         wordsText.text = _wordsBuilder.ToString();
-    }
-
-    void UpdateAlternativesPanel(VoxrResult result)
-    {
-        if (alternativesText == null) return;
-
-        _altsBuilder.Length = 0;
-        if (result.Alternatives.Length == 0)
-        {
-            alternativesText.text =
-                "(set 'Max Alternatives' > 0 on VoxrSpeechRecogniser to see ranked hypotheses)";
-            return;
-        }
-
-        for (int i = 0; i < result.Alternatives.Length; i++)
-        {
-            var alt = result.Alternatives[i];
-            _altsBuilder.AppendFormat("{0}. score={1:F1}  \"{2}\"\n",
-                i + 1, alt.Confidence, alt.Text);
-        }
-
-        alternativesText.text = _altsBuilder.ToString();
     }
 
     void OnError(VoxrBridgeErrorCode code, string message)

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-28
+
+### Removed
+
+- `VoxrAlternative` struct (`VoXR` namespace).
+- `VoxrResult.Alternatives` field.
+- `VoxrSpeechRecogniser.maxAlternatives` Inspector field.
+- `vosk_recognizer_set_max_alternatives` P/Invoke binding from `VoxrNative`.
+- `VoxrJsonParser.ParseAlternativesFromJson` (and its `FindMatchingDelimiter` helper).
+- N-best alternatives panel and the `[n/a]` per-word confidence fallback in `VoxrDebugWindow`.
+- `alternativesText` field, `UpdateAlternativesPanel`, and the alt-logging branch from the `BasicTranscription` sample (and matching scene UI: `AlternativesLabel`/`AlternativesText` GameObjects).
+- `Tests~/Runtime/ParseAlternativesFromJsonTests.cs`; alternatives-specific test in `VoxrSpeechRecogniserInjectionTests.cs`.
+
+### Breaking Changes
+
+- **`VoxrSpeechRecogniser.InjectResult` signature shrunk** from `(string text, VoxrWord[] words, VoxrAlternative[] alternatives)` to `(string text, VoxrWord[] words)`. Positional 3-arg callers break at compile time; `InjectResult(text)` and `InjectResult(text, words)` callers are unaffected. Migration: drop the third argument.
+- **`VoxrResult` constructor signature shrunk** from `(string text, VoxrWord[] words, VoxrAlternative[] alternatives)` to `(string text, VoxrWord[] words)`. Direct callers (uncommon — most consumers receive `VoxrResult` via `OnResult`) must drop the third argument.
+- **`vosk_bridge_init` native ABI changed** — the trailing `int max_alternatives` parameter is gone. The bundled `Runtime/Plugins/Android/arm64-v8a/libvosk-bridge.so` is rebuilt against the new signature; out-of-tree consumers of the native bridge must rebuild.
+- Reading `result.Alternatives` no longer compiles. Migration: delete those accesses; use `result.Words` for per-word data instead.
+
 ## [1.0.0] - 2026-04-26
 
 ### Added
