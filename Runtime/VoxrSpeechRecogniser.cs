@@ -41,6 +41,9 @@ namespace VoXR
 
 #if UNITY_EDITOR_WIN
         EditorMicBackend _editorBackend;
+        // Cached method-group → delegate to avoid per-frame allocation when handing
+        // DispatchJsonResult to the editor backend's Tick/Stop.
+        EditorJsonDispatcher _editorDispatcher;
 #endif
 
 #if UNITY_EDITOR
@@ -238,11 +241,10 @@ namespace VoXR
 #if UNITY_EDITOR_WIN
             if (_editorBackend != null)
             {
-                _editorBackend.Stop();
-                // EditorMicBackend.Stop pushes vosk_recognizer_final_result onto
-                // the queue. Update() bails early once _isRecognising is false,
-                // so drain here or the last utterance is silently dropped.
-                DrainEditorResults();
+                // EditorMicBackend.Stop dispatches vosk_recognizer_final_result inline
+                // through the supplied delegate, so the last utterance reaches listeners
+                // without needing a drain step.
+                _editorBackend.Stop(EnsureEditorDispatcher());
             }
 #else
             if (!_bridgeAvailable) return;
@@ -253,10 +255,11 @@ namespace VoXR
                 // vosk_recognizer_final_result before exit (vosk_bridge.cpp:130-134).
                 // Drain it now for the same reason as the Editor branch above.
                 IntPtr ptr;
-                while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt)) != IntPtr.Zero)
+                while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt, out int length)) != IntPtr.Zero)
                 {
-                    string json = BridgeNative.MarshalResult(ptr);
-                    DispatchJsonResult(json, isFinalInt == 1);
+                    // Span wraps g_current_result.json, valid only until the next
+                    // vosk_bridge_get_result call. Consume inline; do not store.
+                    DispatchJsonResult(BridgeNative.SpanFromPtr(ptr, length), isFinalInt == 1);
                 }
             }
             catch (DllNotFoundException)
@@ -353,8 +356,7 @@ namespace VoXR
 #if UNITY_EDITOR_WIN
             if (_editorBackend != null && _isRecognising)
             {
-                _editorBackend.Tick(FireError);
-                DrainEditorResults();
+                _editorBackend.Tick(FireError, EnsureEditorDispatcher());
                 if (!_editorBackend.IsRunning) _isRecognising = false;
                 return;
             }
@@ -366,11 +368,13 @@ namespace VoXR
             {
                 bool hadActivity = false;
                 IntPtr ptr;
-                while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt)) != IntPtr.Zero)
+                while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt, out int length)) != IntPtr.Zero)
                 {
                     hadActivity = true;
-                    string json = BridgeNative.MarshalResult(ptr);
-                    DispatchJsonResult(json, isFinalInt == 1);
+                    // Span wraps g_current_result.json, valid only until the next
+                    // vosk_bridge_get_result call. Consume inline; do not store,
+                    // capture by closure, or hold across an await/coroutine yield.
+                    DispatchJsonResult(BridgeNative.SpanFromPtr(ptr, length), isFinalInt == 1);
                 }
 
                 // Sync cached flag when native side stops (e.g. audio error).
@@ -385,21 +389,23 @@ namespace VoXR
         }
 
 #if UNITY_EDITOR_WIN
-        void DrainEditorResults()
-        {
-            while (_editorBackend.TryDequeueResult(out string json, out bool isFinal))
-                DispatchJsonResult(json, isFinal);
-        }
+        EditorJsonDispatcher EnsureEditorDispatcher()
+            => _editorDispatcher ??= DispatchJsonResult;
 #endif
 
-        // Parses a VOSK JSON string and fires the appropriate event(s).
-        // Shared by the Android native drain loop and the Editor backend drain.
-        void DispatchJsonResult(string json, bool isFinal)
+        // Parses a VOSK JSON byte span and fires the appropriate event(s).
+        // Shared by the Android native drain loop and the Editor backend.
+        // The span wraps native memory whose lifetime ends at the next bridge
+        // result call; this method consumes it synchronously and never stores it.
+        void DispatchJsonResult(ReadOnlySpan<byte> json, bool isFinal)
         {
-            if (string.IsNullOrEmpty(json))
+            if (json.Length == 0)
                 return;
 
-            if (json.Contains("\"error\""))
+            // TODO: tighter check would be IndexOf("\"error\":") to avoid a false
+            // positive when a recognised word happens to be "error". Pre-existing
+            // limitation, not introduced by the byte-span refactor.
+            if (json.IndexOf(VoxrJsonParser.KeyError.AsSpan()) >= 0)
             {
                 var code = VoxrJsonParser.ParseErrorCode(json);
                 FireError(code, code.ToDescription());

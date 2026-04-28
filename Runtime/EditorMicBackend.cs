@@ -6,7 +6,6 @@
 // ============================================================================
 #if UNITY_EDITOR_WIN
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 using VoXR.Dsp;
@@ -14,6 +13,10 @@ using VoXR.Native;
 
 namespace VoXR
 {
+    // Custom delegate (not Action<>) because generic delegates cannot accept
+    // ref-struct parameters such as ReadOnlySpan<byte>.
+    internal delegate void EditorJsonDispatcher(ReadOnlySpan<byte> json, bool isFinal);
+
     internal sealed class EditorMicBackend
     {
         const int CaptureLengthSeconds = 5;
@@ -41,8 +44,8 @@ namespace VoXR
         float[] _downsampledBuffer;
         short[] _int16Buffer;
 
-        readonly Queue<(string Json, bool IsFinal)> _resultQueue = new Queue<(string, bool)>();
-        string _lastPartialJson;
+        byte[] _lastPartialBuffer;
+        int _lastPartialLength;
 
         internal bool IsInitialised { get; private set; }
         internal bool IsRunning { get; private set; }
@@ -162,8 +165,7 @@ namespace VoXR
 
             _lastSamplePos = 0;
             _firstTick = true;
-            _lastPartialJson = null;
-            _resultQueue.Clear();
+            _lastPartialLength = 0;
 
             // Per-frame worst case at 60 fps is ≈ SourceSampleRate / 60 ≈ 800 samples.
             // Size the work buffer generously at one tenth of the clip (500 ms worth)
@@ -183,7 +185,7 @@ namespace VoXR
             return true;
         }
 
-        internal void Stop()
+        internal void Stop(EditorJsonDispatcher dispatch)
         {
             if (!IsRunning) return;
             IsRunning = false;
@@ -191,12 +193,14 @@ namespace VoXR
             // Flush any in-progress utterance so the last command spoken before
             // StopRecognition() is not silently discarded. Matches what the
             // Android recognition thread does at exit (vosk_bridge.cpp:130-134).
-            if (_recognizer != IntPtr.Zero)
+            // The span wraps libvosk's internal result buffer, valid only until
+            // the next vosk_recognizer_*_result call. Consume inline; do not store.
+            if (_recognizer != IntPtr.Zero && dispatch != null)
             {
-                string finalJson = BridgeNative.MarshalResult(
+                ReadOnlySpan<byte> finalJson = BridgeNative.SpanFromNullTerminated(
                     VoxrNative.vosk_recognizer_final_result(_recognizer));
-                if (!string.IsNullOrEmpty(finalJson))
-                    _resultQueue.Enqueue((finalJson, true));
+                if (finalJson.Length > 0)
+                    dispatch(finalJson, true);
             }
 
             if (_clip != null)
@@ -212,8 +216,7 @@ namespace VoXR
             VoxrNative.vosk_recognizer_reset(_recognizer);
             _downsampler.Reset();
             _agc.Reset();
-            _lastPartialJson = null;
-            _resultQueue.Clear();
+            _lastPartialLength = 0;
         }
 
         internal void SetGrammar(
@@ -260,7 +263,9 @@ namespace VoXR
         internal void Release()
         {
             _released = true;
-            Stop();
+            // Release is teardown — the final-utterance flush is best-effort and the
+            // typical caller is OnDestroy, where there is no listener to receive it.
+            Stop(dispatch: null);
 
             if (_recognizer != IntPtr.Zero)
             {
@@ -277,13 +282,15 @@ namespace VoXR
             _workBuffer = null;
             _downsampledBuffer = null;
             _int16Buffer = null;
-            _resultQueue.Clear();
-            _lastPartialJson = null;
+            _lastPartialBuffer = null;
+            _lastPartialLength = 0;
 
             IsInitialised = false;
         }
 
-        internal void Tick(Action<VoxrBridgeErrorCode, string> fireError)
+        internal void Tick(
+            Action<VoxrBridgeErrorCode, string> fireError,
+            EditorJsonDispatcher dispatch)
         {
             if (!IsRunning || _clip == null) return;
 
@@ -296,7 +303,7 @@ namespace VoXR
                     fireError?.Invoke(VoxrBridgeErrorCode.AudioDeviceUnavailable,
                         $"Microphone returned {actualRate} Hz; {SourceSampleRate} Hz is required. " +
                         "The 48 kHz → 16 kHz downsampler cannot handle other input rates in v3.1.");
-                    Stop();
+                    Stop(dispatch);
                     return;
                 }
             }
@@ -337,34 +344,42 @@ namespace VoXR
             int result = VoxrNative.vosk_recognizer_accept_waveform_s(
                 _recognizer, _int16Buffer, dsCount);
 
+            // Spans below wrap libvosk's internal result buffer. They are valid only
+            // until the next vosk_recognizer_*_result call. Consume inline; do not
+            // store, capture, or hold across an await/coroutine yield.
             if (result == 1)
             {
-                string json = BridgeNative.MarshalResult(
+                ReadOnlySpan<byte> json = BridgeNative.SpanFromNullTerminated(
                     VoxrNative.vosk_recognizer_result(_recognizer));
-                if (!string.IsNullOrEmpty(json))
-                    _resultQueue.Enqueue((json, true));
+                if (json.Length > 0)
+                    dispatch?.Invoke(json, true);
             }
             else
             {
-                string json = BridgeNative.MarshalResult(
+                ReadOnlySpan<byte> json = BridgeNative.SpanFromNullTerminated(
                     VoxrNative.vosk_recognizer_partial_result(_recognizer));
-                if (!string.IsNullOrEmpty(json) && json != _lastPartialJson)
+                if (json.Length > 0 && !PartialMatchesLast(json))
                 {
-                    _lastPartialJson = json;
-                    _resultQueue.Enqueue((json, false));
+                    StoreLastPartial(json);
+                    dispatch?.Invoke(json, false);
                 }
             }
         }
 
-        internal bool TryDequeueResult(out string json, out bool isFinal)
+        bool PartialMatchesLast(ReadOnlySpan<byte> json)
         {
-            if (_resultQueue.Count == 0)
-            {
-                json = null; isFinal = false; return false;
-            }
-            var r = _resultQueue.Dequeue();
-            json = r.Json; isFinal = r.IsFinal;
-            return true;
+            if (_lastPartialBuffer == null || _lastPartialLength != json.Length)
+                return false;
+            return new ReadOnlySpan<byte>(_lastPartialBuffer, 0, _lastPartialLength)
+                .SequenceEqual(json);
+        }
+
+        void StoreLastPartial(ReadOnlySpan<byte> json)
+        {
+            if (_lastPartialBuffer == null || _lastPartialBuffer.Length < json.Length)
+                Array.Resize(ref _lastPartialBuffer, json.Length);
+            json.CopyTo(_lastPartialBuffer);
+            _lastPartialLength = json.Length;
         }
 
         internal static float ComputeRms(float[] samples, int count)

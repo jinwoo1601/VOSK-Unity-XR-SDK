@@ -302,11 +302,13 @@ int vosk_bridge_has_result() {
     return g_result_queue.HasResult() ? 1 : 0;
 }
 
-const char* vosk_bridge_get_result(int* out_is_final) {
+const char* vosk_bridge_get_result(int* out_is_final, int* out_length) {
     if (!g_result_queue.Pop(g_current_result))
         return nullptr;
     if (out_is_final)
         *out_is_final = g_current_result.is_final ? 1 : 0;
+    if (out_length)
+        *out_length = static_cast<int>(g_current_result.json.size());
     return g_current_result.json.c_str();
 }
 

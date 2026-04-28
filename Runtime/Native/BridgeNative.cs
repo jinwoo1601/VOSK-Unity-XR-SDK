@@ -32,7 +32,7 @@ namespace VoXR.Native
         internal static extern int vosk_bridge_reset();
 
         [DllImport(LibraryName)] [Preserve]
-        internal static extern IntPtr vosk_bridge_get_result(out int isFinal);
+        internal static extern IntPtr vosk_bridge_get_result(out int isFinal, out int length);
 
         [DllImport(LibraryName)] [Preserve]
         internal static extern int vosk_bridge_is_running();
@@ -46,11 +46,24 @@ namespace VoXR.Native
         [DllImport(LibraryName)] [Preserve]
         internal static extern int vosk_bridge_set_grammar(string grammarJson);
 
-        internal static string MarshalResult(IntPtr ptr)
+        // The returned span wraps native memory owned by the bridge (g_current_result.json
+        // for Android, libvosk's internal result buffer in the Editor). That memory is
+        // valid until the next vosk_bridge_get_result / vosk_recognizer_*_result call.
+        // The span MUST NOT be stored, captured by a closure, or held across an
+        // await/coroutine yield — it must be fully consumed within the body of the
+        // dispatching call.
+        internal static unsafe ReadOnlySpan<byte> SpanFromPtr(IntPtr ptr, int length)
+            => ptr == IntPtr.Zero ? default : new ReadOnlySpan<byte>((void*)ptr, length);
+
+        // Same lifetime contract as SpanFromPtr. Used for libvosk's null-terminated
+        // result strings on the Editor path, where no length is returned.
+        internal static unsafe ReadOnlySpan<byte> SpanFromNullTerminated(IntPtr ptr)
         {
-            if (ptr == IntPtr.Zero)
-                return null;
-            return Marshal.PtrToStringUTF8(ptr);
+            if (ptr == IntPtr.Zero) return default;
+            byte* p = (byte*)ptr;
+            int len = 0;
+            while (p[len] != 0) len++;
+            return new ReadOnlySpan<byte>(p, len);
         }
 
         static readonly byte[] ErrorBuf = new byte[512];

@@ -31,7 +31,7 @@ VOSK_BRIDGE_EXPORT int  vosk_bridge_set_grammar(const char* grammar_json);
 
 // Results (polled from C# Update loop)
 VOSK_BRIDGE_EXPORT int         vosk_bridge_has_result();
-VOSK_BRIDGE_EXPORT const char* vosk_bridge_get_result(int* out_is_final);
+VOSK_BRIDGE_EXPORT const char* vosk_bridge_get_result(int* out_is_final, int* out_length);
 
 // Status
 VOSK_BRIDGE_EXPORT int vosk_bridge_is_running();

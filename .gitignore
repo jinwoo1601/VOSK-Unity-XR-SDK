@@ -35,7 +35,7 @@ CLAUDE.md
 CLAUDE.md.meta
 
 # Native bridge build output
-NativeBridge~/build/
+NativeBridge~/build*/
 
 # Internal planning docs (not shipped in public release)
 Planning~/
