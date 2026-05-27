@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Command match scores no longer penalize valid utterances that take advantage of optional tokens. `VoxrCommandParser` previously normalized the raw score by the static pattern length, so an omitted `?word`/`{?slot}` optional still counted toward the denominator (dropping the score even though optionality permits omission), and a spoken optional literal could never reach a perfect 1.0. The denominator is now dynamic — required elements always count, optional elements only when actually matched — so a perfect match scores 1.0 whether or not its optionals were uttered. The same fix is applied to follow-up scoring (`ScoreFollowUp`) so initial and pending-command scores stay consistent. Short patterns with optionals (e.g. `["go", "?now"]` said as just "go") are no longer pushed below the default `minScore` of 0.6. ([#21](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/21))
+
 ## [1.2.0] - 2026-04-29
 
 ### Changed

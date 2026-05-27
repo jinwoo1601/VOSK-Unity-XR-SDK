@@ -99,7 +99,7 @@ commandRecogniser.minScore = 0.6f;       // Reject low-quality pattern matches
 commandRecogniser.minConfidence = 0.4f;   // Reject low VOSK word confidence
 ```
 
-**Score** (`VoxrCommand.Score`) is computed by the parser based on how many pattern tokens were satisfied. A perfect match with all required and optional tokens scores 1.0. Missing optional tokens reduce the score proportionally.
+**Score** (`VoxrCommand.Score`) is computed by the parser based on how well the transcript satisfies the pattern, normalised against a *dynamic* denominator. Required tokens always count toward that denominator; optional tokens (`?word` literals and `{?slot}` slots) count only when they are actually spoken. An omitted optional therefore drops out of both sides of the ratio rather than diluting it, so a perfect match scores 1.0 whether or not its optional tokens were uttered — taking advantage of optionality is never penalized. A missed *required* token still pulls the score down.
 
 **Confidence** (`VoxrCommand.Confidence`) is the minimum per-word VOSK acoustic confidence across matched tokens. This reflects how certain VOSK was about the words it heard. A value of `-1` means no word-level data was available (e.g. the transcript contained only `[unk]` tokens), which bypasses the `minConfidence` check entirely -- the command is accepted or rejected on score alone.
 

@@ -920,5 +920,84 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(1, launchResult.Length);
             Assert.AreEqual("launch_weapon", launchResult[0].Command.Intent);
         }
+
+        // --- Optional tokens no longer inflate the score denominator (issue #21) ---
+
+        static VoxrCommandParser MakeOptionalLiteralParser()
+        {
+            var slots = new[] { new VoxrSlotDefinition("device", new[] { "light", "fan" }) };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("activate", new[]
+                {
+                    new[] { "turn", "on", "?the", "{device}" },
+                }),
+            };
+            return new VoxrCommandParser(slots, commands);
+        }
+
+        [Test]
+        public void Score_OptionalLiteralPresent_ReachesOne()
+        {
+            var parser = MakeOptionalLiteralParser();
+
+            // Optional literal "?the" spoken: (1 + 1 + 0.5 + 1) / (1 + 1 + 0.5 + 1) = 1.0.
+            // Previously this capped at 3.5/4 = 0.875 (optional literal never reached full credit).
+            var result = ParseOne(parser, "turn on the light");
+
+            Assert.AreEqual("activate", result.Command.Intent);
+            Assert.AreEqual("light", result.Command.GetSlot("device"));
+            Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void Score_OptionalLiteralOmitted_NotPenalized()
+        {
+            var parser = MakeOptionalLiteralParser();
+
+            // Omitting "?the" must not cost anything: (1 + 1 + 1) / (1 + 1 + 1) = 1.0.
+            // Previously this was 3.0/4 = 0.75 — penalized for using optionality.
+            var result = ParseOne(parser, "turn on fan");
+
+            Assert.AreEqual("activate", result.Command.Intent);
+            Assert.AreEqual("fan", result.Command.GetSlot("device"));
+            Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void Score_ShortPatternOptionalOmitted_AboveDefaultThreshold()
+        {
+            // Pattern ["go", "?now"] spoken as just "go". Under the old static denominator
+            // this scored 1.0/2 = 0.5 and was rejected by the default minScore of 0.6.
+            // The dynamic denominator drops the omitted optional, giving 1.0/1.0 = 1.0.
+            var slots = Array.Empty<VoxrSlotDefinition>();
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("go", new[]
+                {
+                    new[] { "go", "?now" },
+                }),
+            };
+            var parser = new VoxrCommandParser(slots, commands);
+
+            var result = ParseOne(parser, "go");
+
+            Assert.AreEqual("go", result.Command.Intent);
+            Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void ScoreFollowUp_OptionalLiteralOmitted_ReachesOne()
+        {
+            // Follow-up scoring must use the same dynamic denominator so initial and
+            // follow-up scores stay consistent: a filled required slot plus required
+            // literals, with the optional literal dropping out, scores 1.0 (not 3/4).
+            var parser = MakeOptionalLiteralParser();
+
+            var filled = new[] { new VoxrSlotMatch("device", "light") };
+            float score = parser.ScoreFollowUp("activate", 0, filled);
+
+            Assert.AreEqual(1.0f, score, 0.001f);
+        }
     }
 }
