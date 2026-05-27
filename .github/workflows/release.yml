@@ -1,0 +1,112 @@
+name: Release
+
+# One-click release for the VoXR Unity package.
+#
+# Prerequisite (done manually on `main` before running this):
+#   1. Bump "version" in package.json to X.Y.Z
+#   2. Move the CHANGELOG.md "## [Unreleased]" entries under a new
+#      "## [X.Y.Z] - <date>" heading
+#   3. Merge that to `main`
+#
+# This workflow then cuts the release from `main`:
+#   - creates branch `release/X.Y.Z`
+#   - strips dev-only `NativeBridge~/` and `Tests~/` (consumers pull the
+#     prebuilt libvosk-bridge.so; they don't need C++ sources or NUnit suites)
+#   - tags `vX.Y.Z` on that stripped commit
+#   - publishes a GitHub Release with notes pulled from CHANGELOG.md
+#
+# No Claude / no API key involved — pure git + gh, runs on the built-in
+# GITHUB_TOKEN. Trigger it from the Actions tab → "Release" → "Run workflow".
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (X.Y.Z). Must match package.json on main and have a CHANGELOG section."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate release preconditions
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '$VERSION' is not in X.Y.Z form."; exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "v$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag v$VERSION already exists. Releases are immutable — bump the version instead."; exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "release/$VERSION" >/dev/null 2>&1; then
+            echo "::error::Branch release/$VERSION already exists on origin. Delete it first if this is intentional."; exit 1
+          fi
+
+          PKG_VERSION="$(grep -oP '"version"\s*:\s*"\K[^"]+' package.json)"
+          if [[ "$PKG_VERSION" != "$VERSION" ]]; then
+            echo "::error::package.json version ($PKG_VERSION) != requested ($VERSION). Bump package.json on main first."; exit 1
+          fi
+          if ! grep -qF "## [$VERSION]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$VERSION]' section."; exit 1
+          fi
+          if [[ ! -f "Runtime/Plugins/Android/arm64-v8a/libvosk-bridge.so" ]]; then
+            echo "::error::Prebuilt Runtime/Plugins/Android/arm64-v8a/libvosk-bridge.so is missing."; exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "All preconditions passed for v$VERSION."
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          set -euo pipefail
+          # Print lines between '## [VERSION]' and the next '## [' heading.
+          awk -v ver="## [$VERSION]" '
+            /^## \[/ {
+              if (inblock) exit
+              if (index($0, ver) == 1) { inblock = 1; next }
+            }
+            inblock { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/RELEASE_NOTES.md"
+
+          if [[ ! -s "$RUNNER_TEMP/RELEASE_NOTES.md" ]]; then
+            echo "Release v$VERSION" > "$RUNNER_TEMP/RELEASE_NOTES.md"
+          fi
+          echo "----- release notes -----"
+          cat "$RUNNER_TEMP/RELEASE_NOTES.md"
+
+      - name: Cut release branch, strip dev folders, tag, push
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git switch -c "release/$VERSION"
+          git rm -r NativeBridge~ Tests~
+          git commit -m "Strip NativeBridge~ and Tests~ from v$VERSION distribution"
+          git tag -a "v$VERSION" -m "v$VERSION"
+
+          git push origin "release/$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file "$RUNNER_TEMP/RELEASE_NOTES.md" \
+            --target "release/$VERSION"
+          echo "Released: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v$VERSION"
