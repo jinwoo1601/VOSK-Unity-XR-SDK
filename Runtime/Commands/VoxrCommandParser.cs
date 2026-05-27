@@ -533,7 +533,11 @@ namespace VoXR.Commands
         {
             int tokenIdx = startIdx;
             float rawScore = 0f;
-            int patternLength = pattern.Length;
+            // Dynamic denominator: required elements always count toward it, but optional
+            // elements only count when actually matched. Omitted optionals then drop out of
+            // both numerator and denominator, so taking advantage of optionality is never
+            // penalized and a perfect match always normalizes to 1.0.
+            float denominator = 0f;
             int literalCount = 0;
             int slotCount = 0;
 
@@ -569,11 +573,14 @@ namespace VoXR.Commands
                         _matchSlotBuf[slotCount++] = new VoxrSlotMatch(slotName, matchedValue);
                         tokenIdx += consumed;
                         rawScore += MatchScore;
+                        denominator += MatchScore;
                     }
                     else if (!isOptional)
                     {
                         rawScore += RequiredSlotMissPenalty;
+                        denominator += MatchScore;
                     }
+                    // Unmatched optional slot: contributes nothing to score or denominator.
                 }
                 else if (IsOptionalLiteral(element))
                 {
@@ -581,12 +588,15 @@ namespace VoXR.Commands
                         string.Equals(tokens[tokenIdx], _optionalLiteralCache[element], StringComparison.Ordinal))
                     {
                         rawScore += OptionalLiteralScore;
+                        denominator += OptionalLiteralScore;
                         literalCount++;
                         tokenIdx++;
                     }
+                    // Unmatched optional literal: contributes nothing to score or denominator.
                 }
                 else
                 {
+                    denominator += MatchScore;
                     if (tokenIdx < tokens.Length &&
                         string.Equals(tokens[tokenIdx], element, StringComparison.Ordinal))
                     {
@@ -602,7 +612,7 @@ namespace VoXR.Commands
             }
 
             _matchSlotCount = slotCount;
-            float normalizedScore = patternLength > 0 ? rawScore / patternLength : 0f;
+            float normalizedScore = denominator > 0f ? rawScore / denominator : 0f;
 
             return new MatchResult
             {
@@ -803,7 +813,10 @@ namespace VoXR.Commands
             if (pattern == null || pattern.Length == 0)
                 return 1f; // Fallback — don't block the command
 
+            // Dynamic denominator, mirroring TryMatchScored: required elements always count,
+            // optional elements only when satisfied, so unfilled optionals don't penalize.
             float rawScore = 0f;
+            float denominator = 0f;
             for (int i = 0; i < pattern.Length; i++)
             {
                 string element = pattern[i];
@@ -822,24 +835,32 @@ namespace VoXR.Commands
                     }
 
                     if (filled)
+                    {
                         rawScore += MatchScore;
+                        denominator += MatchScore;
+                    }
                     else if (!IsOptionalSlot(element))
+                    {
                         rawScore += RequiredSlotMissPenalty;
-                    // Optional slots that are unfilled contribute 0
+                        denominator += MatchScore;
+                    }
+                    // Unfilled optional slots contribute 0 to both numerator and denominator.
                 }
                 else if (IsOptionalLiteral(element))
                 {
-                    // Optional literals may or may not have been spoken — give no credit
+                    // Optional literals may or may not have been spoken — give no credit and
+                    // leave them out of the denominator (treated as omitted optionals).
                 }
                 else
                 {
                     // Required literal — the original parse matched initial literals,
                     // and follow-up implies the remaining ones. Credit them.
                     rawScore += MatchScore;
+                    denominator += MatchScore;
                 }
             }
 
-            return pattern.Length > 0 ? rawScore / pattern.Length : 0f;
+            return denominator > 0f ? rawScore / denominator : 0f;
         }
     }
 }
