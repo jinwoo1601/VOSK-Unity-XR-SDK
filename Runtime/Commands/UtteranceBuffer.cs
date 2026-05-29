@@ -40,29 +40,30 @@ namespace VoXR.Commands
             return currentTime - _lastResultTime >= bufferWindow;
         }
 
-        internal string Flush()
+        // Joins the buffered results without consuming them. Returns string.Empty (never
+        // null) for an empty buffer. Used by the eager-flush speculative parse.
+        internal string PeekText()
         {
-            IsActive = false;
-
             if (_texts.Count == 0)
                 return string.Empty;
 
             // Fast path: single entry avoids StringBuilder overhead.
-            string text;
             if (_texts.Count == 1)
+                return _texts[0];
+
+            _sb.Clear();
+            for (int i = 0; i < _texts.Count; i++)
             {
-                text = _texts[0];
+                if (i > 0) _sb.Append(' ');
+                _sb.Append(_texts[i]);
             }
-            else
-            {
-                _sb.Clear();
-                for (int i = 0; i < _texts.Count; i++)
-                {
-                    if (i > 0) _sb.Append(' ');
-                    _sb.Append(_texts[i]);
-                }
-                text = _sb.ToString();
-            }
+            return _sb.ToString();
+        }
+
+        internal string Flush()
+        {
+            IsActive = false;
+            string text = PeekText();
             _texts.Clear();
             return text;
         }

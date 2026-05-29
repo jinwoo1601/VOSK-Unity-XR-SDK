@@ -269,5 +269,257 @@ namespace VoXR.Tests.Runtime
                 "Speech-layer InjectResult did not propagate to command recogniser");
             Assert.AreEqual("cease_fire", received.Value.Intent);
         }
+
+        // -------- Eager flush (issue #25) --------
+
+        [Test]
+        public void EagerFlush_TerminalCommand_FiresImmediatelyWithoutFlush()
+        {
+            _recogniser.Configure(MakeSlots(), MakeCommands());
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += _ => fireCount++;
+
+            _recogniser.InjectText("cease fire");
+
+            Assert.AreEqual(1, fireCount,
+                "A terminal command should fire immediately under eager flush, " +
+                "without waiting for the buffer window");
+        }
+
+        [Test]
+        public void EagerFlush_FullSlottedCommand_FiresImmediately()
+        {
+            _recogniser.Configure(MakeSlots(), MakeCommands());
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("launch all missiles target hotel one");
+
+            Assert.IsTrue(received.HasValue,
+                "A complete slotted command should fire immediately under eager flush");
+            Assert.AreEqual("launch_weapon", received.Value.Intent);
+            Assert.AreEqual("hotel one", received.Value.GetSlot("target"));
+        }
+
+        [Test]
+        public void EagerFlush_Off_PreservesTimeOnlyBuffering()
+        {
+            // The default (flag off) must keep today's behaviour: buffered until flushed.
+            _recogniser.Configure(MakeSlots(), MakeCommands());
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            // eagerFlushOnCompleteMatch intentionally left at its default (false).
+
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += _ => fireCount++;
+
+            _recogniser.InjectText("cease fire");
+            Assert.AreEqual(0, fireCount,
+                "With eager flush off, a buffered command must not fire immediately");
+
+            _recogniser.FlushPendingBuffer();
+            Assert.AreEqual(1, fireCount);
+        }
+
+        [Test]
+        public void EagerFlush_PrefixCommand_WaitsForTheWindow()
+        {
+            var slots = new[]
+            {
+                new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+            };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("status", new[] { new[] { "status" } }),
+                new VoxrCommandDefinition("status_report",
+                    new[] { new[] { "status", "report", "{target}" } }),
+            };
+            _recogniser.Configure(slots, commands);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += _ => fireCount++;
+
+            // "status" is a prefix of "status report {target}", so it must NOT eager-fire.
+            _recogniser.InjectText("status");
+            Assert.AreEqual(0, fireCount,
+                "A command that is a prefix of a longer one must wait the full window");
+
+            _recogniser.FlushPendingBuffer();
+            Assert.AreEqual(1, fireCount, "It still fires on the normal flush");
+        }
+
+        [Test]
+        public void EagerFlush_TrailingExtensibleSlot_WaitsForTheWindow()
+        {
+            var slots = new[]
+            {
+                new VoxrSlotDefinition("colour", new[] { "red", "red dragon" }),
+            };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("pick", new[] { new[] { "pick", "{colour}" } }),
+            };
+            _recogniser.Configure(slots, commands);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += _ => fireCount++;
+
+            // "pick red" could still grow into "pick red dragon", so it must NOT eager-fire.
+            _recogniser.InjectText("pick red");
+            Assert.AreEqual(0, fireCount,
+                "A trailing slot whose value can grow must wait the full window");
+
+            _recogniser.FlushPendingBuffer();
+            Assert.AreEqual(1, fireCount);
+        }
+
+        [Test]
+        public void EagerFlush_SplitCommand_FiresWhenSecondHalfCompletes()
+        {
+            _recogniser.Configure(MakeSlots(), MakeCommands());
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int fireCount = 0;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => { fireCount++; received = cmd; };
+
+            // First half is incomplete (target slot unfilled) -> below threshold -> no fire.
+            _recogniser.InjectText("launch all missiles");
+            Assert.AreEqual(0, fireCount, "An incomplete command must not eager-fire");
+
+            // The second half completes the command on the merged buffer -> eager fire.
+            _recogniser.InjectText("target hotel one");
+            Assert.AreEqual(1, fireCount, "Completing the command should eager-fire immediately");
+            Assert.AreEqual("hotel one", received.Value.GetSlot("target"));
+        }
+
+        // -------- Eager flush: confirmation, pending, and number sequences (review fix #7) --------
+
+        [Test]
+        public void EagerFlush_RequiresConfirmation_EntersPendingNotFire()
+        {
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("arm", new[] { new[] { "arm", "system" } },
+                    allowPartialMatch: false, requiresConfirmation: true),
+            };
+            _recogniser.Configure(new VoxrSlotDefinition[0], commands);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int recognised = 0;
+            VoxrCommand? pending = null;
+            _recogniser.OnCommandRecognised += _ => recognised++;
+            _recogniser.OnCommandPending += cmd => pending = cmd;
+
+            _recogniser.InjectText("arm system");
+
+            Assert.IsTrue(pending.HasValue,
+                "A complete command requiring confirmation should eager-flush into pending");
+            Assert.AreEqual("arm", pending.Value.Intent);
+            Assert.AreEqual(0, recognised,
+                "It must enter pending, not fire OnCommandRecognised directly");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void EagerFlush_WhilePending_DoesNotEagerFire()
+        {
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("arm", new[] { new[] { "arm", "system" } },
+                    allowPartialMatch: false, requiresConfirmation: true),
+                new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+            };
+            _recogniser.Configure(new VoxrSlotDefinition[0], commands);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int recognised = 0;
+            _recogniser.OnCommandRecognised += _ => recognised++;
+
+            // Enter pending via the confirmation path.
+            _recogniser.InjectText("arm system");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "Setup: arm system should be pending");
+            Assert.AreEqual(0, recognised);
+
+            // A new terminal command must NOT eager-fire while a command is pending (the
+            // !_pending.HasPending guard suppresses eager); it stays buffered.
+            _recogniser.InjectText("cease fire");
+            Assert.AreEqual(0, recognised,
+                "Eager flush must be suppressed while a command is pending");
+
+            // Flushing the buffer releases the buffered command (which preempts the pending one).
+            _recogniser.FlushPendingBuffer();
+            Assert.AreEqual(1, recognised, "The buffered command fires on an explicit flush");
+        }
+
+        [Test]
+        public void EagerFlush_FixedWidthNumberSequence_FiresImmediately()
+        {
+            var slots = new[] { VoxrSlotDefinition.NumberSequence("code", 4, 4) };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("enter", new[] { new[] { "enter", "{code}" } }),
+            };
+            _recogniser.Configure(slots, commands);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("enter one two three four");
+
+            Assert.IsTrue(received.HasValue,
+                "A fixed-width number sequence completes the command, so it should eager-fire");
+            Assert.AreEqual("enter", received.Value.Intent);
+            Assert.AreEqual("one two three four", received.Value.GetSlot("code"));
+        }
+
+        [Test]
+        public void EagerFlush_VariableWidthNumberSequence_WaitsForWindow()
+        {
+            var slots = new[] { VoxrSlotDefinition.NumberSequence("code", 1, 4) };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("enter", new[] { new[] { "enter", "{code}" } }),
+            };
+            _recogniser.Configure(slots, commands);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += _ => fireCount++;
+
+            // A variable-width number sequence can always absorb another digit, so the command
+            // is not eager-committable — it must wait for the buffer window.
+            _recogniser.InjectText("enter one two three");
+            Assert.AreEqual(0, fireCount,
+                "A variable-width number sequence must not eager-fire (more digits may follow)");
+
+            _recogniser.FlushPendingBuffer();
+            Assert.AreEqual(1, fireCount, "It still fires on the normal flush");
+        }
     }
 }

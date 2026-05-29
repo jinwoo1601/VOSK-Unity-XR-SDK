@@ -290,6 +290,26 @@ deliberate trade-offs rather than oversights.
   - For conversational UX, prefer shorter patterns that complete within one
     VOSK final result.
 
+### A command that is also a prefix of a longer one can't be both instant and split-safe
+
+- **Repro**: Register `["fire"]` and `["fire", "at", "{target}"]`, enable
+  `eagerFlushOnCompleteMatch`, then say "fire" and pause longer than
+  `bufferWindow` before "at hotel one". Eager flush deliberately does *not* fire
+  "fire" early (it is a prefix of the longer command), so it waits the full
+  window — and if the pause exceeds it, only "fire" is recognised.
+- **Root cause**: Inherent, not a bug. A complete command that is also a prefix
+  of a longer command is genuinely ambiguous until either more speech arrives or
+  the window expires. No time/parse strategy makes it both zero-latency and
+  correct: firing instantly would drop the longer command; waiting adds latency.
+  Eager flush resolves this conservatively by waiting (correctness over latency);
+  non-prefix commands are unaffected and fire instantly.
+- **Workaround**:
+  - Use push-to-talk (`VoxrPushToTalkController`); `ReleaseTalk` calls
+    `FlushPendingBuffer()`, giving the prefix command a deterministic,
+    zero-latency endpoint.
+  - Avoid registering commands that are exact prefixes of others when low latency
+    matters — e.g. give the shorter command a distinct extra keyword.
+
 ### Confidence of `-1.00` means "no data", not "zero confidence"
 
 - **Repro**: Say a command with leading filler or out-of-grammar words
