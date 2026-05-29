@@ -18,6 +18,12 @@ namespace VoXR.Commands
         const float RequiredSlotMissPenalty = -1.0f;
         const float RequiredLiteralMissPenalty = -0.5f;
 
+        // Upper bound on optional elements in a single pattern for eager-commit analysis
+        // (issue #25). ExpandOptionals enumerates 2^optionals concrete forms; past this the
+        // expansion is unbounded/overflowing, so the whole parser disables eager commit
+        // rather than partially (and unsoundly) analyse. Pathological grammars only.
+        const int MaxOptionalExpansion = 12;
+
         internal static readonly char[] SplitSeparator = { ' ' };
 
         readonly VoxrSlotDefinition[] _slots;
@@ -63,7 +69,11 @@ namespace VoXR.Commands
         // Per-(command, pattern) eager-commit eligibility (issue #25): true when a full
         // match of the pattern cannot be extended or completed by further speech — i.e. it
         // is not a prefix of any other pattern and its trailing element can't grow.
-        readonly bool[][] _canCommitEarly;
+        // Computed lazily on first eager check (see EnsureCanCommitEarly): opted-out callers
+        // never reach an eager entry point, so they never pay the precompute. May be left
+        // null when the grammar is too complex to analyse soundly (see MaxOptionalExpansion).
+        bool[][] _canCommitEarly;
+        bool _canCommitEarlyComputed;
 
         // Pooled StringBuilder for TryMatchNumberSequence.
         readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
@@ -182,7 +192,9 @@ namespace VoXR.Commands
 
             _resultBuf = new VoxrCommandResult[Math.Max(commands.Length, 1)];
 
-            _canCommitEarly = ComputeCanCommitEarly();
+            // _canCommitEarly is computed lazily on the first eager check (issue #25), so
+            // callers who leave eager flush off never pay the O(2^optionals)+O(forms^2)
+            // precompute on Configure/RebuildParser/NotifySlotChanged.
 
             RunValidationWarnings(slots);
         }
@@ -872,11 +884,24 @@ namespace VoXR.Commands
 
         // -------- Eager-flush support (issue #25) --------
 
+        // Computes _canCommitEarly on first use and caches it. Both eager entry points
+        // (CanCommitEarly and TryEagerCommit) call this, so the precompute only runs for
+        // callers that actually probe eager commit; eager-flush-off callers never reach
+        // here. A rebuilt parser is a fresh instance, so the table is recomputed naturally.
+        void EnsureCanCommitEarly()
+        {
+            if (_canCommitEarlyComputed)
+                return;
+            _canCommitEarly = ComputeCanCommitEarly();
+            _canCommitEarlyComputed = true;
+        }
+
         // Whether a full match of commands[commandIndex].Patterns[patternIndex] may be
         // committed before bufferWindow elapses. Exposed for tests; the runtime path uses
         // the command/pattern index from TryEagerCommit's own scan.
         internal bool CanCommitEarly(int commandIndex, int patternIndex)
         {
+            EnsureCanCommitEarly();
             return _canCommitEarly != null
                 && (uint)commandIndex < (uint)_canCommitEarly.Length
                 && (uint)patternIndex < (uint)_canCommitEarly[commandIndex].Length
@@ -892,6 +917,8 @@ namespace VoXR.Commands
         {
             if (tokens == null || tokens.Length == 0)
                 return false;
+
+            EnsureCanCommitEarly();
 
             float bestScore = float.MinValue;
             int bestLiteralCount = -1;
@@ -942,11 +969,35 @@ namespace VoXR.Commands
             if (confidence >= 0f && confidence < minConfidence)
                 return false;
 
-            return _canCommitEarly[bestCommandIdx][bestPatternIdx];
+            // Guarded accessor: _canCommitEarly may legitimately be null when the grammar
+            // was too complex to analyse (MaxOptionalExpansion), and the indices come from a
+            // separate scan, so route through the bounds-checked path rather than indexing raw.
+            return CanCommitEarly(bestCommandIdx, bestPatternIdx);
         }
 
         bool[][] ComputeCanCommitEarly()
         {
+            // Guard pathological grammars: ExpandOptionals enumerates 2^optionals forms, which
+            // overflows/allocates unboundedly past MaxOptionalExpansion. If ANY pattern is over
+            // the limit, disable eager commit for the whole parser (return null -> CanCommitEarly
+            // reports false) rather than partially analyse — an un-expanded pattern used as the
+            // "longer" side would unsoundly let a real prefix through and fire the wrong command.
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                var patterns = _commands[ci].Patterns;
+                for (int pi = 0; pi < patterns.Length; pi++)
+                {
+                    if (CountOptionalElements(patterns[pi]) > MaxOptionalExpansion)
+                    {
+                        UnityEngine.Debug.LogWarning(
+                            $"[VoXR] Pattern for intent '{_commands[ci].Intent}' has more than " +
+                            $"{MaxOptionalExpansion} optional elements; eager flush is disabled for " +
+                            "this command set. Reduce optional tokens to re-enable it.");
+                        return null;
+                    }
+                }
+            }
+
             // Pre-expand every pattern over its optional elements once: a pattern with an
             // optional element matches with that element present OR absent, so prefix
             // analysis must consider every concrete form on both sides.
@@ -970,6 +1021,17 @@ namespace VoXR.Commands
                 result[ci] = flags;
             }
             return result;
+        }
+
+        // Number of optional elements ({?slot} or ?literal) in a pattern; ExpandOptionals
+        // produces 2^this concrete forms.
+        static int CountOptionalElements(string[] pattern)
+        {
+            int count = 0;
+            for (int i = 0; i < pattern.Length; i++)
+                if (IsOptionalLiteral(pattern[i]) || IsOptionalSlot(pattern[i]))
+                    count++;
+            return count;
         }
 
         // All concrete token sequences for a pattern, including/excluding each optional
@@ -1045,8 +1107,11 @@ namespace VoXR.Commands
             return false;
         }
 
-        // True if any concrete form of this pattern is a compatible prefix of any concrete
-        // form of a different pattern (so more speech could complete the longer command).
+        // True if any concrete form of this pattern is a prefix of any concrete form of a
+        // different pattern (so more speech could complete the longer command). Two notions
+        // of "prefix" are checked: an element-count prefix (P has fewer elements than Q and
+        // they line up), and a word-level prefix where P and Q have the same element count
+        // but a slot in P can match a word-sequence that Q extends (BoundaryWordPrefixHazard).
         bool IsPrefixOfAnyOtherPattern(int ci, int pi, List<string[]>[][] expanded)
         {
             var pForms = expanded[ci][pi];
@@ -1059,11 +1124,140 @@ namespace VoXR.Commands
                     var qForms = qPatterns[pj];
                     for (int a = 0; a < pForms.Count; a++)
                         for (int b = 0; b < qForms.Count; b++)
-                            if (pForms[a].Length < qForms[b].Length
-                                && IsCompatiblePrefix(pForms[a], qForms[b]))
+                            if ((pForms[a].Length < qForms[b].Length
+                                    && IsCompatiblePrefix(pForms[a], qForms[b]))
+                                || BoundaryWordPrefixHazard(pForms[a], qForms[b]))
                                 return true;
                 }
             }
+            return false;
+        }
+
+        // Word-level prefix hazard the element-count check above misses (issue #25). When
+        // pForm's final element is reached after a run of literals identical to qForm's, and
+        // at that element qForm can produce a word-sequence that strictly extends one of
+        // pForm's, a full match of P is a word-prefix of a full match of Q — so firing P
+        // early could ship the wrong command. The classic miss is two equal-element-count
+        // patterns: "go {dir=north}" vs "go {place=north pole}" (enumerated), or
+        // "dial {n3}" vs "dial {n5}" (number sequence). Cardinal rule: err toward a hazard.
+        bool BoundaryWordPrefixHazard(string[] pForm, string[] qForm)
+        {
+            int k = pForm.Length - 1;          // P's final element — the divergence point.
+            if (k < 0 || qForm.Length < k + 1) // Q must have an element aligned with it.
+                return false;
+
+            // Everything before the divergence must be identical literals so both sides have
+            // consumed the same words up to k and the slot analysis at k is word-aligned.
+            // (A slot in the shared run could realign words; that case is left to the
+            // conservative element-count check and is not analysed word-precisely here.)
+            if (SharedLiteralPrefixLen(pForm, qForm) != k)
+                return false;
+
+            string pSlot = ExtractSlotName(pForm[k]);
+            string qSlot = ExtractSlotName(qForm[k]);
+
+            if (pSlot == null)
+            {
+                // P ends in a literal: only a slot on Q's side can grow past it. (A literal
+                // qForm[k] is either equal — making the shared run longer than k — or differs,
+                // so it cannot extend P's word.)
+                return qSlot != null && SlotCanExtendWord(qSlot, StripOptionalLiteral(pForm[k]));
+            }
+
+            if (qSlot == null)
+                return false; // P slot vs Q literal: Q can extend only via trailing elements,
+                              // which the element-count check already covers.
+
+            // Both sides are slots at the divergence: a value (or fixed-width number run) of
+            // P's slot must be a strict word-prefix of a value (or wider run) of Q's slot.
+            return SlotValueIsWordPrefixOfSlot(pSlot, qSlot);
+        }
+
+        // Length of the leading run where p and q are identical literals (no slots), so the
+        // two forms produce exactly the same words over that run.
+        static int SharedLiteralPrefixLen(string[] p, string[] q)
+        {
+            int n = Math.Min(p.Length, q.Length);
+            int i = 0;
+            for (; i < n; i++)
+            {
+                if (ExtractSlotName(p[i]) != null || ExtractSlotName(q[i]) != null)
+                    break;
+                if (!string.Equals(StripOptionalLiteral(p[i]), StripOptionalLiteral(q[i]),
+                        StringComparison.Ordinal))
+                    break;
+            }
+            return i;
+        }
+
+        // True if slotName can produce a surface form that begins with firstWord and is
+        // longer than one word, so it strictly extends a command ending in that literal.
+        // A number sequence is treated as able to start with any word (NUMBER is a wildcard),
+        // so any multi-word run extends.
+        bool SlotCanExtendWord(string slotName, string firstWord)
+        {
+            if (!_slotIndex.TryGetValue(slotName, out int slotIdx))
+                return true; // unknown slot — stay safe.
+
+            if (_slots[slotIdx].Type == VoxrSlotType.NumberSequence)
+                return _slots[slotIdx].MaxWords > 1;
+
+            foreach (var list in _slotLookups[slotIdx].Values)
+                foreach (var entry in list)
+                    if (entry.Words.Length > 1 &&
+                        string.Equals(entry.Words[0], firstWord, StringComparison.Ordinal))
+                        return true;
+            return false;
+        }
+
+        // True if some realization of slot pSlotName is a strict word-prefix of some
+        // realization of slot qSlotName. Number-sequence runs match any word (NUMBER is a
+        // wildcard), so they compare by width; enumerated slots compare surface forms.
+        bool SlotValueIsWordPrefixOfSlot(string pSlotName, string qSlotName)
+        {
+            if (!_slotIndex.TryGetValue(pSlotName, out int pIdx) ||
+                !_slotIndex.TryGetValue(qSlotName, out int qIdx))
+                return true; // unknown slot — stay safe.
+
+            bool pNum = _slots[pIdx].Type == VoxrSlotType.NumberSequence;
+            bool qNum = _slots[qIdx].Type == VoxrSlotType.NumberSequence;
+
+            if (pNum && qNum)
+                // P's shortest run can be a strict prefix of a wider Q run.
+                return _slots[qIdx].MaxWords > _slots[pIdx].MinWords;
+
+            if (pNum)
+                // A min-width number run is a strict prefix of any longer Q value.
+                return AnySlotSurfaceFormLongerThan(qIdx, _slots[pIdx].MinWords);
+
+            if (qNum)
+                // Any P value is a strict prefix of a wider number run.
+                return AnySlotSurfaceFormShorterThan(pIdx, _slots[qIdx].MaxWords);
+
+            foreach (var pList in _slotLookups[pIdx].Values)
+                foreach (var pEntry in pList)
+                    foreach (var qList in _slotLookups[qIdx].Values)
+                        foreach (var qEntry in qList)
+                            if (IsWordPrefix(pEntry.Words, qEntry.Words))
+                                return true;
+            return false;
+        }
+
+        bool AnySlotSurfaceFormLongerThan(int slotIdx, int wordCount)
+        {
+            foreach (var list in _slotLookups[slotIdx].Values)
+                foreach (var entry in list)
+                    if (entry.Words.Length > wordCount)
+                        return true;
+            return false;
+        }
+
+        bool AnySlotSurfaceFormShorterThan(int slotIdx, int wordCount)
+        {
+            foreach (var list in _slotLookups[slotIdx].Values)
+                foreach (var entry in list)
+                    if (entry.Words.Length < wordCount)
+                        return true;
             return false;
         }
 
