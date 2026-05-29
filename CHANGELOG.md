@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in eager flush for the command recogniser. When `eagerFlushOnCompleteMatch` is enabled, the utterance buffer fires a recognised command the moment the buffered speech forms a complete match that cannot be extended or completed by further speech, instead of always waiting out `bufferWindow`. This removes the buffer latency (default 0.5s; 1.5–2.0s on Quest 3) for clean single-breath commands while preserving split-command recovery: a command that is a prefix of a longer one — or whose trailing slot could still grow (multi-word enumerated values, or a variable-length number sequence) — keeps waiting the full window. Split commands also fire as soon as their second half completes. Off by default, so existing timing is unchanged. One behavioural note when enabled: a terminal command marked `RequiresConfirmation` now enters its pending/confirmation state with zero added latency (it still does not fire until confirmed). ([#25](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/25))
+
 ## [1.2.1] - 2026-05-28
 
 ### Fixed
