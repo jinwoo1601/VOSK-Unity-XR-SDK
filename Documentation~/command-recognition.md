@@ -208,7 +208,7 @@ commandRecogniser.bufferWindow = 2.0f; // Recommended for Quest 3
 
 If the speaker says "launch missiles" *pause* "target hotel one" and both results arrive within the window, they are concatenated and parsed as a single command.
 
-**Tuning:** The default is 1.5s. Quest 3 VOSK latency adds ~0.5--1.0s to inter-result gaps, so 2.0s is more reliable on device. Don't exceed ~2.5--3.0s or unrelated utterances may merge ("cross-command bleed").
+**Tuning:** The default is 0.5s (tuned for typical PC latency). Quest 3 VOSK latency adds ~0.5--1.0s to inter-result gaps, so the default is usually too short on device — 2.0s is more reliable. Don't exceed ~2.5--3.0s or unrelated utterances may merge ("cross-command bleed").
 
 ### Eager flush (low-latency complete commands)
 

@@ -170,7 +170,7 @@ model you use.
   boundaries and flushes an interim final. The parser sees two disconnected
   transcripts, not one.
 - **Workaround**:
-  - `bufferWindow` (default 1.5s) is exactly for this case — it merges
+  - `bufferWindow` (default 0.5s) is exactly for this case — it merges
     consecutive VOSK results before parsing. See the *Architecture* section
     below for tuning notes.
   - If the pause is longer than `bufferWindow`, the command is lost.
@@ -259,19 +259,20 @@ deliberate trade-offs rather than oversights.
   validation should run once per `Configure()` call, not per parser rebuild.
   Filed as a low-priority follow-up.
 
-### Default `bufferWindow` of 1.5s is marginal on Quest 3
+### Default `bufferWindow` is too short for split commands on Quest 3
 
-- **Repro**: With the default `bufferWindow=1.5`, speak a two-part command
-  with a deliberate mid-command pause: "launch missiles" ... "target hotel
-  one". The gap measured between VOSK results is often ~1.9–2.1s — just over
-  the window — so the buffer flushes before the second half arrives and the
-  command is lost.
+- **Repro**: Speak a two-part command with a deliberate mid-command pause:
+  "launch missiles" ... "target hotel one". On Quest 3 the gap measured
+  between VOSK results is often ~1.9–2.1s, so any window shorter than that
+  flushes before the second half arrives and the command is lost. The current
+  0.5s default is well short of this; even the former 1.5s default (v2.3) was
+  marginal — just under the typical gap.
 - **Where seen**: v2.3 test matrix Phase 4.1 (pass-with-note), Phase 8.2
-  retry (v2.4), and general notes — 2.0s is a more reliable default on Quest 3.
+  retry (v2.4), and general notes — 2.0s is a more reliable value on Quest 3.
 - **Root cause**: VOSK on Quest 3 emits final results with ~0.5–1.0s latency
   after speech ends, compounding any mid-command pause the speaker takes.
-  1.5s was chosen as the v2.3 default to match typical PC latency; on Quest
-  hardware it needs a bit more slack.
+  The default matches typical PC latency (1.5s in v2.3, later lowered to 0.5s
+  for a snappier PC baseline); on Quest hardware the buffer needs more slack.
 - **Workaround**:
   - Set `bufferWindow=2.0` in the inspector for Quest builds.
   - Do not push beyond ~2.5–3.0s: the test matrices found that long windows

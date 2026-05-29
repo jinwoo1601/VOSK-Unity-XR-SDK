@@ -67,7 +67,7 @@ If you display confidence in a debug UI, treat `-1.00` as "n/a" rather than as a
 
 VOSK's voice activity detector treats pauses as utterance boundaries and flushes an interim result. If the user pauses mid-command (e.g. "launch missiles" *pause* "target hotel one"), VOSK produces two separate transcripts and neither matches a complete pattern on its own.
 
-The utterance buffer (`bufferWindow`) is designed for this case -- it merges consecutive results before parsing. On Quest 3, VOSK latency adds ~0.5--1.0s to inter-result gaps, so the default 1.5s window can be marginal.
+The utterance buffer (`bufferWindow`) is designed for this case -- it merges consecutive results before parsing. The default is `0.5` (tuned for typical PC latency). On Quest 3, VOSK latency adds ~0.5--1.0s to inter-result gaps, so the 0.5s default is usually too short.
 
 - Set `bufferWindow = 2.0` for Quest 3 builds.
 - Do not exceed ~2.5--3.0s or unrelated utterances may merge ("cross-command bleed").

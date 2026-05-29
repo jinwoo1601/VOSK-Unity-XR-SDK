@@ -11,7 +11,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `speechRecogniser` | `VoxrSpeechRecogniser` | -- | Reference to the speech recogniser component |
 | `minConfidence` | `float` | `0.4` | Minimum per-word confidence to accept a command. Commands with confidence below this are rejected. `-1` (no data) bypasses this check. |
 | `minScore` | `float` | `0.6` | Minimum pattern match score (0.0--1.0) to accept a command |
-| `bufferWindow` | `float` | `1.5` | Seconds to buffer consecutive VOSK results before parsing. Merges speech split by mid-command pauses. Recommended: `2.0` on Quest 3. |
+| `bufferWindow` | `float` | `0.5` | Seconds to buffer consecutive VOSK results before parsing. Merges speech split by mid-command pauses. `0.5` matches typical PC latency; raise it on Quest 3 (see [troubleshooting](../troubleshooting.md#commands-split-across-two-results)). |
 | `eagerFlushOnCompleteMatch` | `bool` | `false` | Fire a complete command immediately when the buffered speech can't be extended or completed by more words, instead of waiting out `bufferWindow`. Commands that are a prefix of a longer one, or whose trailing slot could still grow, keep waiting. See [Eager flush](../command-recognition.md#eager-flush-low-latency-complete-commands). |
 | `commandCooldown` | `float` | `0.3` | Per-intent debounce window in seconds. Suppresses duplicate firings of the same intent within this period. |
 | `freeSpeechMode` | `bool` | `false` | When true, disables grammar constraint for unconstrained vocabulary with best-effort command matching |
