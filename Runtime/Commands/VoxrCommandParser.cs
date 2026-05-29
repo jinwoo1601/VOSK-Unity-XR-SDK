@@ -60,6 +60,11 @@ namespace VoXR.Commands
         readonly VoxrCommandResult[] _resultBuf;
         int _resultCount;
 
+        // Per-(command, pattern) eager-commit eligibility (issue #25): true when a full
+        // match of the pattern cannot be extended or completed by further speech — i.e. it
+        // is not a prefix of any other pattern and its trailing element can't grow.
+        readonly bool[][] _canCommitEarly;
+
         // Pooled StringBuilder for TryMatchNumberSequence.
         readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
 
@@ -176,6 +181,8 @@ namespace VoXR.Commands
 #endif
 
             _resultBuf = new VoxrCommandResult[Math.Max(commands.Length, 1)];
+
+            _canCommitEarly = ComputeCanCommitEarly();
 
             RunValidationWarnings(slots);
         }
@@ -861,6 +868,236 @@ namespace VoXR.Commands
             }
 
             return denominator > 0f ? rawScore / denominator : 0f;
+        }
+
+        // -------- Eager-flush support (issue #25) --------
+
+        // Whether a full match of commands[commandIndex].Patterns[patternIndex] may be
+        // committed before bufferWindow elapses. Exposed for tests; the runtime path uses
+        // the command/pattern index from TryEagerCommit's own scan.
+        internal bool CanCommitEarly(int commandIndex, int patternIndex)
+        {
+            return _canCommitEarly != null
+                && (uint)commandIndex < (uint)_canCommitEarly.Length
+                && (uint)patternIndex < (uint)_canCommitEarly[commandIndex].Length
+                && _canCommitEarly[commandIndex][patternIndex];
+        }
+
+        // Single-pass speculative check: does the buffered text already form one complete,
+        // confident command that cannot be extended or completed by more speech? The
+        // selection mirrors ParseInternal's inner loop (searchStart = 0) exactly so the
+        // verdict matches the command the subsequent FlushBuffer will actually fire.
+        internal bool TryEagerCommit(string[] tokens, Dictionary<string, float> wordConfidence,
+            float minScore, float minConfidence)
+        {
+            if (tokens == null || tokens.Length == 0)
+                return false;
+
+            float bestScore = float.MinValue;
+            int bestLiteralCount = -1;
+            int bestCommandIdx = -1;
+            int bestPatternIdx = -1;
+            int bestStartIdx = int.MaxValue;
+            int bestEndIdx = 0;
+
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                var patterns = _commands[ci].Patterns;
+                for (int pi = 0; pi < patterns.Length; pi++)
+                {
+                    for (int startIdx = 0; startIdx < tokens.Length; startIdx++)
+                    {
+                        if (tokens[startIdx] == UnkToken)
+                            continue;
+
+                        var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
+
+                        if (matchResult.Score > 0f &&
+                            (bestScore <= 0f ||
+                             startIdx < bestStartIdx ||
+                             (startIdx == bestStartIdx &&
+                              (matchResult.Score > bestScore ||
+                               (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
+                        {
+                            bestScore = matchResult.Score;
+                            bestLiteralCount = matchResult.LiteralCount;
+                            bestCommandIdx = ci;
+                            bestPatternIdx = pi;
+                            bestStartIdx = startIdx;
+                            bestEndIdx = matchResult.EndIdx;
+                        }
+                    }
+                }
+            }
+
+            if (bestCommandIdx < 0 || bestScore < minScore)
+                return false;
+
+            // The match must span the whole buffer: anything left over (including trailing
+            // [unk]) means an in-progress tail that more speech could still complete.
+            if (bestStartIdx != 0 || bestEndIdx != tokens.Length)
+                return false;
+
+            float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
+            if (confidence >= 0f && confidence < minConfidence)
+                return false;
+
+            return _canCommitEarly[bestCommandIdx][bestPatternIdx];
+        }
+
+        bool[][] ComputeCanCommitEarly()
+        {
+            // Pre-expand every pattern over its optional elements once: a pattern with an
+            // optional element matches with that element present OR absent, so prefix
+            // analysis must consider every concrete form on both sides.
+            var expanded = new List<string[]>[_commands.Length][];
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                var patterns = _commands[ci].Patterns;
+                expanded[ci] = new List<string[]>[patterns.Length];
+                for (int pi = 0; pi < patterns.Length; pi++)
+                    expanded[ci][pi] = ExpandOptionals(patterns[pi]);
+            }
+
+            var result = new bool[_commands.Length][];
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                var patterns = _commands[ci].Patterns;
+                var flags = new bool[patterns.Length];
+                for (int pi = 0; pi < patterns.Length; pi++)
+                    flags[pi] = IsTerminalPattern(patterns[pi])
+                        && !IsPrefixOfAnyOtherPattern(ci, pi, expanded);
+                result[ci] = flags;
+            }
+            return result;
+        }
+
+        // All concrete token sequences for a pattern, including/excluding each optional
+        // element ({?slot} or ?literal). A pattern with no optionals yields one form.
+        static List<string[]> ExpandOptionals(string[] pattern)
+        {
+            var optionalIdx = new List<int>();
+            for (int i = 0; i < pattern.Length; i++)
+                if (IsOptionalLiteral(pattern[i]) || IsOptionalSlot(pattern[i]))
+                    optionalIdx.Add(i);
+
+            int combos = 1 << optionalIdx.Count;
+            var forms = new List<string[]>(combos);
+            var form = new List<string>(pattern.Length);
+            for (int mask = 0; mask < combos; mask++)
+            {
+                form.Clear();
+                for (int i = 0; i < pattern.Length; i++)
+                {
+                    int optPos = optionalIdx.IndexOf(i);
+                    if (optPos >= 0 && (mask & (1 << optPos)) == 0)
+                        continue; // this optional element is omitted in this combo.
+                    form.Add(pattern[i]);
+                }
+                forms.Add(form.ToArray());
+            }
+            return forms;
+        }
+
+        // A pattern is "terminal" when its final element cannot absorb or be followed by
+        // more speech within the same command.
+        bool IsTerminalPattern(string[] pattern)
+        {
+            if (pattern.Length == 0)
+                return false;
+
+            string last = pattern[pattern.Length - 1];
+
+            // A trailing optional element could still be filled by later speech.
+            if (IsOptionalLiteral(last) || IsOptionalSlot(last))
+                return false;
+
+            string slotName = ExtractSlotName(last);
+            if (slotName == null)
+                return true; // required literal — fixed.
+
+            if (!_slotIndex.TryGetValue(slotName, out int slotIdx))
+                return false; // unknown slot (ctor validates) — stay safe.
+
+            if (_slots[slotIdx].Type == VoxrSlotType.NumberSequence)
+                return _slots[slotIdx].MinWords == _slots[slotIdx].MaxWords; // fixed width.
+
+            // Enumerated: terminal only if no surface form (value or alias key) is a word-
+            // prefix of another, so a matched value can't grow into a longer one.
+            return !HasWordPrefixAmbiguity(slotIdx);
+        }
+
+        bool HasWordPrefixAmbiguity(int slotIdx)
+        {
+            // Surface forms (values + alias keys), already split into words by AddSlotEntry.
+            var forms = new List<string[]>();
+            foreach (var list in _slotLookups[slotIdx].Values)
+                foreach (var entry in list)
+                    forms.Add(entry.Words);
+
+            for (int i = 0; i < forms.Count; i++)
+                for (int j = 0; j < forms.Count; j++)
+                {
+                    if (i == j) continue;
+                    if (IsWordPrefix(forms[i], forms[j]))
+                        return true;
+                }
+            return false;
+        }
+
+        // True if any concrete form of this pattern is a compatible prefix of any concrete
+        // form of a different pattern (so more speech could complete the longer command).
+        bool IsPrefixOfAnyOtherPattern(int ci, int pi, List<string[]>[][] expanded)
+        {
+            var pForms = expanded[ci][pi];
+            for (int cj = 0; cj < _commands.Length; cj++)
+            {
+                var qPatterns = expanded[cj];
+                for (int pj = 0; pj < qPatterns.Length; pj++)
+                {
+                    if (cj == ci && pj == pi) continue;
+                    var qForms = qPatterns[pj];
+                    for (int a = 0; a < pForms.Count; a++)
+                        for (int b = 0; b < qForms.Count; b++)
+                            if (pForms[a].Length < qForms[b].Length
+                                && IsCompatiblePrefix(pForms[a], qForms[b]))
+                                return true;
+                }
+            }
+            return false;
+        }
+
+        static bool IsCompatiblePrefix(string[] p, string[] q)
+        {
+            for (int i = 0; i < p.Length; i++)
+                if (!TokensCompatible(p[i], q[i]))
+                    return false;
+            return true;
+        }
+
+        // Conservative: any slot-involving position is treated as compatible (slots may
+        // overlap), so uncertainty blocks early commit. Two literals match only when equal
+        // after stripping a leading optional '?'.
+        static bool TokensCompatible(string a, string b)
+        {
+            if (ExtractSlotName(a) != null || ExtractSlotName(b) != null)
+                return true;
+            return string.Equals(StripOptionalLiteral(a), StripOptionalLiteral(b), StringComparison.Ordinal);
+        }
+
+        static string StripOptionalLiteral(string element)
+        {
+            return IsOptionalLiteral(element) ? element.Substring(1) : element;
+        }
+
+        static bool IsWordPrefix(string[] shorter, string[] longer)
+        {
+            if (shorter.Length >= longer.Length)
+                return false;
+            for (int i = 0; i < shorter.Length; i++)
+                if (!string.Equals(shorter[i], longer[i], StringComparison.Ordinal))
+                    return false;
+            return true;
         }
     }
 }

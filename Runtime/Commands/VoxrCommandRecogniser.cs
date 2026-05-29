@@ -36,6 +36,13 @@ namespace VoXR.Commands
                  "Set to 0 to disable buffering (v2.2 behaviour).")]
         [SerializeField] float bufferWindow = 0.5f;
 
+        [Tooltip("When the buffered speech already forms a complete command that cannot be " +
+                 "extended or completed by more words, flush and fire immediately instead " +
+                 "of waiting out bufferWindow. Zero latency for unambiguous commands; " +
+                 "commands that are a prefix of a longer one still wait the full window. " +
+                 "Opt-in — off preserves the time-only buffering behaviour.")]
+        [SerializeField] bool eagerFlushOnCompleteMatch = false;
+
         [Tooltip("Minimum seconds between firing the same intent. " +
                  "Prevents duplicate commands from rapid VOSK results. " +
                  "Set to 0 to disable debounce.")]
@@ -257,6 +264,7 @@ namespace VoXR.Commands
 
         // Test-only setters. Production callers configure via the Inspector.
         internal float BufferWindow { set => bufferWindow = value; }
+        internal bool EagerFlushOnCompleteMatch { set => eagerFlushOnCompleteMatch = value; }
         internal float CommandCooldown { set => commandCooldown = value; }
         internal VoxrSpeechRecogniser SpeechRecogniser
         {
@@ -427,6 +435,13 @@ namespace VoXR.Commands
 
             // Append to buffer and reset timer
             _buffer.Append(result.Text, result.Words, Time.time);
+
+            // Eager flush: if the buffered speech already forms a complete command that
+            // cannot be extended or completed by more words, flush now instead of waiting
+            // out bufferWindow. Skipped while a command is pending so confirm/follow-up
+            // stays on the timer path.
+            if (eagerFlushOnCompleteMatch && !_pending.HasPending && ShouldEagerFlush())
+                FlushBuffer();
         }
 
         void FlushBuffer()
@@ -441,6 +456,24 @@ namespace VoXR.Commands
             var words = _buffer.GetWordsSpan();
             ProcessParsedResults(text, words);
             _buffer.ClearWords();
+        }
+
+        // Speculative check used by HandleResult: peek (don't consume) the buffer and ask
+        // the parser whether it already forms one complete, terminal, confident command.
+        bool ShouldEagerFlush()
+        {
+            string text = _buffer.PeekText();
+            if (text.Length == 0)
+                return false;
+
+            string[] tokens = text.Split(VoxrCommandParser.SplitSeparator,
+                StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0)
+                return false;
+
+            var words = _buffer.GetWordsSpan();
+            var wordConfidence = _parser.InstanceBuildWordConfidence(words);
+            return _parser.TryEagerCommit(tokens, wordConfidence, minScore, minConfidence);
         }
 
         void ProcessParsedResults(string text, VoxrWord[] words)
