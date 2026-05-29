@@ -210,6 +210,18 @@ If the speaker says "launch missiles" *pause* "target hotel one" and both result
 
 **Tuning:** The default is 1.5s. Quest 3 VOSK latency adds ~0.5--1.0s to inter-result gaps, so 2.0s is more reliable on device. Don't exceed ~2.5--3.0s or unrelated utterances may merge ("cross-command bleed").
 
+### Eager flush (low-latency complete commands)
+
+By default the buffer is purely time-driven: every command -- complete or not -- waits the full `bufferWindow` before firing. Enable **Eager Flush On Complete Match** in the Inspector to fire a command the instant the buffered speech forms a complete match that *cannot* be extended or completed by more words:
+
+- **Complete and unambiguous** -> fires immediately, with zero buffer latency.
+- **A prefix of a longer command**, or a **trailing slot that could still grow** (a multi-word enumerated value such as `"red"` -> `"red dragon"`, or a variable-length number sequence) -> keeps waiting the full window, so split commands are still recovered.
+- **Split command** -> fires as soon as its second half completes, instead of waiting another full window on top.
+
+The feature is off by default; leaving it off preserves the exact time-only behaviour above. Each command's eligibility is computed once when commands are configured, so the only per-utterance cost is a single speculative parse of the buffer.
+
+> A command that is *also* a prefix of a longer one (split by a long pause) is the one case eager flush can't accelerate -- see [Known Limitations](../KNOWN_LIMITATIONS.md). Push-to-talk (`VoxrPushToTalkController.ReleaseTalk` -> `FlushPendingBuffer()`) gives those a deterministic, zero-latency endpoint.
+
 ---
 
 ## Sequential Extraction
