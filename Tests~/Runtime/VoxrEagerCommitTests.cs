@@ -1,5 +1,8 @@
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.TestTools;
 using VoXR.Commands;
 
 namespace VoXR.Tests.Runtime
@@ -130,6 +133,91 @@ namespace VoXR.Tests.Runtime
                 Commands(Cmd("enter", P("enter", "{code}"))));
 
             Assert.IsFalse(parser.CanCommitEarly(0, 0), "min < max can absorb more digits");
+        }
+
+        // ---------- Cross-pattern word-level prefix (issue #25, review fix #1) ----------
+
+        [Test]
+        public void CrossSlotMultiWordValue_IsNotCommittable()
+        {
+            // "go {dir}" and "go {place}" have equal element counts, so the element-count
+            // prefix check misses them — but "go north" (a full match of the first) is a word-
+            // prefix of "go north pole" (a full match of the second), so the first must wait.
+            var parser = new VoxrCommandParser(
+                Slots(
+                    new VoxrSlotDefinition("dir", new[] { "north" }),
+                    new VoxrSlotDefinition("place", new[] { "north pole" })),
+                Commands(
+                    Cmd("go_dir", P("go", "{dir}")),
+                    Cmd("go_place", P("go", "{place}"))));
+
+            Assert.IsFalse(parser.CanCommitEarly(0, 0),
+                "\"go north\" is a word-prefix of \"go north pole\"");
+        }
+
+        [Test]
+        public void FixedWidthNumberSequence_WithWiderSibling_IsNotCommittable()
+        {
+            // Both commands end in a fixed-width number sequence. "dial 1 2 3" (a full match of
+            // n3) is a word-prefix of "dial 1 2 3 4 5" (a full match of n5), so the narrower
+            // command must wait. The wider one cannot be a prefix of the narrower, so it stays
+            // committable — the cardinal rule only forbids firing too early, not too late.
+            var parser = new VoxrCommandParser(
+                Slots(
+                    VoxrSlotDefinition.NumberSequence("n3", 3, 3),
+                    VoxrSlotDefinition.NumberSequence("n5", 5, 5)),
+                Commands(
+                    Cmd("dial3", P("dial", "{n3}")),
+                    Cmd("dial5", P("dial", "{n5}"))));
+
+            Assert.IsFalse(parser.CanCommitEarly(0, 0),
+                "the 3-digit command is a word-prefix of the 5-digit one");
+            Assert.IsTrue(parser.CanCommitEarly(1, 0),
+                "the 5-digit command is terminal and is not a prefix of the shorter sibling");
+        }
+
+        [Test]
+        public void SharedVerbDistinctValues_StillCommittable()
+        {
+            // The tight rule must not over-suppress: "select {item}" shares the verb "select"
+            // with "select all", but "all" is not a value of {item}, so "select red" can never
+            // grow into "select all". The slotted command stays eligible for eager commit.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("item", new[] { "red" })),
+                Commands(
+                    Cmd("select_item", P("select", "{item}")),
+                    Cmd("select_all", P("select", "all"))));
+
+            Assert.IsTrue(parser.CanCommitEarly(0, 0),
+                "\"select red\" cannot be extended into \"select all\"");
+        }
+
+        // ---------- Optional-expansion guard (issue #25, review fix #2) ----------
+
+        [Test]
+        public void ManyOptionalElements_DisablesEagerCommitForWholeParser()
+        {
+            // ExpandOptionals enumerates 2^optionals concrete forms; past MaxOptionalExpansion
+            // (12) the parser refuses to analyse and disables eager commit for the whole command
+            // set rather than overflow or partially (and unsoundly) analyse a single pattern.
+            var noisy = Cmd("noisy", P("noisy",
+                "?a", "?b", "?c", "?d", "?e", "?f", "?g", "?h", "?i", "?j", "?k", "?l", "?m"));
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(noisy, Cmd("cease_fire", P("cease", "fire"))));
+
+            LogAssert.Expect(LogType.Warning, new Regex("more than 12 optional"));
+
+            bool overLimit = true, normal = true;
+            Assert.DoesNotThrow(() =>
+            {
+                overLimit = parser.CanCommitEarly(0, 0); // triggers the lazy precompute
+                normal = parser.CanCommitEarly(1, 0);
+            });
+
+            Assert.IsFalse(overLimit, "the over-limit pattern is disabled");
+            Assert.IsFalse(normal,
+                "a normal command in the same set is also disabled (whole-parser, never partial)");
         }
 
         [Test]
