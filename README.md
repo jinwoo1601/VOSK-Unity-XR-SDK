@@ -225,6 +225,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 | Version | Milestone |
 |---|---|
+| 1.3.0 | Automatic session debug log -- every Play Mode match exported to self-describing JSON for post-session analysis |
 | 1.2.0 | Zero-alloc byte-span parsing on the recognition hot path (breaking change to `vosk_bridge_get_result` native ABI) |
 | 1.1.0 | Removed n-best alternatives (breaking change to `VoxrResult` and native ABI) |
 | 1.0.0 | First stable release -- public API committed for the v1.x series |
