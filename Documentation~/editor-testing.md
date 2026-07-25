@@ -54,10 +54,12 @@ The whole session, not just the window's 20-entry history. Each entry is one utt
 - `timestamp` (ISO 8601) and `frame` -- when the utterance was matched.
 - `activeSets` -- the command sets active at that moment.
 - `inputText` -- the transcript that was parsed.
-- `words` -- each recognised word with its confidence and start/end times.
+- `words` -- each recognised word with its confidence and start/end times. Empty when no per-word data was available, as with injected text.
 - `attempts` -- every command definition evaluated against the utterance: `intent`, `pattern`, `score` vs `minScore`, `aggregateConfidence` vs `minConfidence`, extracted `slots`, `accepted`, and `rejectReason` when it did not fire.
 
-The file carries a `schemaVersion`, package and Unity versions, session start/end timestamps, and a `readme` field describing the format, so external tooling can consume it without reading the SDK source. A confidence of `-1` means VOSK supplied no per-word confidence data for that utterance (as with injected text).
+Each slot carries `startWord` and `endWord` -- a half-open `[startWord, endWord)` range of **token indices into the whitespace-split `inputText`**, not into the `words` array. So a slot filled by a single token spans `[n, n+1)`, and the range stays meaningful even when `words` is empty.
+
+The file carries a `schemaVersion`, package and Unity versions, session start/end timestamps, and a `readme` field describing the format, so external tooling can consume it without reading the SDK source. A confidence of `-1` means no per-word confidence data was available for that utterance.
 
 This makes a session readable by scripts or LLM tooling for questions the live window cannot answer -- which commands were rejected just under threshold across a whole playtest, which words consistently come back low-confidence, or which slots repeatedly fail to extract.
 

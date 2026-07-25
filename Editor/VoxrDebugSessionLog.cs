@@ -31,8 +31,11 @@ namespace VoXR.Editor
             + "Each entry is one utterance; each attempt within it is one command pattern evaluated "
             + "against that utterance. An attempt fired when accepted=true, otherwise rejectReason "
             + "says why it did not. score is compared against minScore and aggregateConfidence "
-            + "against minConfidence; a confidence of -1 means VOSK supplied no per-word confidence "
-            + "data for that utterance. Word/slot indices refer to positions in the words array.";
+            + "against minConfidence; a confidence of -1 means no per-word confidence data was "
+            + "available for that utterance, in which case the words array is empty too (as with "
+            + "injected text). Slot startWord/endWord are half-open [startWord, endWord) indices "
+            + "into the whitespace-split inputText, not into the words array; they stay valid "
+            + "even when words is empty.";
 
         static readonly List<Entry> Entries = new List<Entry>();
         static string _sessionStart;
