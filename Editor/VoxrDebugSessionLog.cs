@@ -38,8 +38,23 @@ namespace VoXR.Editor
             + "into the whitespace-split inputText, not into the words array; they stay valid "
             + "even when words is empty.";
 
+        const string TestRunKey = "VoXR.DebugSessionLog.TestRunActive";
+
         static readonly List<Entry> Entries = new List<Entry>();
         static string _sessionStart;
+
+        /// <summary>
+        /// Set by the Test Runner hook for the duration of a run. Backed by
+        /// <see cref="SessionState"/> rather than a static field because entering Play Mode
+        /// reloads the domain, which would wipe the flag exactly when it is needed. It is
+        /// also cleared when the editor closes, so an interrupted run cannot suppress
+        /// exports indefinitely.
+        /// </summary>
+        internal static bool TestRunActive
+        {
+            get => SessionState.GetBool(TestRunKey, false);
+            set => SessionState.SetBool(TestRunKey, value);
+        }
 
         static VoxrDebugSessionLog()
         {
@@ -77,6 +92,8 @@ namespace VoXR.Editor
 
         static void OnDiagnosticsPublished(VoxrCommandRecogniser sender, VoxrMatchDiagnostics diag)
         {
+            if (TestRunActive)
+                return;
             if (!EditorApplication.isPlaying)
                 return;
             Entries.Add(BuildEntry(sender, diag));

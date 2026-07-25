@@ -47,7 +47,9 @@ The Console logs the exact path on export. `Library/` is not version-controlled,
 
 Export is always on, requires no setup, and needs no debug window open -- the collector runs headless. A session that produced no matches writes no file.
 
-Batch-mode runs are skipped. A `-runTests` or CI invocation drives the same Play Mode diagnostics, but exporting there would churn through the ten retained slots and evict real playtest sessions, so the collector stays inactive when `Application.isBatchMode` is true.
+Test runs are skipped. Both a `-runTests`/CI invocation and an in-editor Test Runner run drive the same Play Mode diagnostics, but exporting from them would churn through the ten retained slots and evict real playtest sessions. The collector stays inactive when `Application.isBatchMode` is true, and a Test Runner callback flags it for the duration of any in-editor run.
+
+That callback lives in its own assembly, compiled only when `com.unity.test-framework` is installed, so the package takes no dependency on the test framework. Without it you still get the batch-mode guard.
 
 ### What Is Recorded
 

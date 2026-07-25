@@ -168,5 +168,40 @@ namespace VoXR.Tests.Editor
             StringAssert.Contains("\"intent\":\"cease_fire\"", json);
             StringAssert.Contains("\"accepted\":true", json);
         }
+
+        /// <summary>
+        /// This test is itself running under the Test Runner, so the hook's RunStarted
+        /// callback must already have fired. If the hook assembly failed to compile or its
+        /// callbacks were never registered, this is the assertion that catches it.
+        /// </summary>
+        [Test]
+        public void TestRunActive_IsSetWhileTheTestRunnerDrivesThisRun()
+        {
+            Assert.IsTrue(
+                VoxrDebugSessionLog.TestRunActive,
+                "Test Runner hook did not flag the run — the session log would export "
+                    + "on exit from an in-editor test run and evict real playtest logs."
+            );
+        }
+
+        [Test]
+        public void TestRunActive_SurvivesAsSessionState()
+        {
+            // Round-trips through SessionState rather than a static field, so the flag
+            // outlives the domain reload that entering Play Mode triggers.
+            bool original = VoxrDebugSessionLog.TestRunActive;
+            try
+            {
+                VoxrDebugSessionLog.TestRunActive = false;
+                Assert.IsFalse(VoxrDebugSessionLog.TestRunActive);
+
+                VoxrDebugSessionLog.TestRunActive = true;
+                Assert.IsTrue(VoxrDebugSessionLog.TestRunActive);
+            }
+            finally
+            {
+                VoxrDebugSessionLog.TestRunActive = original;
+            }
+        }
     }
 }
