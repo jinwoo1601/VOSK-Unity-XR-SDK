@@ -164,5 +164,5 @@ On Android, audio is captured on a native thread via JNI `AudioRecord`. Results 
 - [Command Recognition](command-recognition.md) -- Learn how the full command parsing pipeline works, including patterns, slots, scoring, and grammar modes
 - [Command Sets](command-sets.md) -- Organise commands into switchable groups for mode-specific grammars
 - [Inspector Authoring](inspector-authoring.md) -- Set up commands without writing code using ScriptableObject assets
-- [Editor Testing](editor-testing.md) -- Iterate without deploying to Quest using the debug window, live mic, and text injection
+- [Editor Testing](editor-testing.md) -- Iterate without deploying to Quest using the debug window, session debug log, live mic, and text injection
 - [Push-to-Talk and Error Handling](push-to-talk.md) -- Implement push-to-talk and handle errors gracefully

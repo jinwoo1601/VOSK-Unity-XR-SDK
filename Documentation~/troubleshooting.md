@@ -46,6 +46,7 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 - Lower `minScore` and `minConfidence` temporarily to see if matches are being filtered by thresholds.
 - Use `OnUnrecognisedSpeech` to log raw transcripts and compare against your patterns.
 - Open the [Command Debug Window](editor-testing.md) to see the full match breakdown: which patterns were tried, what score each received, and why they were accepted or rejected.
+- For a pattern across a whole playtest rather than one utterance, read the [session debug log](editor-testing.md#session-debug-log) written to `Library/VoxrDebugLogs/` when Play Mode ends -- it records every match attempt of the session, so repeated near-threshold rejections are easy to spot.
 
 ### Commands match but with wrong slot values
 

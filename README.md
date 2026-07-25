@@ -34,6 +34,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 **Testing & Iteration**
 - Editor command debug window with live audio meters, match breakdowns, and match history
+- Automatic session debug log -- every match of a Play Mode session exported to self-describing JSON for post-session analysis
 - Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe pure-C# API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
@@ -162,7 +163,7 @@ For full documentation, see the [documentation index](Documentation~/index.md).
 - [Command Recognition](Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring, pending commands
 - [Command Sets](Documentation~/command-sets.md) -- named sets, runtime mode switching
 - [Inspector Authoring](Documentation~/inspector-authoring.md) -- zero-code ScriptableObject setup
-- [Editor Testing](Documentation~/editor-testing.md) -- debug window, live mic, text injection, batch runner
+- [Editor Testing](Documentation~/editor-testing.md) -- debug window, session debug log, live mic, text injection, batch runner
 - [Push-to-Talk](Documentation~/push-to-talk.md) -- PTT pattern and error handling
 - [API Reference](Documentation~/api/speech-recogniser.md) -- full API documentation
 - [Troubleshooting](Documentation~/troubleshooting.md) -- common issues and platform support

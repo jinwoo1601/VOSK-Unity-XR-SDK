@@ -391,5 +391,5 @@ Use grammar mode (the default) for all command-driven features. Only enable free
 
 - [Command Sets](command-sets.md) -- Group commands into switchable named sets for mode-specific grammars
 - [Inspector Authoring](inspector-authoring.md) -- Define commands and slots with ScriptableObject assets instead of code
-- [Editor Testing](editor-testing.md) -- Test commands with the debug window, text injection, and batch runner
+- [Editor Testing](editor-testing.md) -- Test commands with the debug window, session debug log, text injection, and batch runner
 - [Known Limitations](../KNOWN_LIMITATIONS.md) -- VOSK model quirks, homophones, and recognition edge cases
