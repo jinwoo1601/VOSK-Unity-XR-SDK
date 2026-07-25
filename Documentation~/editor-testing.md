@@ -47,6 +47,8 @@ The Console logs the exact path on export. `Library/` is not version-controlled,
 
 Export is always on, requires no setup, and needs no debug window open -- the collector runs headless. A session that produced no matches writes no file.
 
+Batch-mode runs are skipped. A `-runTests` or CI invocation drives the same Play Mode diagnostics, but exporting there would churn through the ten retained slots and evict real playtest sessions, so the collector stays inactive when `Application.isBatchMode` is true.
+
 ### What Is Recorded
 
 The whole session, not just the window's 20-entry history. Each entry is one utterance:

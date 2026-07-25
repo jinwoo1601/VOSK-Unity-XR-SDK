@@ -16,8 +16,9 @@ namespace VoXR.Editor
     /// <summary>
     /// Records every <see cref="VoxrMatchDiagnostics"/> published during Play Mode and writes
     /// the whole session to <c>Library/VoxrDebugLogs/</c> when Play Mode ends, so recognition
-    /// behaviour can be analysed after the fact by tooling. Always on; a session that produced
-    /// no diagnostics writes no file.
+    /// behaviour can be analysed after the fact by tooling. Always on in the interactive
+    /// editor; batch-mode runs are skipped, and a session that produced no diagnostics
+    /// writes no file.
     /// </summary>
     [InitializeOnLoad]
     internal static class VoxrDebugSessionLog
@@ -42,6 +43,12 @@ namespace VoXR.Editor
 
         static VoxrDebugSessionLog()
         {
+            // Batch-mode runs (CI, -runTests) are not playtests, but they drive the same
+            // Play Mode diagnostics. Exporting there would churn through the retention
+            // pool and evict real playtest sessions, so stay unsubscribed entirely.
+            if (Application.isBatchMode)
+                return;
+
             EditorApplication.playModeStateChanged -= OnPlayModeChanged;
             EditorApplication.playModeStateChanged += OnPlayModeChanged;
             VoxrCommandRecogniser.DiagnosticsPublished -= OnDiagnosticsPublished;
