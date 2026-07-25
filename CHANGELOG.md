@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Command debug results are now auto-exported to disk when Play Mode ends. Every `VoxrMatchDiagnostics` entry produced during a session — the full session, not the debug window's rolling 20-entry history — is written to `<project>/Library/VoxrDebugLogs/session-<timestamp>.json`, with the path logged to the Console. Each entry records the transcript, per-word confidences, active command sets, and every match attempt (intent, pattern, score vs `minScore`, aggregate confidence vs `minConfidence`, extracted slots, reject reason, accepted flag). The file is self-describing — schema version, package/Unity versions, and a `readme` field — so scripts or LLM tooling can analyse recognition behaviour after a playtest without reading the SDK source. Always on, no setup, and the debug window does not need to be open; the ten most recent sessions are retained and a session with no matches writes nothing. Editor-only and compiled out of builds, like the diagnostics it records. ([#28](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/28))
+
 ## [1.2.2] - 2026-05-29
 
 ### Added

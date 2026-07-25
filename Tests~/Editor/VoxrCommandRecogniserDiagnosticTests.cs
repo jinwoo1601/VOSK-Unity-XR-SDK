@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
 using VoXR;
@@ -225,6 +226,62 @@ namespace VoXR.Tests.Editor
 
             Assert.AreEqual("", recogniser.LastPartialResult);
             Object.DestroyImmediate(go);
+        }
+
+        // 4.13
+        [Test]
+        public void DiagnosticsPublished_FiresPerUtterance_WithSenderAndDiagnostics()
+        {
+            ConfigureSync();
+
+            var senders = new List<VoxrCommandRecogniser>();
+            var published = new List<VoxrMatchDiagnostics>();
+            void Handler(VoxrCommandRecogniser s, VoxrMatchDiagnostics d)
+            {
+                senders.Add(s);
+                published.Add(d);
+            }
+
+            VoxrCommandRecogniser.DiagnosticsPublished += Handler;
+            try
+            {
+                _recogniser.InjectText("cease fire");
+                _recogniser.InjectText("hello world");
+            }
+            finally
+            {
+                VoxrCommandRecogniser.DiagnosticsPublished -= Handler;
+            }
+
+            Assert.AreEqual(2, published.Count);
+            Assert.AreSame(_recogniser, senders[0]);
+            Assert.AreEqual("cease fire", published[0].InputText);
+            Assert.AreEqual("hello world", published[1].InputText);
+        }
+
+        // 4.14
+        [Test]
+        public void DiagnosticsPublished_MatchesLastMatchDiagnostics()
+        {
+            ConfigureSync();
+
+            VoxrMatchDiagnostics published = default;
+            void Handler(VoxrCommandRecogniser s, VoxrMatchDiagnostics d) => published = d;
+
+            VoxrCommandRecogniser.DiagnosticsPublished += Handler;
+            try
+            {
+                _recogniser.InjectText("cease fire");
+            }
+            finally
+            {
+                VoxrCommandRecogniser.DiagnosticsPublished -= Handler;
+            }
+
+            var last = _recogniser.LastMatchDiagnostics;
+            Assert.AreEqual(last.InputText, published.InputText);
+            Assert.AreEqual(last.Frame, published.Frame);
+            Assert.AreSame(last.Attempts, published.Attempts);
         }
     }
 }
