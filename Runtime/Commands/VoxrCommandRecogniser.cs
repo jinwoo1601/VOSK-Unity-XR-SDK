@@ -81,7 +81,22 @@ namespace VoXR.Commands
         public event Action<VoxrCommand> OnCommandCancelled;
 
 #if UNITY_EDITOR
-        internal VoxrMatchDiagnostics LastMatchDiagnostics { get; private set; }
+        // Raised every time diagnostics are published, so editor-side collectors can capture
+        // every utterance losslessly instead of polling LastMatchDiagnostics (which drops
+        // entries whenever two utterances land between polls).
+        internal static event Action<VoxrCommandRecogniser, VoxrMatchDiagnostics> DiagnosticsPublished;
+
+        VoxrMatchDiagnostics _lastMatchDiagnostics;
+
+        internal VoxrMatchDiagnostics LastMatchDiagnostics
+        {
+            get => _lastMatchDiagnostics;
+            private set
+            {
+                _lastMatchDiagnostics = value;
+                DiagnosticsPublished?.Invoke(this, value);
+            }
+        }
 
         internal string LastPartialResult { get; private set; }
 #endif

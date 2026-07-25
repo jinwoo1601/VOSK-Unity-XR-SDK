@@ -3,6 +3,7 @@
     "rootNamespace": "VoXR.Tests.Editor",
     "references": [
         "Jinwoo1601.VoXR.Runtime",
+        "Jinwoo1601.VoXR.Editor",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

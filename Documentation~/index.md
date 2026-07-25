@@ -13,7 +13,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 - [Command Sets](command-sets.md) -- Runtime mode switching with named command groups and grammar management
 - [Inspector Authoring](inspector-authoring.md) -- Zero-code setup using ScriptableObject assets in the Unity Inspector
-- [Editor Testing](editor-testing.md) -- Debug window, live microphone, text injection, and batch test runner
+- [Editor Testing](editor-testing.md) -- Debug window, session debug log, live microphone, text injection, and batch test runner
 - [Push-to-Talk and Error Handling](push-to-talk.md) -- Push-to-talk pattern, error handling, and the error code reference
 
 ## API Reference

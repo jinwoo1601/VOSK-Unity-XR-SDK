@@ -33,6 +33,44 @@ The debug window is Editor-only (`#if UNITY_EDITOR`) and has zero cost in builds
 
 ---
 
+## Session Debug Log
+
+The debug window's history is live-only: it holds the last 20 matches and is discarded when Play Mode exits. For post-session analysis, every match the recogniser produces during a Play Mode session is also written to disk automatically.
+
+When Play Mode ends, the session is exported to:
+
+```
+<project>/Library/VoxrDebugLogs/session-<yyyy-MM-dd_HH-mm-ss>.json
+```
+
+The Console logs the exact path on export. `Library/` is not version-controlled, so the logs never enter your repository. The ten most recent sessions are retained; older ones are pruned automatically.
+
+Export is always on, requires no setup, and needs no debug window open -- the collector runs headless. A session that produced no matches writes no file.
+
+Test runs are skipped. Both a `-runTests`/CI invocation and an in-editor Test Runner run drive the same Play Mode diagnostics, but exporting from them would churn through the ten retained slots and evict real playtest sessions. The collector stays inactive when `Application.isBatchMode` is true, and a Test Runner callback flags it for the duration of any in-editor run.
+
+That callback lives in its own assembly, compiled only when `com.unity.test-framework` is installed, so the package takes no dependency on the test framework. Without it you still get the batch-mode guard.
+
+### What Is Recorded
+
+The whole session, not just the window's 20-entry history. Each entry is one utterance:
+
+- `timestamp` (ISO 8601) and `frame` -- when the utterance was matched.
+- `activeSets` -- the command sets active at that moment.
+- `inputText` -- the transcript that was parsed.
+- `words` -- each recognised word with its confidence and start/end times. Empty when no per-word data was available, as with injected text.
+- `attempts` -- every command definition evaluated against the utterance: `intent`, `pattern`, `score` vs `minScore`, `aggregateConfidence` vs `minConfidence`, extracted `slots`, `accepted`, and `rejectReason` when it did not fire.
+
+Each slot carries `startWord` and `endWord` -- a half-open `[startWord, endWord)` range of **token indices into the whitespace-split `inputText`**, not into the `words` array. So a slot filled by a single token spans `[n, n+1)`, and the range stays meaningful even when `words` is empty.
+
+The file carries a `schemaVersion`, package and Unity versions, session start/end timestamps, and a `readme` field describing the format, so external tooling can consume it without reading the SDK source. A confidence of `-1` means no per-word confidence data was available for that utterance.
+
+This makes a session readable by scripts or LLM tooling for questions the live window cannot answer -- which commands were rejected just under threshold across a whole playtest, which words consistently come back low-confidence, or which slots repeatedly fail to extract.
+
+Like the rest of the diagnostics, the collector is Editor-only and compiled out of builds.
+
+---
+
 ## Live Microphone (Windows Editor)
 
 On Windows, `VoxrSpeechRecogniser.StartRecognition()` transparently auto-routes audio through `UnityEngine.Microphone` and a desktop build of `libvosk.dll` via P/Invoke. Existing scenes and user code work with zero changes -- speak into your PC microphone and watch commands fire in the Console.
