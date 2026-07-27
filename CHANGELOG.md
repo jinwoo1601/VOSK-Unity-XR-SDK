@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-28
+
 ### Added
 
 - `prefixHoldSeconds` on `VoxrCommandRecogniser` — a separate, shorter hold for the "complete match, but still extendable" state under `eagerFlushOnCompleteMatch`. Eager flush deliberately refuses to commit a command that is a prefix of a longer one (`orient to heading {heading}` prefixes `orient to heading {heading} mark {mark_sign} {mark}`) or whose trailing slot could still grow, so the common plain form paid the *entire* buffer window — 2.0s of dead air on Quest 3 — for an ambiguity a continuing speaker resolves almost immediately. The refusal to commit early is correct and unchanged; what changes is how long the buffer then waits for that continuation. When `prefixHoldSeconds` is above 0, a held complete match flushes after that much silence instead of the full `bufferWindow`, so the plain form fires in ~0.5–0.8s while the extended form stays speakable. The hold only ever shortens the wait — values above `bufferWindow` are ignored — and it applies solely to a buffer that already parses as one complete, confident, whole-buffer command: partial speech mid-split-command, unmatched speech, and grammars too complex for the eager precompute to analyse all keep the full window. The verdict is re-derived on every VOSK result, so a continuation that arrives restores the full window for the rest of the utterance. Default `0` keeps the previous behaviour exactly. ([#32](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/32))
