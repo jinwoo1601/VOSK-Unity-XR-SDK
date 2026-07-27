@@ -29,6 +29,15 @@ namespace VoXR.Commands
                  "Prevents partial or garbled matches.")]
         [SerializeField] float minScore = 0.6f;
 
+        [Tooltip("How much each in-grammar word the parser skips before a match starts " +
+                 "counts against the score. The parser slides its start point through the " +
+                 "utterance, so without this a short pattern found in the tail of a stray " +
+                 "sentence scores a full 1.0 and fires. At 1.0 the score becomes the " +
+                 "fraction of the utterance the pattern covers, so a one-word command " +
+                 "needs to be most of what was said. Unrecognised ([unk]) filler is never " +
+                 "charged. Set to 0 to disable.")]
+        [SerializeField] float skippedWordPenalty = VoxrCommandParser.DefaultSkippedWordPenalty;
+
         [Tooltip("Time in seconds to wait for additional speech before parsing. " +
                  "Longer values recover split commands but add latency. " +
                  "Default 0.5s matches typical PC latency; use 2.0s on Quest 3, " +
@@ -144,7 +153,8 @@ namespace VoXR.Commands
             _setManager.BuildLookup(commands);
             EnsureAcceptedBuffer(commands.Length);
 
-            _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands);
+            _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands,
+                skippedWordPenalty);
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
             if (!freeSpeechMode && speechRecogniser != null && speechRecogniser.IsModelReady)
@@ -245,7 +255,8 @@ namespace VoXR.Commands
                 throw new InvalidOperationException(
                     "Configure must be called before RebuildParser().");
 
-            _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands);
+            _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands,
+                skippedWordPenalty);
         }
 
         public void RebuildGrammar()
