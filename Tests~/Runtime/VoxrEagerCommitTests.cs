@@ -9,7 +9,9 @@ namespace VoXR.Tests.Runtime
 {
     // Unit tests for the eager-flush precompute (CanCommitEarly) and the speculative
     // TryEagerCommit gate on VoxrCommandParser (issue #25), including the
-    // complete-but-extendable verdict that drives the shortened prefix hold (issue #32).
+    // complete-but-extendable verdict that drives the shortened prefix hold (issue #32)
+    // and the value-aware slot/literal compatibility that frees lone-slot patterns
+    // to commit early (issue #33).
     public class VoxrEagerCommitTests
     {
         static VoxrSlotDefinition[] Slots(params VoxrSlotDefinition[] s) => s;
@@ -191,6 +193,118 @@ namespace VoXR.Tests.Runtime
 
             Assert.IsTrue(parser.CanCommitEarly(0, 0),
                 "\"select red\" cannot be extended into \"select all\"");
+        }
+
+        // ---------- Value-aware slot/literal compatibility (issue #33) ----------
+
+        [Test]
+        public void LoneSlotPattern_VocabularyStartsNoOtherPattern_IsCommittable()
+        {
+            // A bare single-slot pattern used to be judged a potential prefix of every longer
+            // pattern in the grammar, because any slot position counted as compatible with
+            // anything. No surface form of {burn_level} begins with "close" or "decelerate",
+            // so "coast" cannot be the opening of either command and is safe to fire at once.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" })),
+                Commands(
+                    Cmd("set_burn", P("{burn_level}")),
+                    Cmd("close", P("close", "distance")),
+                    Cmd("decelerate", P("decelerate", "{burn_level}"))));
+
+            Assert.IsTrue(parser.CanCommitEarly(0, 0),
+                "no value of {burn_level} starts either of the longer patterns");
+        }
+
+        [Test]
+        public void LoneSlotPattern_ValueStartsAnotherPattern_IsNotCommittable()
+        {
+            // The tighter rule must not over-fire: "hard burn" IS a value of {burn_level}, and
+            // a full match of it is a word-prefix of "hard burn now", so the lone-slot pattern
+            // is genuinely extendable and must keep waiting.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" })),
+                Commands(
+                    Cmd("set_burn", P("{burn_level}")),
+                    Cmd("burn_now", P("hard", "burn", "now"))));
+
+            Assert.IsFalse(parser.CanCommitEarly(0, 0),
+                "\"hard burn\" can still grow into \"hard burn now\"");
+        }
+
+        [Test]
+        public void SlotAfterSharedLiteralRun_VocabularyRulesOutLongerPattern_IsCommittable()
+        {
+            // Value-awareness is not limited to the first element: after the identical literal
+            // "set" the two forms have consumed the same words, so the slot is still word-
+            // aligned and no {level} value is "throttle".
+            var parser = new VoxrCommandParser(
+                Slots(
+                    new VoxrSlotDefinition("level", new[] { "coast" }),
+                    VoxrSlotDefinition.NumberSequence("code", 2, 2)),
+                Commands(
+                    Cmd("set_level", P("set", "{level}")),
+                    Cmd("set_throttle", P("set", "throttle", "{code}"))));
+
+            Assert.IsTrue(parser.CanCommitEarly(0, 0),
+                "\"set coast\" cannot be extended into \"set throttle ...\"");
+        }
+
+        [Test]
+        public void SlotPastAnEarlierSlot_StaysConservativelyHeld()
+        {
+            // The vocabulary test only applies where both forms have provably consumed the same
+            // words. {target} may be one word or two, so {mode} is not reliably facing "two" —
+            // and the hazard is real: "alpha two silent" (target = "alpha two") is a word-prefix
+            // of "alpha two silent now" (target = "alpha"). Past the first slot the check stays
+            // conservative, so the shorter command keeps waiting.
+            var parser = new VoxrCommandParser(
+                Slots(
+                    new VoxrSlotDefinition("target", new[] { "alpha", "alpha two" }),
+                    new VoxrSlotDefinition("mode", new[] { "silent" })),
+                Commands(
+                    Cmd("engage", P("{target}", "{mode}")),
+                    Cmd("engage_now", P("{target}", "two", "silent", "now"))));
+
+            Assert.IsFalse(parser.CanCommitEarly(0, 0),
+                "an earlier slot can shift the words, so the vocabulary test must not be applied");
+        }
+
+        [Test]
+        public void LoneNumberSequenceSlot_NonDigitLiteral_IsCommittable()
+        {
+            // A number sequence matches digit words only, so a fixed-width one standing alone
+            // cannot be the opening of a command that starts with "abort".
+            var parser = new VoxrCommandParser(
+                Slots(VoxrSlotDefinition.NumberSequence("code", 3, 3)),
+                Commands(
+                    Cmd("enter", P("{code}")),
+                    Cmd("abort", P("abort", "now"))));
+
+            Assert.IsTrue(parser.CanCommitEarly(0, 0), "\"abort\" is not a digit word");
+
+            var digitLiteral = new VoxrCommandParser(
+                Slots(VoxrSlotDefinition.NumberSequence("code", 3, 3)),
+                Commands(
+                    Cmd("enter", P("{code}")),
+                    Cmd("nine_lives", P("nine", "lives", "left"))));
+
+            Assert.IsFalse(digitLiteral.CanCommitEarly(0, 0),
+                "a code can start with the digit word \"nine\", so the pair stays held");
+        }
+
+        [Test]
+        public void TryEagerCommit_LoneSlotCommand_ReturnsCommit()
+        {
+            // The payoff at the buffer level: a bare {burn_level} utterance now commits instead
+            // of paying the whole buffer window for an ambiguity that does not exist.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" })),
+                Commands(
+                    Cmd("set_burn", P("{burn_level}")),
+                    Cmd("decelerate", P("decelerate", "{burn_level}"))));
+
+            Assert.AreEqual(EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("coast"), null, 0.6f, 0.4f));
         }
 
         // ---------- Optional-expansion guard (issue #25, review fix #2) ----------

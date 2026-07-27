@@ -1333,22 +1333,56 @@ namespace VoXR.Commands
             return false;
         }
 
-        static bool IsCompatiblePrefix(string[] p, string[] q)
+        bool IsCompatiblePrefix(string[] p, string[] q)
         {
+            // The element-wise walk assumes p[i] and q[i] cover the same words, which only
+            // holds while both sides have consumed identical literals. The first element past
+            // that run is still word-aligned, so a slot there can be judged against its own
+            // vocabulary (issue #33); beyond it a slot may have consumed a different number of
+            // words on each side, so the alignment — and with it the vocabulary check — is gone.
+            int alignedIdx = SharedLiteralPrefixLen(p, q);
+
             for (int i = 0; i < p.Length; i++)
-                if (!TokensCompatible(p[i], q[i]))
+                if (!TokensCompatible(p[i], q[i], i == alignedIdx))
                     return false;
             return true;
         }
 
-        // Conservative: any slot-involving position is treated as compatible (slots may
-        // overlap), so uncertainty blocks early commit. Two literals match only when equal
-        // after stripping a leading optional '?'.
-        static bool TokensCompatible(string a, string b)
+        // Two literals match only when equal after stripping a leading optional '?'. Slot
+        // positions are conservatively compatible — slot-vs-slot because two vocabularies may
+        // overlap, slot-vs-literal because a misaligned slot may not be facing that word at
+        // all. At a word-aligned position (valueAware) a slot facing a literal is compatible
+        // only when some surface form of the slot really does start with that word (issue
+        // #33); without that test a lone-slot pattern counts as a potential prefix of every
+        // longer pattern in the grammar and can never commit early.
+        bool TokensCompatible(string a, string b, bool valueAware)
         {
-            if (ExtractSlotName(a) != null || ExtractSlotName(b) != null)
+            string aSlot = ExtractSlotName(a);
+            string bSlot = ExtractSlotName(b);
+
+            if (aSlot != null && bSlot != null)
                 return true;
+            if (aSlot != null)
+                return !valueAware || SlotCanStartWithWord(aSlot, StripOptionalLiteral(b));
+            if (bSlot != null)
+                return !valueAware || SlotCanStartWithWord(bSlot, StripOptionalLiteral(a));
+
             return string.Equals(StripOptionalLiteral(a), StripOptionalLiteral(b), StringComparison.Ordinal);
+        }
+
+        // True if some surface form of the slot begins with word, so the slot could account
+        // for a command carrying that literal at the same position. A number sequence matches
+        // digit words only. Unknown slots stay safe.
+        bool SlotCanStartWithWord(string slotName, string word)
+        {
+            if (!_slotIndex.TryGetValue(slotName, out int slotIdx))
+                return true; // unknown slot (ctor validates) — stay safe.
+
+            if (_slots[slotIdx].Type == VoxrSlotType.NumberSequence)
+                return VoxrNumberParser.DigitVocabulary.Contains(word);
+
+            // _slotLookups is keyed by each surface form's first word.
+            return _slotLookups[slotIdx].ContainsKey(word);
         }
 
         static string StripOptionalLiteral(string element)
