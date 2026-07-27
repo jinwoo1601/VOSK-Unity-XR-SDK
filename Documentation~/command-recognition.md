@@ -90,7 +90,7 @@ Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character w
 
 ## Scored Matching
 
-Every match produces a normalised **score** (0.0--1.0) that indicates how well the transcript covers the pattern. The parser uses a sliding start to tolerate preamble, hesitations, and false starts -- the score reflects the quality of the best-positioned match.
+Every match produces a normalised **score** (0.0--1.0) that indicates how well the transcript covers the pattern. The parser uses a sliding start to tolerate preamble, hesitations, and false starts -- the score reflects the quality of the best-positioned match, discounted by how much of the utterance the start had to skip (see [Skipped-word penalty](#skipped-word-penalty)).
 
 Two independent thresholds control what gets through:
 
@@ -102,6 +102,25 @@ commandRecogniser.minConfidence = 0.4f;   // Reject low VOSK word confidence
 **Score** (`VoxrCommand.Score`) is computed by the parser based on how well the transcript satisfies the pattern, normalised against a *dynamic* denominator. Required tokens always count toward that denominator; optional tokens (`?word` literals and `{?slot}` slots) count only when they are actually spoken. An omitted optional therefore drops out of both sides of the ratio rather than diluting it, so a perfect match scores 1.0 whether or not its optional tokens were uttered — taking advantage of optionality is never penalized. A missed *required* token still pulls the score down.
 
 **Confidence** (`VoxrCommand.Confidence`) is the minimum per-word VOSK acoustic confidence across matched tokens. This reflects how certain VOSK was about the words it heard. A value of `-1` means no word-level data was available (e.g. the transcript contained only `[unk]` tokens), which bypasses the `minConfidence` check entirely -- the command is accepted or rejected on score alone.
+
+### Skipped-word penalty
+
+The sliding start can begin a match anywhere in the utterance, and the words it walks past used to cost nothing. That let any stray sentence whose *tail* happened to resemble a short pattern execute it at a full 1.0 — "thrusters port", misheard as "thrusters report", would skip the unmatched "thrusters" and fire a one-word `report` command.
+
+`skippedWordPenalty` (default `1.0`) adds each skipped in-grammar word to the score denominator, so the score becomes the fraction of the utterance the pattern actually covers:
+
+| Utterance | Matched pattern | Score |
+|-----------|-----------------|-------|
+| `disengage` | `["disengage"]` | `1 / 1` = 1.0 |
+| `target disengage` | `["disengage"]` | `1 / (1 + 1)` = 0.5 -- rejected at the default `minScore` |
+| `launch launch all missiles target hotel one` | 5-element `launch_weapon` form | `5 / (5 + 1)` = 0.83 -- still accepted |
+
+The penalty is proportional, so it only bites patterns short enough to be swallowed whole by a stray utterance; longer commands still absorb a false start. Two things are never charged:
+
+- **`[unk]` tokens.** Out-of-grammar preamble and hesitation are exactly what the sliding start is for, so filler VOSK could not resolve stays free.
+- **Words before a previous match ended.** Counting restarts after each extracted command, so chained commands in one utterance ("cease fire resume fire") do not penalise each other.
+
+Set `skippedWordPenalty` to `0` to restore the previous behaviour. Raise it above `1.0` to demand that a command be an even larger share of what was said.
 
 When tuning thresholds:
 - Start with the defaults (`minScore=0.6`, `minConfidence=0.4`) and adjust based on testing.

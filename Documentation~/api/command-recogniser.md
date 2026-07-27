@@ -11,6 +11,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `speechRecogniser` | `VoxrSpeechRecogniser` | -- | Reference to the speech recogniser component |
 | `minConfidence` | `float` | `0.4` | Minimum per-word confidence to accept a command. Commands with confidence below this are rejected. `-1` (no data) bypasses this check. |
 | `minScore` | `float` | `0.6` | Minimum pattern match score (0.0--1.0) to accept a command |
+| `skippedWordPenalty` | `float` | `1.0` | How much each in-grammar word the sliding start skips before a match counts against the score. At `1.0` the score becomes the fraction of the utterance the pattern covers. `0` disables it. See [Skipped-word penalty](../command-recognition.md#skipped-word-penalty). |
 | `bufferWindow` | `float` | `0.5` | Seconds to buffer consecutive VOSK results before parsing. Merges speech split by mid-command pauses. `0.5` matches typical PC latency; raise it on Quest 3 (see [troubleshooting](../troubleshooting.md#commands-split-across-two-results)). |
 | `eagerFlushOnCompleteMatch` | `bool` | `false` | Fire a complete command immediately when the buffered speech can't be extended or completed by more words, instead of waiting out `bufferWindow`. Commands that are a prefix of a longer one, or whose trailing slot could still grow, keep waiting. See [Eager flush](../command-recognition.md#eager-flush-low-latency-complete-commands). |
 | `commandCooldown` | `float` | `0.3` | Per-intent debounce window in seconds. Suppresses duplicate firings of the same intent within this period. |

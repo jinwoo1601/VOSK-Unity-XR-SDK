@@ -18,18 +18,20 @@ namespace VoXR.Testing
         readonly float _minConfidence;
 
         public VoxrBatchTestRunner(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
-            float minScore = 0.6f, float minConfidence = 0.4f)
+            float minScore = 0.6f, float minConfidence = 0.4f,
+            float skippedWordPenalty = VoxrCommandParser.DefaultSkippedWordPenalty)
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
             if (commands == null) throw new ArgumentNullException(nameof(commands));
 
-            _parser = new VoxrCommandParser(slots, commands);
+            _parser = new VoxrCommandParser(slots, commands, skippedWordPenalty);
             _minScore = minScore;
             _minConfidence = minConfidence;
         }
 
         public VoxrBatchTestRunner(VoxrSlotDefinition[] slots, VoxrCommandSet[] sets,
-            string[] activeSetNames, float minScore = 0.6f, float minConfidence = 0.4f)
+            string[] activeSetNames, float minScore = 0.6f, float minConfidence = 0.4f,
+            float skippedWordPenalty = VoxrCommandParser.DefaultSkippedWordPenalty)
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
             if (sets == null) throw new ArgumentNullException(nameof(sets));
@@ -56,7 +58,7 @@ namespace VoXR.Testing
                 offset += c.Length;
             }
 
-            _parser = new VoxrCommandParser(slots, commands);
+            _parser = new VoxrCommandParser(slots, commands, skippedWordPenalty);
             _minScore = minScore;
             _minConfidence = minConfidence;
         }

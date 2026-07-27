@@ -18,6 +18,13 @@ namespace VoXR.Commands
         const float RequiredSlotMissPenalty = -1.0f;
         const float RequiredLiteralMissPenalty = -0.5f;
 
+        // Weight added to the score denominator per in-grammar word the sliding start skips
+        // before a match begins (issue #31). At 1.0 the score becomes the fraction of the
+        // utterance the pattern actually covers, so a lone one-element pattern found in the
+        // tail of a longer utterance scores 0.5 instead of a full 1.0 and falls below the
+        // default minScore. 0 restores the previous behaviour (skipped words cost nothing).
+        internal const float DefaultSkippedWordPenalty = 1.0f;
+
         // Upper bound on optional elements in a single pattern for eager-commit analysis
         // (issue #25). ExpandOptionals enumerates 2^optionals concrete forms; past this the
         // expansion is unbounded/overflowing, so the whole parser disables eager commit
@@ -28,6 +35,7 @@ namespace VoXR.Commands
 
         readonly VoxrSlotDefinition[] _slots;
         readonly VoxrCommandDefinition[] _commands;
+        readonly float _skippedWordPenalty;
 
         // Per-slot lookup: first word -> list of (fullValue, wordCount), sorted longest first.
         readonly Dictionary<string, List<SlotValueEntry>>[] _slotLookups;
@@ -85,13 +93,15 @@ namespace VoXR.Commands
             public int WordCount;
         }
 
-        public VoxrCommandParser(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands)
+        public VoxrCommandParser(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
+            float skippedWordPenalty = DefaultSkippedWordPenalty)
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
             if (commands == null) throw new ArgumentNullException(nameof(commands));
 
             _slots = slots;
             _commands = commands;
+            _skippedWordPenalty = skippedWordPenalty > 0f ? skippedWordPenalty : 0f;
 
             // Build slot name -> index mapping
             _slotIndex = new Dictionary<string, int>(slots.Length, StringComparer.Ordinal);
@@ -318,6 +328,8 @@ namespace VoXR.Commands
             while (searchStart < tokens.Length)
             {
                 float bestScore = float.MinValue;
+                float bestRawScore = 0f;
+                float bestDenominator = 0f;
                 int bestLiteralCount = -1;
                 int bestCommandIdx = -1;
                 int bestPatternIdx = -1;
@@ -345,6 +357,8 @@ namespace VoXR.Commands
                                    (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
                             {
                                 bestScore = matchResult.Score;
+                                bestRawScore = matchResult.RawScore;
+                                bestDenominator = matchResult.Denominator;
                                 bestLiteralCount = matchResult.LiteralCount;
                                 bestCommandIdx = ci;
                                 bestPatternIdx = pi;
@@ -371,6 +385,25 @@ namespace VoXR.Commands
                 // Safety: prevent infinite loop if a match consumes no tokens
                 if (bestEndIdx <= searchStart)
                     break;
+
+                // Charge the winner for the in-grammar words the sliding start walked past
+                // (issue #31). Skipped words cost nothing on their own, so a short pattern
+                // found in the tail of a stray utterance ("thrusters report" matching the
+                // one-word "report" command) used to score a full 1.0 and fire. Adding them
+                // to the denominator makes the score the fraction of the utterance the
+                // pattern covers, which only bites patterns short enough to be swallowed
+                // whole. [unk] runs are excluded — tolerating out-of-grammar preamble and
+                // hesitation is what the sliding start is for. The penalty is applied after
+                // selection so it filters via minScore without changing which pattern wins,
+                // and it measures from searchStart, so a second command in a multi-command
+                // utterance starts clean.
+                if (_skippedWordPenalty > 0f && bestStartIdx > searchStart)
+                {
+                    int skipped = CountRecognisedTokens(tokens, searchStart, bestStartIdx);
+                    if (skipped > 0)
+                        bestScore = bestRawScore
+                            / (bestDenominator + skipped * _skippedWordPenalty);
+                }
 
                 float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
 
@@ -532,6 +565,8 @@ namespace VoXR.Commands
         struct MatchResult
         {
             public float Score;
+            public float RawScore;
+            public float Denominator;
             public int LiteralCount;
             public int SlotCount;
             public int EndIdx;
@@ -636,6 +671,8 @@ namespace VoXR.Commands
             return new MatchResult
             {
                 Score = normalizedScore,
+                RawScore = rawScore,
+                Denominator = denominator,
                 LiteralCount = literalCount,
                 SlotCount = slotCount,
                 EndIdx = tokenIdx,
@@ -763,6 +800,17 @@ namespace VoXR.Commands
                 if (!string.IsNullOrEmpty(w.Text) && !_wordConfidencePool.ContainsKey(w.Text))
                     _wordConfidencePool[w.Text] = w.Confidence;
             return _wordConfidencePool;
+        }
+
+        // Tokens in [startIdx, endIdx) that VOSK resolved to a grammar word, i.e. excluding
+        // the [unk] filler the sliding start is meant to skip for free.
+        internal static int CountRecognisedTokens(string[] tokens, int startIdx, int endIdx)
+        {
+            int count = 0;
+            for (int i = startIdx; i < endIdx; i++)
+                if (tokens[i] != UnkToken)
+                    count++;
+            return count;
         }
 
         internal static float ComputeConfidence(string[] tokens, int startIdx, int endIdx,

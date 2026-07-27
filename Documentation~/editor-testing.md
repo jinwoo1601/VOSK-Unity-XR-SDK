@@ -146,6 +146,8 @@ Assert.IsTrue(results.AllPassed, results.FailureSummary);
 
 `VoxrBatchTestRunner` is pure C# -- no MonoBehaviour dependency and no audio hardware required. It instantiates a `VoxrCommandParser` directly (the same code path that `InjectText` uses internally).
 
+Both constructors also take an optional `skippedWordPenalty` (default `1.0`, matching the recogniser). Pass the value your `VoxrCommandRecogniser` uses if you have tuned it, so batch results predict runtime behaviour -- see [Skipped-word penalty](command-recognition.md#skipped-word-penalty).
+
 For command-set-aware testing:
 
 ```csharp
@@ -193,8 +195,8 @@ Create a `VoxrTestSuiteAsset` via **Assets > Create > VoXR > Test Suite** and au
 
 | Method | Description |
 |--------|-------------|
-| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence)` | Constructor. All commands active. |
-| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence)` | Constructor with named command sets. |
+| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence, skippedWordPenalty)` | Constructor. All commands active. |
+| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence, skippedWordPenalty)` | Constructor with named command sets. |
 | `RunAll(VoxrTestCase[])` | Returns `VoxrBatchResults` with per-case pass/fail. |
 | `Run(VoxrTestCase)` | Returns a single `VoxrTestResult`. |
 | `ToCsv(VoxrBatchResults)` | Static. Exports results as a CSV string. |

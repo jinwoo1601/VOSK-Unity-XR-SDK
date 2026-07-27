@@ -999,5 +999,78 @@ namespace VoXR.Tests.Runtime
 
             Assert.AreEqual(1.0f, score, 0.001f);
         }
+
+        // --- Skipped-word penalty (issue #31) ---
+
+        [Test]
+        public void SkippedWord_ShortPatternInUtteranceTail_FallsBelowDefaultThreshold()
+        {
+            // Issue #31: "disengage" is a one-element pattern. Reached only by skipping the
+            // in-grammar word "target", it used to score a full 1.0 and fire — any stray
+            // utterance whose tail resembles a short pattern could execute it. The skipped
+            // word now counts toward the denominator: 1 / (1 + 1) = 0.5.
+            var parser = CreateParser();
+
+            var result = ParseOne(parser, "target disengage");
+
+            Assert.AreEqual("cease_fire", result.Command.Intent);
+            Assert.AreEqual(0.5f, result.Command.Score, 0.001f);
+            Assert.Less(result.Command.Score, 0.6f,
+                "should now be rejected by the default minScore of 0.6");
+        }
+
+        [Test]
+        public void SkippedWord_UnkFillerNotCharged()
+        {
+            // Tolerating out-of-grammar preamble and hesitation is what the sliding start
+            // is for, so [unk] runs stay free and the score is still a perfect 1.0.
+            var parser = CreateParser();
+
+            var result = ParseOne(parser, "[unk] [unk] disengage");
+
+            Assert.AreEqual("cease_fire", result.Command.Intent);
+            Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void SkippedWord_LongPatternAbsorbsFalseStart()
+        {
+            // The penalty is proportional, so it only bites patterns short enough to be
+            // swallowed by a stray utterance. A six-element pattern reached past one
+            // repeated word scores 5 / (5 + 1) = 0.833 and still clears minScore.
+            var parser = CreateParser();
+
+            var result = ParseOne(parser, "launch launch all missiles target hotel one");
+
+            Assert.AreEqual("launch_weapon", result.Command.Intent);
+            Assert.AreEqual(5f / 6f, result.Command.Score, 0.001f);
+            Assert.Greater(result.Command.Score, 0.6f);
+        }
+
+        [Test]
+        public void SkippedWord_SecondCommandInUtterance_NotCharged()
+        {
+            // Skipped words are counted from where the previous match ended, not from the
+            // start of the utterance, so chained commands are not penalized for each other.
+            var parser = CreateParser();
+
+            var results = parser.Parse("cease fire resume fire");
+
+            Assert.AreEqual(2, results.Length);
+            Assert.AreEqual(1.0f, results[0].Command.Score, 0.001f);
+            Assert.AreEqual("resume_fire", results[1].Command.Intent);
+            Assert.AreEqual(1.0f, results[1].Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void SkippedWord_PenaltyDisabled_RestoresFullScore()
+        {
+            var parser = new VoxrCommandParser(MakeSlots(), MakeCommands(), 0f);
+
+            var result = ParseOne(parser, "target disengage");
+
+            Assert.AreEqual("cease_fire", result.Command.Intent);
+            Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
+        }
     }
 }
