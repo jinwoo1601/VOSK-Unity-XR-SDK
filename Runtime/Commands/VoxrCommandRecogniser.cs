@@ -31,8 +31,10 @@ namespace VoXR.Commands
 
         [Tooltip("Time in seconds to wait for additional speech before parsing. " +
                  "Longer values recover split commands but add latency. " +
-                 "Default 0.5s matches typical PC latency; bump to 1.5s on Quest 3, " +
-                 "where VOSK adds ~0.5–1.0s to inter-result gaps. " +
+                 "Default 0.5s matches typical PC latency; use 2.0s on Quest 3, " +
+                 "where VOSK adds ~0.5–1.0s to inter-result gaps and the measured " +
+                 "gap between results runs ~1.9–2.1s. Past ~2.5s unrelated " +
+                 "utterances start merging. " +
                  "Set to 0 to disable buffering (v2.2 behaviour).")]
         [SerializeField] float bufferWindow = 0.5f;
 
