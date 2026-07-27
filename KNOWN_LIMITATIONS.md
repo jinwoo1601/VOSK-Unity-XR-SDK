@@ -305,6 +305,11 @@ deliberate trade-offs rather than oversights.
   Eager flush resolves this conservatively by waiting (correctness over latency);
   non-prefix commands are unaffected and fire instantly.
 - **Workaround**:
+  - Set `prefixHoldSeconds` (e.g. 0.5–0.8) to bound the wait. The ambiguity is
+    only over a continuation, which a continuing speaker begins almost
+    immediately, so the prefix command fires after that much silence instead of
+    the full `bufferWindow`. It shortens the wait rather than removing it — the
+    tradeoff above is unchanged, just cheaper.
   - Use push-to-talk (`VoxrPushToTalkController`); `ReleaseTalk` calls
     `FlushPendingBuffer()`, giving the prefix command a deterministic,
     zero-latency endpoint.

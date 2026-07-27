@@ -239,7 +239,26 @@ By default the buffer is purely time-driven: every command -- complete or not --
 
 The feature is off by default; leaving it off preserves the exact time-only behaviour above. Each command's eligibility is computed once when commands are configured, so the only per-utterance cost is a single speculative parse of the buffer.
 
-> A command that is *also* a prefix of a longer one (split by a long pause) is the one case eager flush can't accelerate -- see [Known Limitations](../KNOWN_LIMITATIONS.md). Push-to-talk (`VoxrPushToTalkController.ReleaseTalk` -> `FlushPendingBuffer()`) gives those a deterministic, zero-latency endpoint.
+### Prefix hold (shortening the ambiguous wait)
+
+The second bullet above -- a complete command that more speech could still extend -- has to wait, but it does not have to wait the *whole* window. It is only waiting on a continuation, and a speaker who is continuing starts almost immediately; the rest of `bufferWindow` is dead air. `prefixHoldSeconds` gives that state its own, shorter timer:
+
+```csharp
+commandRecogniser.bufferWindow = 2.0f;          // Quest 3
+commandRecogniser.eagerFlushOnCompleteMatch = true;
+commandRecogniser.prefixHoldSeconds = 0.6f;     // held matches wait 0.6s, not 2.0s
+```
+
+With `["fire"]` and `["fire", "at", "{target}"]` registered, "fire" alone now fires ~0.6s after the speaker stops instead of ~2.0s, while "fire at hotel one" still parses as the longer command -- the continuation lands well inside 0.6s.
+
+- Applies **only** to a buffer that already parses as one complete, confident command spanning the whole buffer. Partial speech mid-split-command, speech that matches nothing, and grammars too complex for the eligibility precompute to analyse all keep the full `bufferWindow`.
+- **Never lengthens** the wait: a value above `bufferWindow` is ignored.
+- Re-evaluated on every VOSK result, so a continuation that does arrive puts the buffer back on the full window for the rest of the utterance.
+- Requires `eagerFlushOnCompleteMatch`. Default `0` keeps the full window, i.e. the pre-`prefixHoldSeconds` behaviour.
+
+Tune it against the pause you expect *inside* a command, not between commands: too short and the extended form becomes unspeakable, too long and you are back to paying the full window.
+
+> With `prefixHoldSeconds` left at `0`, a command that is *also* a prefix of a longer one is the one case eager flush can't accelerate -- see [Known Limitations](../KNOWN_LIMITATIONS.md). Push-to-talk (`VoxrPushToTalkController.ReleaseTalk` -> `FlushPendingBuffer()`) gives those a deterministic, zero-latency endpoint.
 
 ---
 

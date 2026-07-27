@@ -521,5 +521,130 @@ namespace VoXR.Tests.Runtime
             _recogniser.FlushPendingBuffer();
             Assert.AreEqual(1, fireCount, "It still fires on the normal flush");
         }
+
+        // -------- Prefix hold (issue #32) --------
+        //
+        // The hold shortens how long Update waits, and Time.time cannot be advanced from a
+        // test, so these assert on the effective window the buffer is being timed against
+        // rather than on wall-clock firing.
+
+        static VoxrSlotDefinition[] PrefixHoldSlots() => new[]
+        {
+            new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+        };
+
+        static VoxrCommandDefinition[] PrefixHoldCommands() => new[]
+        {
+            new VoxrCommandDefinition("status", new[] { new[] { "status" } }),
+            new VoxrCommandDefinition("status_report",
+                new[] { new[] { "status", "report", "{target}" } }),
+            new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+        };
+
+        void ConfigureForPrefixHold(float prefixHold)
+        {
+            _recogniser.Configure(PrefixHoldSlots(), PrefixHoldCommands());
+            _recogniser.BufferWindow = 2.0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+            _recogniser.PrefixHoldSeconds = prefixHold;
+        }
+
+        [Test]
+        public void PrefixHold_CompleteButExtendableMatch_ShortensTheWindow()
+        {
+            ConfigureForPrefixHold(0.6f);
+
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += _ => fireCount++;
+
+            // "status" is a prefix of "status report {target}" — still no eager fire...
+            _recogniser.InjectText("status");
+            Assert.AreEqual(0, fireCount,
+                "A prefix command must still not fire the instant it is heard");
+
+            // ...but it now waits only prefixHoldSeconds for the continuation.
+            Assert.AreEqual(0.6f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+        }
+
+        [Test]
+        public void PrefixHold_Zero_KeepsTheFullWindow()
+        {
+            // The default (0) must preserve the pre-#32 behaviour exactly.
+            ConfigureForPrefixHold(0f);
+
+            _recogniser.InjectText("status");
+
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f,
+                "prefixHoldSeconds = 0 leaves the full buffer window in force");
+        }
+
+        [Test]
+        public void PrefixHold_LongerThanBufferWindow_NeverLengthensTheWait()
+        {
+            ConfigureForPrefixHold(5.0f);
+
+            _recogniser.InjectText("status");
+
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f,
+                "the hold may only shorten the wait, never extend it");
+        }
+
+        [Test]
+        public void PrefixHold_UnmatchedSpeech_KeepsTheFullWindow()
+        {
+            // Partial speech that matches nothing yet is exactly the split-command case the
+            // full window exists to recover — it must not be cut short.
+            ConfigureForPrefixHold(0.6f);
+
+            _recogniser.InjectText("cease");
+
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f,
+                "an incomplete utterance is not a held complete match");
+        }
+
+        [Test]
+        public void PrefixHold_ContinuationArrives_RestoresTheFullWindow()
+        {
+            ConfigureForPrefixHold(0.6f);
+
+            _recogniser.InjectText("status");
+            Assert.AreEqual(0.6f, _recogniser.TestEffectiveBufferWindow, 1e-4f, "setup: held");
+
+            // "status report" is an incomplete match of the longer command, so the buffer
+            // goes back to waiting the full window for the {target} that completes it.
+            _recogniser.InjectText("report");
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f,
+                "the hold must be re-derived per result, not carried forward");
+        }
+
+        [Test]
+        public void PrefixHold_EagerFlushOff_KeepsTheFullWindow()
+        {
+            // The hold is part of the eager-flush analysis; without it the buffer stays
+            // purely time-driven no matter what prefixHoldSeconds says.
+            _recogniser.Configure(PrefixHoldSlots(), PrefixHoldCommands());
+            _recogniser.BufferWindow = 2.0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PrefixHoldSeconds = 0.6f;
+
+            _recogniser.InjectText("status");
+
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+        }
+
+        [Test]
+        public void PrefixHold_ClearedOnFlush()
+        {
+            ConfigureForPrefixHold(0.6f);
+
+            _recogniser.InjectText("status");
+            Assert.AreEqual(0.6f, _recogniser.TestEffectiveBufferWindow, 1e-4f, "setup: held");
+
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f,
+                "a flushed buffer holds nothing, so the next utterance starts on the full window");
+        }
     }
 }
