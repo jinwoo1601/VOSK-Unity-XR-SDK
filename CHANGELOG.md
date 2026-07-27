@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The `bufferWindow` Inspector tooltip recommended 1.5s on Quest 3 where every other source — `KNOWN_LIMITATIONS.md`, the README, the command-recognition and troubleshooting guides, and the command-recognition sample — recommends 2.0s. 1.5s sits below the ~1.9–2.1s inter-result gap measured on Quest 3, so the tooltip was recommending a window the project's own test matrices found insufficient; it appears to be a fossil of the v2.3 default rather than a Quest figure. The tooltip now says 2.0s and carries the measured gap plus the ~2.5s ceiling past which unrelated utterances start merging. Tooltip text only — no behaviour change, and the default remains 0.5s. ([#34](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/34))
+
 ## [1.3.0] - 2026-07-25
 
 ### Added
