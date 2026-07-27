@@ -54,6 +54,16 @@ namespace VoXR.Commands
                  "Opt-in — off preserves the time-only buffering behaviour.")]
         [SerializeField] bool eagerFlushOnCompleteMatch = false;
 
+        [Tooltip("How long a complete command that more speech could still extend — one " +
+                 "that is a prefix of a longer command, or ends in a slot whose value could " +
+                 "grow — waits for that continuation before firing. Only the continuation is " +
+                 "being waited for, and a speaker who is continuing does so almost " +
+                 "immediately, so this can be much shorter than bufferWindow (0.5–0.8s is " +
+                 "usually enough; scale up with bufferWindow on Quest 3). Requires " +
+                 "eagerFlushOnCompleteMatch. Never lengthens the wait: values above " +
+                 "bufferWindow are ignored. Set to 0 to keep waiting the full bufferWindow.")]
+        [SerializeField] float prefixHoldSeconds = 0f;
+
         [Tooltip("Minimum seconds between firing the same intent. " +
                  "Prevents duplicate commands from rapid VOSK results. " +
                  "Set to 0 to disable debounce.")]
@@ -117,6 +127,12 @@ namespace VoXR.Commands
 
         // Utterance buffer
         readonly UtteranceBuffer _buffer = new UtteranceBuffer();
+
+        // Set when the buffer holds a complete command that more speech could still extend,
+        // so Update waits only prefixHoldSeconds for that continuation (issue #32).
+        // Re-derived on every result and cleared whenever the buffer empties, so it never
+        // outlives the buffer contents it was derived from.
+        bool _eagerHoldArmed;
 
         // Per-intent debounce
         readonly CommandDebouncer _debouncer = new CommandDebouncer();
@@ -277,6 +293,7 @@ namespace VoXR.Commands
         void RebuildGrammarInternal()
         {
             _buffer.Reset();
+            _eagerHoldArmed = false;
             _grammar.Rebuild(_slots, _activeCommands, GetFollowUpGrammarWords());
             _grammar.ForceApply(speechRecogniser, freeSpeechMode);
         }
@@ -293,6 +310,7 @@ namespace VoXR.Commands
         // Test-only setters. Production callers configure via the Inspector.
         internal float BufferWindow { set => bufferWindow = value; }
         internal bool EagerFlushOnCompleteMatch { set => eagerFlushOnCompleteMatch = value; }
+        internal float PrefixHoldSeconds { set => prefixHoldSeconds = value; }
         internal float CommandCooldown { set => commandCooldown = value; }
         internal VoxrSpeechRecogniser SpeechRecogniser
         {
@@ -417,7 +435,7 @@ namespace VoXR.Commands
 
         void Update()
         {
-            if (_buffer.IsActive && _buffer.ShouldFlush(Time.time, bufferWindow))
+            if (_buffer.IsActive && _buffer.ShouldFlush(Time.time, EffectiveBufferWindow))
                 FlushBuffer();
 
             if (_pending.HasPending &&
@@ -464,16 +482,36 @@ namespace VoXR.Commands
             // Append to buffer and reset timer
             _buffer.Append(result.Text, result.Words, Time.time);
 
+            // The verdict belongs to the buffer as it stands, so re-derive it from scratch
+            // for every result rather than carrying the previous one forward.
+            _eagerHoldArmed = false;
+
             // Eager flush: if the buffered speech already forms a complete command that
             // cannot be extended or completed by more words, flush now instead of waiting
-            // out bufferWindow. Skipped while a command is pending so confirm/follow-up
-            // stays on the timer path.
-            if (eagerFlushOnCompleteMatch && !_pending.HasPending && ShouldEagerFlush())
-                FlushBuffer();
+            // out bufferWindow. If it can still be extended, arm the shorter prefix hold
+            // instead. Skipped while a command is pending so confirm/follow-up stays on the
+            // timer path.
+            if (eagerFlushOnCompleteMatch && !_pending.HasPending)
+            {
+                var verdict = ProbeEagerCommit();
+                if (verdict == EagerCommitVerdict.Commit)
+                    FlushBuffer();
+                else
+                    _eagerHoldArmed = verdict == EagerCommitVerdict.HoldExtendable;
+            }
         }
+
+        // How long the buffer waits for more speech. A complete-but-extendable match is
+        // only waiting on a continuation the speaker would begin almost immediately, so
+        // prefixHoldSeconds may cut that wait short (issue #32) — never lengthen it.
+        float EffectiveBufferWindow =>
+            _eagerHoldArmed && prefixHoldSeconds > 0f && prefixHoldSeconds < bufferWindow
+                ? prefixHoldSeconds
+                : bufferWindow;
 
         void FlushBuffer()
         {
+            _eagerHoldArmed = false;
             string text = _buffer.Flush();
             if (text.Length == 0)
             {
@@ -487,17 +525,18 @@ namespace VoXR.Commands
         }
 
         // Speculative check used by HandleResult: peek (don't consume) the buffer and ask
-        // the parser whether it already forms one complete, terminal, confident command.
-        bool ShouldEagerFlush()
+        // the parser whether it already forms one complete, confident command, and whether
+        // more speech could still extend it.
+        EagerCommitVerdict ProbeEagerCommit()
         {
             string text = _buffer.PeekText();
             if (text.Length == 0)
-                return false;
+                return EagerCommitVerdict.None;
 
             string[] tokens = text.Split(VoxrCommandParser.SplitSeparator,
                 StringSplitOptions.RemoveEmptyEntries);
             if (tokens.Length == 0)
-                return false;
+                return EagerCommitVerdict.None;
 
             var words = _buffer.GetWordsSpan();
             var wordConfidence = _parser.InstanceBuildWordConfidence(words);
@@ -791,6 +830,7 @@ namespace VoXR.Commands
         internal string[] CancelVocabulary { set => cancelVocabulary = value; }
         internal string TestGrammarJson => _grammar.CurrentJson;
         internal bool TestGrammarRebuildDeferred => _grammar.GrammarRebuildDeferred;
+        internal float TestEffectiveBufferWindow => EffectiveBufferWindow;
 
         internal void TestForceTimeoutNow()
         {

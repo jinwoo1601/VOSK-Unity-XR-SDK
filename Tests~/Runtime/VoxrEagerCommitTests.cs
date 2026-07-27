@@ -8,7 +8,8 @@ using VoXR.Commands;
 namespace VoXR.Tests.Runtime
 {
     // Unit tests for the eager-flush precompute (CanCommitEarly) and the speculative
-    // TryEagerCommit gate on VoxrCommandParser (issue #25).
+    // TryEagerCommit gate on VoxrCommandParser (issue #25), including the
+    // complete-but-extendable verdict that drives the shortened prefix hold (issue #32).
     public class VoxrEagerCommitTests
     {
         static VoxrSlotDefinition[] Slots(params VoxrSlotDefinition[] s) => s;
@@ -235,17 +236,18 @@ namespace VoXR.Tests.Runtime
         // ---------- TryEagerCommit gate ----------
 
         [Test]
-        public void TryEagerCommit_FullTerminalMatch_ReturnsTrue()
+        public void TryEagerCommit_FullTerminalMatch_ReturnsCommit()
         {
             var parser = new VoxrCommandParser(
                 Slots(new VoxrSlotDefinition("weapon", new[] { "missiles" })),
                 Commands(Cmd("fire", P("fire", "{weapon}"))));
 
-            Assert.IsTrue(parser.TryEagerCommit(Tok("fire missiles"), null, 0.6f, 0.4f));
+            Assert.AreEqual(EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("fire missiles"), null, 0.6f, 0.4f));
         }
 
         [Test]
-        public void TryEagerCommit_BelowScoreThreshold_ReturnsFalse()
+        public void TryEagerCommit_BelowScoreThreshold_ReturnsNone()
         {
             var parser = new VoxrCommandParser(
                 Slots(
@@ -254,11 +256,12 @@ namespace VoXR.Tests.Runtime
                 Commands(Cmd("launch", P("launch", "{weapon}", "target", "{target}"))));
 
             // {target} unfilled -> score 0.5 < 0.6 -> not eligible.
-            Assert.IsFalse(parser.TryEagerCommit(Tok("launch missiles target"), null, 0.6f, 0.4f));
+            Assert.AreEqual(EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("launch missiles target"), null, 0.6f, 0.4f));
         }
 
         [Test]
-        public void TryEagerCommit_LeftoverTrailingTokens_ReturnsFalse()
+        public void TryEagerCommit_LeftoverTrailingTokens_ReturnsNone()
         {
             var parser = new VoxrCommandParser(
                 Slots(),
@@ -266,11 +269,12 @@ namespace VoXR.Tests.Runtime
 
             // "cease fire" matches fully and is committable, but "now" is unconsumed,
             // so the match does not span the whole buffer.
-            Assert.IsFalse(parser.TryEagerCommit(Tok("cease fire now"), null, 0.6f, 0.4f));
+            Assert.AreEqual(EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("cease fire now"), null, 0.6f, 0.4f));
         }
 
         [Test]
-        public void TryEagerCommit_PrefixCommand_ReturnsFalse()
+        public void TryEagerCommit_PrefixCommand_ReturnsHoldExtendable()
         {
             var parser = new VoxrCommandParser(
                 Slots(new VoxrSlotDefinition("target", new[] { "hotel one" })),
@@ -278,8 +282,54 @@ namespace VoXR.Tests.Runtime
                     Cmd("status", P("status")),
                     Cmd("status_report", P("status", "report", "{target}"))));
 
-            Assert.IsFalse(parser.TryEagerCommit(Tok("status"), null, 0.6f, 0.4f),
-                "a prefix command must not eager-commit even though it matches fully");
+            Assert.AreEqual(EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("status"), null, 0.6f, 0.4f),
+                "a prefix command matches fully but could still grow, so it is held, not committed");
+        }
+
+        // ---------- HoldExtendable classification (issue #32) ----------
+
+        [Test]
+        public void TryEagerCommit_TrailingExtensibleSlot_ReturnsHoldExtendable()
+        {
+            // Not a prefix of another pattern — the same pattern's own trailing value can
+            // grow ("red" -> "red dragon"). Still a complete match awaiting a continuation.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("colour", new[] { "red", "red dragon" })),
+                Commands(Cmd("pick", P("pick", "{colour}"))));
+
+            Assert.AreEqual(EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("pick red"), null, 0.6f, 0.4f));
+        }
+
+        [Test]
+        public void TryEagerCommit_NoMatchAtAll_ReturnsNone()
+        {
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("cease_fire", P("cease", "fire"))));
+
+            Assert.AreEqual(EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("banana"), null, 0.6f, 0.4f),
+                "speech that matches nothing must not arm the shortened hold");
+        }
+
+        [Test]
+        public void TryEagerCommit_UnanalysableGrammar_ReturnsNone()
+        {
+            // Past MaxOptionalExpansion the eager precompute is abandoned for the whole
+            // parser. HoldExtendable is a product of that analysis, so with no analysis the
+            // verdict must be None — the full window stays in force.
+            var noisy = Cmd("noisy", P("noisy",
+                "?a", "?b", "?c", "?d", "?e", "?f", "?g", "?h", "?i", "?j", "?k", "?l", "?m"));
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(noisy, Cmd("cease_fire", P("cease", "fire"))));
+
+            LogAssert.Expect(LogType.Warning, new Regex("more than 12 optional"));
+
+            Assert.AreEqual(EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("cease fire"), null, 0.6f, 0.4f));
         }
 
         // ---------- Tie-break parity with ParseInternal (Review MF-5) ----------
@@ -302,7 +352,8 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(0, results[0].Command.MatchedPatternIndex);
 
             Assert.IsFalse(parser.CanCommitEarly(0, 0), "greet is a prefix of greet_long");
-            Assert.IsFalse(parser.TryEagerCommit(Tok("hello"), null, 0.6f, 0.4f),
+            Assert.AreEqual(EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("hello"), null, 0.6f, 0.4f),
                 "eager verdict must match the non-committable selection ParseInternal made");
         }
     }

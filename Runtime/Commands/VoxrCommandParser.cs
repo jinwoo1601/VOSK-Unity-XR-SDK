@@ -1,7 +1,7 @@
 // ============================================================================
 // Purpose:  Pure C# pattern matcher: scores tokenized VOSK output against command patterns
 // Layer:    Runtime.Commands
-// Owns:     VoxrCommandParser (internal class)
+// Owns:     VoxrCommandParser (internal class), EagerCommitVerdict (internal enum)
 // Depends:  VoxrSlotDefinition, VoxrCommandDefinition, VoxrSlotMatch, VoxrCommand, VoxrCommandResult, VoxrNumberParser
 // ============================================================================
 using System;
@@ -9,6 +9,22 @@ using System.Collections.Generic;
 
 namespace VoXR.Commands
 {
+    // What the speculative eager-commit probe makes of the buffered speech.
+    internal enum EagerCommitVerdict
+    {
+        // No complete, confident command spans the buffer — keep buffering normally.
+        None,
+
+        // The buffer forms a complete, confident command, but more speech could still
+        // extend it into a longer one, so committing now risks firing the wrong command
+        // (issue #32). The caller may wait a shorter hold for that continuation instead of
+        // the full buffer window.
+        HoldExtendable,
+
+        // Complete, confident, and unextendable — safe to fire immediately.
+        Commit,
+    }
+
     internal class VoxrCommandParser
     {
         internal const string UnkToken = "[unk]";
@@ -957,14 +973,14 @@ namespace VoXR.Commands
         }
 
         // Single-pass speculative check: does the buffered text already form one complete,
-        // confident command that cannot be extended or completed by more speech? The
-        // selection mirrors ParseInternal's inner loop (searchStart = 0) exactly so the
-        // verdict matches the command the subsequent FlushBuffer will actually fire.
-        internal bool TryEagerCommit(string[] tokens, Dictionary<string, float> wordConfidence,
-            float minScore, float minConfidence)
+        // confident command, and if so can more speech still extend it? The selection
+        // mirrors ParseInternal's inner loop (searchStart = 0) exactly so the verdict
+        // matches the command the subsequent FlushBuffer will actually fire.
+        internal EagerCommitVerdict TryEagerCommit(string[] tokens,
+            Dictionary<string, float> wordConfidence, float minScore, float minConfidence)
         {
             if (tokens == null || tokens.Length == 0)
-                return false;
+                return EagerCommitVerdict.None;
 
             EnsureCanCommitEarly();
 
@@ -1006,21 +1022,29 @@ namespace VoXR.Commands
             }
 
             if (bestCommandIdx < 0 || bestScore < minScore)
-                return false;
+                return EagerCommitVerdict.None;
 
             // The match must span the whole buffer: anything left over (including trailing
             // [unk]) means an in-progress tail that more speech could still complete.
             if (bestStartIdx != 0 || bestEndIdx != tokens.Length)
-                return false;
+                return EagerCommitVerdict.None;
 
             float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
             if (confidence >= 0f && confidence < minConfidence)
-                return false;
+                return EagerCommitVerdict.None;
 
-            // Guarded accessor: _canCommitEarly may legitimately be null when the grammar
-            // was too complex to analyse (MaxOptionalExpansion), and the indices come from a
-            // separate scan, so route through the bounds-checked path rather than indexing raw.
-            return CanCommitEarly(bestCommandIdx, bestPatternIdx);
+            // _canCommitEarly is legitimately null when the grammar was too complex to
+            // analyse (MaxOptionalExpansion). HoldExtendable is a product of that analysis,
+            // so without it report None and leave the full window in force rather than
+            // shorten the wait on a pattern nothing has vetted.
+            if (_canCommitEarly == null)
+                return EagerCommitVerdict.None;
+
+            // Guarded accessor: the indices come from a separate scan, so route through the
+            // bounds-checked path rather than indexing raw.
+            return CanCommitEarly(bestCommandIdx, bestPatternIdx)
+                ? EagerCommitVerdict.Commit
+                : EagerCommitVerdict.HoldExtendable;
         }
 
         bool[][] ComputeCanCommitEarly()
