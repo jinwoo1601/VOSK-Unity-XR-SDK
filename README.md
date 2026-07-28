@@ -57,7 +57,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 **Pinned version:**
 
 ```
-https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.2.0
+https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.4.0
 ```
 
 **Via manifest.json:**
@@ -65,7 +65,7 @@ https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.2.0
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.2.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.4.0"
   }
 }
 ```
@@ -225,6 +225,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 | Version | Milestone |
 |---|---|
+| 1.4.0 | Latency and accuracy tuning for command recognition -- `prefixHoldSeconds`, `skippedWordPenalty`, and vocabulary-aware eager-flush eligibility |
 | 1.3.0 | Automatic session debug log -- every Play Mode match exported to self-describing JSON for post-session analysis |
 | 1.2.0 | Zero-alloc byte-span parsing on the recognition hot path (breaking change to `vosk_bridge_get_result` native ABI) |
 | 1.1.0 | Removed n-best alternatives (breaking change to `VoxrResult` and native ABI) |
