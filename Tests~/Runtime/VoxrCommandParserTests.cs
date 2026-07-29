@@ -1136,8 +1136,9 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void SpanTieBreak_BareUtterance_StillMatchesBarePattern()
         {
-            // The preference is scoped to exact ties: without the tail the tailed pattern
-            // misses a required slot and scores 0.75, so the bare sibling still wins.
+            // Span only breaks *exact* score ties: without the tail the tailed pattern misses
+            // a required slot, which is a negative numerator term (RequiredSlotMissPenalty),
+            // so it scores (1+1+1-1)/4 = 0.5 and the bare sibling wins on score outright.
             var parser = CreateTailedParser(bareFirst: true);
 
             var results = parser.Parse("intercept track one two zero one");
@@ -1161,6 +1162,94 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(1, results.Length);
             Assert.AreEqual("set_burn", results[0].Command.Intent);
             Assert.AreEqual("maximum burn", results[0].Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void SpanTieBreak_LongerSpanBeatsHigherLiteralCount()
+        {
+            // Span sits ABOVE literal count, so it also settles equal-score candidates whose
+            // literal counts differ — outcomes literal count used to decide on its own,
+            // deterministically, in either declaration order. Both patterns score 1.0 at
+            // token 0; the slot pattern has fewer literals but covers one more token.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[]
+                        {
+                            new[] { "fire", "at", "hotel" },
+                            new[] { "fire", "at", "{target}" },
+                        }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "fire at hotel one");
+
+            Assert.AreEqual(
+                1,
+                result.Command.MatchedPatternIndex,
+                "the 2-literal/4-token pattern must beat the 3-literal/3-token one"
+            );
+            Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+        }
+
+        [Test]
+        public void SpanTieBreak_ChoosesBetweenCommands_NotJustPatterns()
+        {
+            // The comparison runs across the whole command list, so a span tie changes which
+            // *intent* fires, not merely which pattern index within one command. Both match
+            // fully at token 0 with one literal each; go_place covers one more token.
+            var parser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("dir", new[] { "north" }),
+                    new VoxrSlotDefinition("place", new[] { "north pole" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition("go_dir", new[] { new[] { "go", "{dir}" } }),
+                    new VoxrCommandDefinition("go_place", new[] { new[] { "go", "{place}" } }),
+                }
+            );
+
+            var result = ParseOne(parser, "go north pole");
+
+            Assert.AreEqual(
+                "go_place",
+                result.Command.Intent,
+                "the longer-span command wins even though it is declared second"
+            );
+            Assert.AreEqual("north pole", result.Command.GetSlot("place"));
+        }
+
+        [Test]
+        public void SpanTieBreak_TrailingUnkCannotWinTheTie()
+        {
+            // The span is measured over tokens a pattern actually matched. EndIdx alone would
+            // overstate it — the [unk] skip runs before every element, including a trailing
+            // optional that then matches nothing — which would let "fire {?mode}" beat "fire"
+            // purely by absorbing filler, and make the same spoken command report a different
+            // pattern index whenever VOSK emitted noise.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("mode", new[] { "silent" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire",
+                        new[] { new[] { "fire" }, new[] { "fire", "{?mode}" } }
+                    ),
+                }
+            );
+
+            Assert.AreEqual(0, ParseOne(parser, "fire").Command.MatchedPatternIndex);
+            Assert.AreEqual(
+                0,
+                ParseOne(parser, "fire [unk]").Command.MatchedPatternIndex,
+                "a stray [unk] must not flip which pattern is reported"
+            );
         }
     }
 }
