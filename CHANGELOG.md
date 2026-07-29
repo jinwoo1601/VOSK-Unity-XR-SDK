@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- When two patterns tie on match score, the parser now prefers the one that consumes more of the utterance, instead of keeping whichever the command asset happened to list first. Selection ran earliest start → highest score → most matched literals, with no term for the consumed span, so a command carrying both a bare pattern and a tailed sibling (`intercept track {track}` and `intercept track {track} {burn_level}`) tied at 1.0 with equal literal counts on an utterance that carried the tail. The tie fell through to registration order: if the bare pattern was listed first it won, and sequential extraction then matched the orphaned tail as a *separate* command — one spoken order silently delivered as two, with no warning and both marked successful, which defeats any policy the game applies at the command level. Array order in the asset was effectively load-bearing for correctness, and the workaround (listing patterns longest-first) collided with content keyed on `MatchedPatternIndex`. The preference is scoped to exact ties, so it only decides outcomes that were previously order-dependent coin flips; grammars without tied sibling patterns are unaffected. Literal count remains the next tie-break and registration order the final deterministic fallback. The same ordering is applied in the eager-flush scan, so the eager verdict still names the command a subsequent flush will fire — and a tailed utterance that used to stop short of the buffer end now commits early instead of paying the full `bufferWindow`. ([#41](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/41))
+
 ## [1.4.0] - 2026-07-28
 
 ### Added

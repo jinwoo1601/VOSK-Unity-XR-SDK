@@ -1072,5 +1072,95 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("cease_fire", result.Command.Intent);
             Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
         }
+
+        // --- Equal-score span tie-break (issue #41) ---
+
+        // A tailed pattern and its bare sibling both score 1.0 with equal literal counts
+        // on an utterance carrying the tail, so before the span tie-break the winner was
+        // whichever the asset listed first. "burn_level" is also a command in its own
+        // right, so a bare-pattern win split one order into two commands.
+        static VoxrCommandParser CreateTailedParser(bool bareFirst)
+        {
+            var slots = new[]
+            {
+                VoxrSlotDefinition.NumberSequence("track", minWords: 1, maxWords: 4),
+                new VoxrSlotDefinition("burn_level", new[] { "maximum burn", "minimum burn" }),
+            };
+
+            var bare = new[] { "intercept", "track", "{track}" };
+            var tailed = new[] { "intercept", "track", "{track}", "{burn_level}" };
+
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "intercept_target",
+                    bareFirst ? new[] { bare, tailed } : new[] { tailed, bare }
+                ),
+                new VoxrCommandDefinition("set_burn", new[] { new[] { "{burn_level}" } }),
+            };
+
+            return new VoxrCommandParser(slots, commands);
+        }
+
+        [Test]
+        public void SpanTieBreak_TailedPatternWins_WhenBareSiblingListedFirst()
+        {
+            var parser = CreateTailedParser(bareFirst: true);
+
+            var results = parser.Parse("intercept track one two zero one maximum burn");
+
+            Assert.AreEqual(
+                1,
+                results.Length,
+                "the tail must stay part of the intercept, not become a second command"
+            );
+            Assert.AreEqual("intercept_target", results[0].Command.Intent);
+            Assert.AreEqual("one two zero one", results[0].Command.GetSlot("track"));
+            Assert.AreEqual("maximum burn", results[0].Command.GetSlot("burn_level"));
+            Assert.AreEqual(1, results[0].Command.MatchedPatternIndex);
+        }
+
+        [Test]
+        public void SpanTieBreak_OutcomeIndependentOfPatternOrder()
+        {
+            var parser = CreateTailedParser(bareFirst: false);
+
+            var results = parser.Parse("intercept track one two zero one maximum burn");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("intercept_target", results[0].Command.Intent);
+            Assert.AreEqual("maximum burn", results[0].Command.GetSlot("burn_level"));
+            Assert.AreEqual(0, results[0].Command.MatchedPatternIndex);
+        }
+
+        [Test]
+        public void SpanTieBreak_BareUtterance_StillMatchesBarePattern()
+        {
+            // The preference is scoped to exact ties: without the tail the tailed pattern
+            // misses a required slot and scores 0.75, so the bare sibling still wins.
+            var parser = CreateTailedParser(bareFirst: true);
+
+            var results = parser.Parse("intercept track one two zero one");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("intercept_target", results[0].Command.Intent);
+            Assert.AreEqual("one two zero one", results[0].Command.GetSlot("track"));
+            Assert.IsFalse(results[0].Command.HasSlot("burn_level"));
+            Assert.AreEqual(0, results[0].Command.MatchedPatternIndex);
+        }
+
+        [Test]
+        public void SpanTieBreak_StandaloneTailStillMatchesItsOwnCommand()
+        {
+            // Longer-span preference only redirects tails that an earlier-starting match
+            // can absorb — a tail spoken on its own is still its own command.
+            var parser = CreateTailedParser(bareFirst: true);
+
+            var results = parser.Parse("maximum burn");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("set_burn", results[0].Command.Intent);
+            Assert.AreEqual("maximum burn", results[0].Command.GetSlot("burn_level"));
+        }
     }
 }

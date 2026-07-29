@@ -365,12 +365,16 @@ namespace VoXR.Commands
 
                             var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
 
-                            if (matchResult.Score > 0f &&
-                                (bestScore <= 0f ||
-                                 startIdx < bestStartIdx ||
-                                 (startIdx == bestStartIdx &&
-                                  (matchResult.Score > bestScore ||
-                                   (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
+                            if (
+                                IsBetterCandidate(
+                                    matchResult,
+                                    startIdx,
+                                    bestScore,
+                                    bestStartIdx,
+                                    bestEndIdx,
+                                    bestLiteralCount
+                                )
+                            )
                             {
                                 bestScore = matchResult.Score;
                                 bestRawScore = matchResult.RawScore;
@@ -586,6 +590,40 @@ namespace VoXR.Commands
             public int LiteralCount;
             public int SlotCount;
             public int EndIdx;
+        }
+
+        // Candidate ordering, shared by ParseInternal and TryEagerCommit so the eager
+        // verdict always names the pattern the subsequent flush will fire. Earliest start
+        // wins, then highest score, then the longer consumed span, then literal count,
+        // with registration order as the final deterministic fallback.
+        //
+        // The span term is issue #41: a tailed pattern and its bare sibling
+        // ("intercept track {track} {burn_level}" / "intercept track {track}") both score
+        // 1.0 with equal literal counts on an utterance carrying the tail, so without it
+        // the winner was whichever the asset happened to list first. When the bare one
+        // won, sequential extraction then matched the orphaned tail as a *second* command
+        // — splitting one order in two with no warning. Preferring the longer span is
+        // scoped to exact ties, so grammars without tied sibling patterns are unaffected.
+        static bool IsBetterCandidate(
+            in MatchResult candidate,
+            int startIdx,
+            float bestScore,
+            int bestStartIdx,
+            int bestEndIdx,
+            int bestLiteralCount
+        )
+        {
+            if (candidate.Score <= 0f)
+                return false;
+            if (bestScore <= 0f)
+                return true;
+            if (startIdx != bestStartIdx)
+                return startIdx < bestStartIdx;
+            if (candidate.Score != bestScore)
+                return candidate.Score > bestScore;
+            if (candidate.EndIdx != bestEndIdx)
+                return candidate.EndIdx > bestEndIdx;
+            return candidate.LiteralCount > bestLiteralCount;
         }
 
 #if UNITY_EDITOR
@@ -1003,12 +1041,16 @@ namespace VoXR.Commands
 
                         var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
 
-                        if (matchResult.Score > 0f &&
-                            (bestScore <= 0f ||
-                             startIdx < bestStartIdx ||
-                             (startIdx == bestStartIdx &&
-                              (matchResult.Score > bestScore ||
-                               (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
+                        if (
+                            IsBetterCandidate(
+                                matchResult,
+                                startIdx,
+                                bestScore,
+                                bestStartIdx,
+                                bestEndIdx,
+                                bestLiteralCount
+                            )
+                        )
                         {
                             bestScore = matchResult.Score;
                             bestLiteralCount = matchResult.LiteralCount;
