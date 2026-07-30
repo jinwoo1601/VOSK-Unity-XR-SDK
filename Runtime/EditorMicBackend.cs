@@ -332,7 +332,16 @@ namespace VoXR
 
             _lastSamplePos = (_lastSamplePos + available) % clipSamples;
 
-            int dsCount = _downsampler.Process(_workBuffer, available, _downsampledBuffer);
+            ProcessChunk(_workBuffer, available, dispatch);
+        }
+
+        // Source-agnostic processing pipeline shared by microphone capture and
+        // WAV playback: Downsampler → AGC → int16 → VOSK → result dispatch.
+        // Requires _downsampledBuffer/_int16Buffer sized for `count` by the caller's
+        // start path (Start for the microphone, StartPlayback for replay).
+        void ProcessChunk(float[] samples, int count, EditorJsonDispatcher dispatch)
+        {
+            int dsCount = _downsampler.Process(samples, count, _downsampledBuffer);
             if (dsCount == 0) return;
 
             PreAgcRms = ComputeRms(_downsampledBuffer, dsCount);
