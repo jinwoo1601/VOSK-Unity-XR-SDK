@@ -1072,5 +1072,184 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("cease_fire", result.Command.Intent);
             Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
         }
+
+        // --- Equal-score span tie-break (issue #41) ---
+
+        // A tailed pattern and its bare sibling both score 1.0 with equal literal counts
+        // on an utterance carrying the tail, so before the span tie-break the winner was
+        // whichever the asset listed first. "burn_level" is also a command in its own
+        // right, so a bare-pattern win split one order into two commands.
+        static VoxrCommandParser CreateTailedParser(bool bareFirst)
+        {
+            var slots = new[]
+            {
+                VoxrSlotDefinition.NumberSequence("track", minWords: 1, maxWords: 4),
+                new VoxrSlotDefinition("burn_level", new[] { "maximum burn", "minimum burn" }),
+            };
+
+            var bare = new[] { "intercept", "track", "{track}" };
+            var tailed = new[] { "intercept", "track", "{track}", "{burn_level}" };
+
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "intercept_target",
+                    bareFirst ? new[] { bare, tailed } : new[] { tailed, bare }
+                ),
+                new VoxrCommandDefinition("set_burn", new[] { new[] { "{burn_level}" } }),
+            };
+
+            return new VoxrCommandParser(slots, commands);
+        }
+
+        [Test]
+        public void SpanTieBreak_TailedPatternWins_WhenBareSiblingListedFirst()
+        {
+            var parser = CreateTailedParser(bareFirst: true);
+
+            var results = parser.Parse("intercept track one two zero one maximum burn");
+
+            Assert.AreEqual(
+                1,
+                results.Length,
+                "the tail must stay part of the intercept, not become a second command"
+            );
+            Assert.AreEqual("intercept_target", results[0].Command.Intent);
+            Assert.AreEqual("one two zero one", results[0].Command.GetSlot("track"));
+            Assert.AreEqual("maximum burn", results[0].Command.GetSlot("burn_level"));
+            Assert.AreEqual(1, results[0].Command.MatchedPatternIndex);
+        }
+
+        [Test]
+        public void SpanTieBreak_OutcomeIndependentOfPatternOrder()
+        {
+            var parser = CreateTailedParser(bareFirst: false);
+
+            var results = parser.Parse("intercept track one two zero one maximum burn");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("intercept_target", results[0].Command.Intent);
+            Assert.AreEqual("maximum burn", results[0].Command.GetSlot("burn_level"));
+            Assert.AreEqual(0, results[0].Command.MatchedPatternIndex);
+        }
+
+        [Test]
+        public void SpanTieBreak_BareUtterance_StillMatchesBarePattern()
+        {
+            // Span only breaks *exact* score ties: without the tail the tailed pattern misses
+            // a required slot, which is a negative numerator term (RequiredSlotMissPenalty),
+            // so it scores (1+1+1-1)/4 = 0.5 and the bare sibling wins on score outright.
+            var parser = CreateTailedParser(bareFirst: true);
+
+            var results = parser.Parse("intercept track one two zero one");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("intercept_target", results[0].Command.Intent);
+            Assert.AreEqual("one two zero one", results[0].Command.GetSlot("track"));
+            Assert.IsFalse(results[0].Command.HasSlot("burn_level"));
+            Assert.AreEqual(0, results[0].Command.MatchedPatternIndex);
+        }
+
+        [Test]
+        public void SpanTieBreak_StandaloneTailStillMatchesItsOwnCommand()
+        {
+            // Longer-span preference only redirects tails that an earlier-starting match
+            // can absorb — a tail spoken on its own is still its own command.
+            var parser = CreateTailedParser(bareFirst: true);
+
+            var results = parser.Parse("maximum burn");
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("set_burn", results[0].Command.Intent);
+            Assert.AreEqual("maximum burn", results[0].Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void SpanTieBreak_LongerSpanBeatsHigherLiteralCount()
+        {
+            // Span sits ABOVE literal count, so it also settles equal-score candidates whose
+            // literal counts differ — outcomes literal count used to decide on its own,
+            // deterministically, in either declaration order. Both patterns score 1.0 at
+            // token 0; the slot pattern has fewer literals but covers one more token.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[]
+                        {
+                            new[] { "fire", "at", "hotel" },
+                            new[] { "fire", "at", "{target}" },
+                        }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "fire at hotel one");
+
+            Assert.AreEqual(
+                1,
+                result.Command.MatchedPatternIndex,
+                "the 2-literal/4-token pattern must beat the 3-literal/3-token one"
+            );
+            Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+        }
+
+        [Test]
+        public void SpanTieBreak_ChoosesBetweenCommands_NotJustPatterns()
+        {
+            // The comparison runs across the whole command list, so a span tie changes which
+            // *intent* fires, not merely which pattern index within one command. Both match
+            // fully at token 0 with one literal each; go_place covers one more token.
+            var parser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("dir", new[] { "north" }),
+                    new VoxrSlotDefinition("place", new[] { "north pole" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition("go_dir", new[] { new[] { "go", "{dir}" } }),
+                    new VoxrCommandDefinition("go_place", new[] { new[] { "go", "{place}" } }),
+                }
+            );
+
+            var result = ParseOne(parser, "go north pole");
+
+            Assert.AreEqual(
+                "go_place",
+                result.Command.Intent,
+                "the longer-span command wins even though it is declared second"
+            );
+            Assert.AreEqual("north pole", result.Command.GetSlot("place"));
+        }
+
+        [Test]
+        public void SpanTieBreak_TrailingUnkCannotWinTheTie()
+        {
+            // The span is measured over tokens a pattern actually matched. EndIdx alone would
+            // overstate it — the [unk] skip runs before every element, including a trailing
+            // optional that then matches nothing — which would let "fire {?mode}" beat "fire"
+            // purely by absorbing filler, and make the same spoken command report a different
+            // pattern index whenever VOSK emitted noise.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("mode", new[] { "silent" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire",
+                        new[] { new[] { "fire" }, new[] { "fire", "{?mode}" } }
+                    ),
+                }
+            );
+
+            Assert.AreEqual(0, ParseOne(parser, "fire").Command.MatchedPatternIndex);
+            Assert.AreEqual(
+                0,
+                ParseOne(parser, "fire [unk]").Command.MatchedPatternIndex,
+                "a stray [unk] must not flip which pattern is reported"
+            );
+        }
     }
 }

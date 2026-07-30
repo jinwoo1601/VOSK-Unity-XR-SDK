@@ -470,5 +470,91 @@ namespace VoXR.Tests.Runtime
                 parser.TryEagerCommit(Tok("hello"), null, 0.6f, 0.4f),
                 "eager verdict must match the non-committable selection ParseInternal made");
         }
+
+        [Test]
+        public void TryEagerCommit_PrefersLongerSpanOnTie_LikeParseInternal()
+        {
+            // The bare sibling is listed first and ties the tailed pattern at 1.0 with an
+            // equal literal count, so before the span tie-break (issue #41) both scans
+            // picked it: ParseInternal split the utterance in two, and the eager scan saw
+            // a match that stopped short of the buffer end and reported None — paying the
+            // full window for a command that was already complete.
+            var parser = new VoxrCommandParser(
+                Slots(
+                    new VoxrSlotDefinition("track", new[] { "alpha", "bravo" }),
+                    new VoxrSlotDefinition("burn_level", new[] { "maximum burn" })
+                ),
+                Commands(
+                    Cmd(
+                        "intercept",
+                        P("intercept", "{track}"),
+                        P("intercept", "{track}", "{burn_level}")
+                    )
+                )
+            );
+
+            var results = parser.Parse("intercept alpha maximum burn");
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual(1, results[0].Command.MatchedPatternIndex);
+
+            Assert.IsTrue(
+                parser.CanCommitEarly(0, 1),
+                "the tailed pattern is terminal — nothing can extend it"
+            );
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("intercept alpha maximum burn"), null, 0.6f, 0.4f),
+                "the eager scan must select the same tailed pattern ParseInternal fired"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_SpanTieCanYieldHoldExtendable()
+        {
+            // The span tie-break also reaches a verdict the Commit case never does. Here the
+            // newly-preferred pattern spans the buffer but is itself a prefix of a longer
+            // sibling, so the buffer holds as extendable where it previously reported None
+            // and waited out the full window. That verdict is load-bearing: it arms the
+            // shortened prefix hold (issue #32), so the wait drops to prefixHoldSeconds.
+            var parser = new VoxrCommandParser(
+                Slots(
+                    new VoxrSlotDefinition("track", new[] { "alpha" }),
+                    new VoxrSlotDefinition("burn_level", new[] { "maximum burn" })
+                ),
+                Commands(
+                    Cmd(
+                        "intercept",
+                        P("intercept", "{track}"),
+                        P("intercept", "{track}", "{burn_level}"),
+                        P("intercept", "{track}", "{burn_level}", "now")
+                    )
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("intercept alpha maximum burn"), null, 0.6f, 0.4f),
+                "pattern 1 spans the buffer but is a prefix of pattern 2"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_TrailingUnkStillHoldsTheFullWindow()
+        {
+            // The whole-buffer gate treats anything left over — including trailing [unk] — as
+            // an in-progress tail. Tie-breaking on a raw end index would smuggle that [unk]
+            // into the winner's span and let the gate pass; the span is measured over tokens
+            // actually matched, so this stays None.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("mode", new[] { "silent" })),
+                Commands(Cmd("fire", P("fire"), P("fire", "{?mode}")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("fire [unk]"), null, 0.6f, 0.4f),
+                "an unrecognised trailing word means more speech may still be coming"
+            );
+        }
     }
 }

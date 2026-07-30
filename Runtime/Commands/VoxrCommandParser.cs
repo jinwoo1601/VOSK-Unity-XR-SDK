@@ -351,6 +351,7 @@ namespace VoXR.Commands
                 int bestPatternIdx = -1;
                 int bestStartIdx = int.MaxValue;
                 int bestEndIdx = 0;
+                int bestConsumedEndIdx = 0;
                 int bestSlotCount = 0;
 
                 for (int ci = 0; ci < _commands.Length; ci++)
@@ -365,12 +366,16 @@ namespace VoXR.Commands
 
                             var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
 
-                            if (matchResult.Score > 0f &&
-                                (bestScore <= 0f ||
-                                 startIdx < bestStartIdx ||
-                                 (startIdx == bestStartIdx &&
-                                  (matchResult.Score > bestScore ||
-                                   (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
+                            if (
+                                IsBetterCandidate(
+                                    matchResult,
+                                    startIdx,
+                                    bestScore,
+                                    bestStartIdx,
+                                    bestConsumedEndIdx,
+                                    bestLiteralCount
+                                )
+                            )
                             {
                                 bestScore = matchResult.Score;
                                 bestRawScore = matchResult.RawScore;
@@ -380,6 +385,7 @@ namespace VoXR.Commands
                                 bestPatternIdx = pi;
                                 bestStartIdx = startIdx;
                                 bestEndIdx = matchResult.EndIdx;
+                                bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                                 bestSlotCount = matchResult.SlotCount;
                                 // Copy current match buffer into best buffer
                                 if (matchResult.SlotCount > 0)
@@ -585,7 +591,53 @@ namespace VoXR.Commands
             public float Denominator;
             public int LiteralCount;
             public int SlotCount;
+
+            // Where the match stopped, including any [unk] skipped ahead of a trailing
+            // element that matched nothing. Drives searchStart and the eager whole-buffer gate.
             public int EndIdx;
+
+            // Where the last actually-matched element left off. Never counts trailing
+            // filler, which is what makes it the honest span for tie-breaking.
+            public int ConsumedEndIdx;
+        }
+
+        // Candidate ordering, shared by ParseInternal and TryEagerCommit so the eager
+        // verdict always names the pattern the subsequent flush will fire. Earliest start
+        // wins, then highest score, then the longer consumed span, then literal count,
+        // with registration order as the final deterministic fallback.
+        //
+        // The span term is issue #41: a tailed pattern and its bare sibling
+        // ("intercept track {track} {burn_level}" / "intercept track {track}") both score
+        // 1.0 with equal literal counts on an utterance carrying the tail, so without it
+        // the winner was whichever the asset happened to list first. When the bare one
+        // won, sequential extraction then matched the orphaned tail as a *second* command
+        // — splitting one order in two with no warning.
+        //
+        // Span is compared on ConsumedEndIdx, not EndIdx, so a pattern cannot win by
+        // absorbing trailing [unk] it never matched. Note the term sits ABOVE literal
+        // count: it therefore also settles equal-score candidates whose literal counts
+        // differ, which literal count used to decide on its own. That is a real behaviour
+        // change beyond the order-dependent ties, not just a fallback for them.
+        static bool IsBetterCandidate(
+            in MatchResult candidate,
+            int startIdx,
+            float bestScore,
+            int bestStartIdx,
+            int bestConsumedEndIdx,
+            int bestLiteralCount
+        )
+        {
+            if (candidate.Score <= 0f)
+                return false;
+            if (bestScore <= 0f)
+                return true;
+            if (startIdx != bestStartIdx)
+                return startIdx < bestStartIdx;
+            if (candidate.Score != bestScore)
+                return candidate.Score > bestScore;
+            if (candidate.ConsumedEndIdx != bestConsumedEndIdx)
+                return candidate.ConsumedEndIdx > bestConsumedEndIdx;
+            return candidate.LiteralCount > bestLiteralCount;
         }
 
 #if UNITY_EDITOR
@@ -610,6 +662,13 @@ namespace VoXR.Commands
             float denominator = 0f;
             int literalCount = 0;
             int slotCount = 0;
+            // Where the last element that actually matched something left off. EndIdx alone
+            // overstates the span: the [unk] skip below runs before every element, including
+            // one that then matches nothing, so a trailing unmatched optional leaves EndIdx
+            // past filler the pattern never consumed. Tie-breaking on that would let a
+            // pattern win by absorbing noise (issue #41 review), so the comparison uses this
+            // instead — EndIdx keeps its own meaning for searchStart and the eager gate.
+            int consumedEndIdx = startIdx;
 
             for (int patIdx = 0; patIdx < pattern.Length; patIdx++)
             {
@@ -642,6 +701,7 @@ namespace VoXR.Commands
 #endif
                         _matchSlotBuf[slotCount++] = new VoxrSlotMatch(slotName, matchedValue);
                         tokenIdx += consumed;
+                        consumedEndIdx = tokenIdx;
                         rawScore += MatchScore;
                         denominator += MatchScore;
                     }
@@ -661,6 +721,7 @@ namespace VoXR.Commands
                         denominator += OptionalLiteralScore;
                         literalCount++;
                         tokenIdx++;
+                        consumedEndIdx = tokenIdx;
                     }
                     // Unmatched optional literal: contributes nothing to score or denominator.
                 }
@@ -673,6 +734,7 @@ namespace VoXR.Commands
                         rawScore += MatchScore;
                         literalCount++;
                         tokenIdx++;
+                        consumedEndIdx = tokenIdx;
                     }
                     else
                     {
@@ -692,6 +754,7 @@ namespace VoXR.Commands
                 LiteralCount = literalCount,
                 SlotCount = slotCount,
                 EndIdx = tokenIdx,
+                ConsumedEndIdx = consumedEndIdx,
             };
         }
 
@@ -990,6 +1053,7 @@ namespace VoXR.Commands
             int bestPatternIdx = -1;
             int bestStartIdx = int.MaxValue;
             int bestEndIdx = 0;
+            int bestConsumedEndIdx = 0;
 
             for (int ci = 0; ci < _commands.Length; ci++)
             {
@@ -1003,18 +1067,23 @@ namespace VoXR.Commands
 
                         var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
 
-                        if (matchResult.Score > 0f &&
-                            (bestScore <= 0f ||
-                             startIdx < bestStartIdx ||
-                             (startIdx == bestStartIdx &&
-                              (matchResult.Score > bestScore ||
-                               (matchResult.Score == bestScore && matchResult.LiteralCount > bestLiteralCount)))))
+                        if (
+                            IsBetterCandidate(
+                                matchResult,
+                                startIdx,
+                                bestScore,
+                                bestStartIdx,
+                                bestConsumedEndIdx,
+                                bestLiteralCount
+                            )
+                        )
                         {
                             bestScore = matchResult.Score;
                             bestLiteralCount = matchResult.LiteralCount;
                             bestCommandIdx = ci;
                             bestPatternIdx = pi;
                             bestStartIdx = startIdx;
+                            bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                             bestEndIdx = matchResult.EndIdx;
                         }
                     }
