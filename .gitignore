@@ -37,6 +37,9 @@ CLAUDE.md.meta
 # Native bridge build output
 NativeBridge~/build*/
 
+# Native bridge desktop provisioning (libvosk prebuilt + model — see harness/README.md)
+NativeBridge~/vendor/
+
 # Internal planning docs (not shipped in public release)
 Planning~/
 
