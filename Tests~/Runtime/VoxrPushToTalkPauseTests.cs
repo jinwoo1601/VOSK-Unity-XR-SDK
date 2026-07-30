@@ -5,6 +5,7 @@
 // Depends:  VoxrPushToTalkController, VoxrSpeechRecogniser, VoxrListeningMode
 // ============================================================================
 using System.Collections;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -16,8 +17,18 @@ namespace VoXR.Tests.Runtime
         // Subclasses the real component through the internal seam
         // (VoxrSpeechRecogniser.IsRecognisingCore/StartRecognitionCore/StopRecognitionCore)
         // so the controller cannot tell the difference, while the test counts calls
-        // and stages recognition state. No override calls base, so nothing here
-        // touches a model, the native bridge, or a microphone.
+        // and stages recognition state.
+        //
+        // Overriding the cores is not on its own what keeps this fixture off the model,
+        // the native bridge and the microphone. Inertness rests on all three of:
+        //   - no override calling base, so nothing the seam covers reaches native code;
+        //   - the empty OnDestroy() below, because a base class's privately-declared
+        //     Unity messages still run on a subclass and the real one releases native
+        //     resources (benign only under UNITY_EDITOR_WIN, a live
+        //     vosk_bridge_destroy() P/Invoke off it). The base Update() needs no such
+        //     shim — it returns early while the base's own _isRecognising stays false;
+        //   - SetUp's InitialiseOnStart = false, since Initialise()/InitialiseAsync()/
+        //     StartRecognitionAsync() are public non-virtual and the seam misses them.
         sealed class FakeSpeechRecogniser : VoxrSpeechRecogniser
         {
             internal int StartCalls { get; private set; }
@@ -46,6 +57,11 @@ namespace VoXR.Tests.Runtime
                 StartCalls = 0;
                 StopCalls = 0;
             }
+
+            // Keeps the base's private OnDestroy — and its ReleaseNativeResources() call
+            // (VoxrSpeechRecogniser.cs:515) — off this double. No `new` keyword: the base
+            // declaration is private, so nothing is being hidden as far as C# is concerned.
+            void OnDestroy() { }
         }
 
         GameObject _recogniserGo;
@@ -67,6 +83,8 @@ namespace VoXR.Tests.Runtime
             _controllerGo = new GameObject("PauseTestController");
             _controller = _controllerGo.AddComponent<VoxrPushToTalkController>();
             _controller.SpeechRecogniser = _fake;
+            // Load-bearing, not tidiness: Initialise() is public and non-virtual, so the
+            // seam does not cover it. Without this, Start() loads the real model.
             _controller.InitialiseOnStart = false;
 
             _startedCount = 0;
@@ -91,16 +109,32 @@ namespace VoXR.Tests.Runtime
 
         void Resume() => _controllerGo.SendMessage("OnApplicationPause", false);
 
+        // Same message, called directly. Only the null-guard test needs this: SendMessage
+        // may log a receiver exception rather than propagate it, which would leave
+        // Assert.DoesNotThrow unable to see the very throw it exists to rule out.
+        // Reflection's TargetInvocationException wrapper still fails DoesNotThrow.
+        void PauseDirect(bool paused) =>
+            typeof(VoxrPushToTalkController)
+                .GetMethod("OnApplicationPause", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(_controller, new object[] { paused });
+
         // Continuous mode is how _wantRecognising gets set without a button press.
         // The mode setter starts recognition, so call counts are cleared afterwards
         // and every assertion below is absolute.
+        //
+        // Assert rather than Assume, unlike the other preconditions in this file: this is
+        // the only check anywhere in Tests~ that continuous mode starts recognition at all.
+        // VoxrPushToTalkController.cs:59 is a separate statement from the :60 event that
+        // the sibling ListeningMode_SetToContinuous_FiresOnTalkStarted covers, so deleting
+        // :59 is invisible everywhere else. An unsatisfied Assume reports Inconclusive,
+        // which this project's failed="0" green criterion would report as a pass.
         void ArrangeContinuousAndRunning()
         {
             _controller.ListeningMode = VoxrListeningMode.Continuous;
-            Assume.That(
+            Assert.That(
                 _fake.Running,
                 Is.True,
-                "Precondition: switching to continuous mode should have started recognition"
+                "Switching to continuous mode must start recognition"
             );
             _fake.ResetCalls();
         }
@@ -166,15 +200,20 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void Pause_WithNullRecogniser_IsNoOp()
         {
+            // The guard at VoxrPushToTalkController.cs:135 only carries weight when the
+            // user still wants recognition: both branches of the state machine are gated
+            // on _wantRecognising (:139, :144), so from the PushToTalk-idle default this
+            // test would pass with the whole method body deleted. Arrange the wanting
+            // state first, then drop the reference — now deleting :135 dereferences null
+            // on the pause branch and again on the resume branch.
+            ArrangeContinuousAndRunning();
             _controller.SpeechRecogniser = null;
 
             Assert.DoesNotThrow(() =>
             {
-                Pause();
-                Resume();
+                PauseDirect(true);
+                PauseDirect(false);
             });
-            Assert.AreEqual(0, _fake.StartCalls);
-            Assert.AreEqual(0, _fake.StopCalls);
         }
 
         // -------- Resume --------
