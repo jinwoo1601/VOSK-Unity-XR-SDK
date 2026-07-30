@@ -87,6 +87,10 @@ The Editor backend (`EditorMicBackend`) captures audio via `UnityEngine.Micropho
 - **Windows only.** macOS and Linux Editors do not have a live mic backend -- use text injection on those platforms.
 - **Default microphone.** The backend uses the Windows default input device. Ensure your microphone is connected and set as the default.
 
+### WAV Replay (Repository Tests)
+
+The same backend carries an internal playback mode used by the repository's acoustic regression suite: committed WAV fixtures (48 kHz mono 16-bit, amplitude-scaled to the measured Quest 3 microphone range) replay through the identical downsampler -> AGC -> VOSK pipeline as live microphone audio, and PlayMode tests assert the recognized command per fixture. The test-data containers ([`VoxrAudioTestSuiteAsset` / `VoxrAudioTestCase`](api/scriptable-objects.md#voxraudiotestsuiteasset)) ship with the package; the fixture corpus, its reproducible TTS generation script, and the replay tests live under the repository's `Tests~/` folder and are stripped from the published package. Replay results are a regression baseline against committed audio -- TTS speech is cleaner than human speech, so the suite detects changes in behaviour, not absolute recognition quality.
+
 ---
 
 ## Text Injection API

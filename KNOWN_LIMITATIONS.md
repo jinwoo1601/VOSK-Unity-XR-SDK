@@ -19,7 +19,15 @@ mitigate some of these but at the cost of memory and download size.
 ### "to" misrecognised as "two"
 
 - **Repro**: Say "switch to weapons". VOSK transcribes `switch two weapons`.
-- **Where seen**: v2.5 test matrix Phase 4.5.
+  Confirmed acoustically by the WAV-replay regression suite: the TTS fixture
+  for "switch to navigation" is transcribed `switch two navigation` and no
+  command matches, while the same voice's "switch to weapons" fixture is
+  recognised correctly — the substitution is phrase- and delivery-dependent,
+  not uniform. The failing phrase is pinned in the corpus as a negative
+  baseline (`Tests~/Fixtures/audio/tts/switch_to_navigation.wav`, expects no
+  command), so if a model or parser change ever fixes it, the suite flags the
+  improvement for conscious re-baselining.
+- **Where seen**: v2.5 test matrix Phase 4.5; WAV-replay acoustic suite (v1.5 dev).
 - **Root cause**: The small English model is acoustically biased toward "two"
   in this context, especially when the speaker emphasises the vowel slightly
   or says it quickly. The grammar token splitter is correct — it produces

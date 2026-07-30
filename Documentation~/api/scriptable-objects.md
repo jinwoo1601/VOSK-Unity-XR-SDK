@@ -107,6 +107,44 @@ Serializable struct representing a single test case.
 | `wordConfidence` | `float` | Simulated uniform word confidence (0--1). `-1` = omit word data. |
 | `description` | `string` | Human-readable description for the results table |
 
+## VoxrAudioTestSuiteAsset
+
+`public class VoxrAudioTestSuiteAsset : ScriptableObject` -- Namespace: `VoXR.Testing`
+
+Create via **Assets > Create > VoXR > Audio Test Suite**.
+
+A collection of audio test cases for acoustic regression testing: each case pairs a fixture WAV file with the command expected when that audio is replayed through the recognition pipeline. Consumed by the repository's WAV-replay PlayMode suite; the fixture corpus itself lives under the repository's `Tests~/` folder and is not part of the published package.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `suiteName` | `string` | Human-readable name for this audio test suite |
+| `cases` | `List<VoxrAudioTestCase>` | Audio test cases to run |
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `ToArray()` | Returns `cases` as a `VoxrAudioTestCase[]`. |
+| `ToJson()` | Serializes all cases to a JSON string. Carries the expectation fields only -- generation-side manifest fields (phrases, peaks, gaps) are not part of this type. |
+| `FromJson(string json)` | Replaces `cases` from a JSON string. |
+
+## VoxrAudioTestCase
+
+`[Serializable] public class VoxrAudioTestCase` -- Namespace: `VoXR.Testing`
+
+A single audio test case.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | `string` | WAV path relative to the fixture root (e.g. `audio/tts/cease_fire.wav`). 48 kHz mono 16-bit. |
+| `category` | `string` | Fixture category (`clean`, `slot-variant`, `homophone`, `filler`, `split`, `silence`) |
+| `expectedIntent` | `string` | Expected intent name. Empty = expect no recognized command (negative baseline). |
+| `expectedSlots` | `ExpectedSlot[]` | Array of `{name, value}` pairs. Omit to skip slot verification. |
+| `expectedTranscript` | `string` | Expected final transcript. Empty = skip the transcript assertion. |
+| `description` | `string` | Human-readable description, echoed into test failure messages |
+
 ## See Also
 
 - [Inspector Authoring](../inspector-authoring.md) -- workflow guide for zero-code setup

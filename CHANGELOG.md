@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- WAV-replay test seam and acoustic regression corpus (Tier B of the automated-verification plan). The Windows editor backend's processing pipeline (48 kHz -> 16 kHz downsampler -> AGC -> int16 -> VOSK -> result dispatch) is now extracted into a single `ProcessChunk` shared by microphone capture and a new internal playback mode, so committed WAV fixtures replay through byte-for-byte the same path live audio takes — pre-DSP, so DSP and AGC changes are exercised by replay. Playback is armed with `StartPlayback` (48 kHz mono 16-bit only; anything else is rejected with an error naming actual and required format) and pumped caller-side in fixed 100 ms chunks, so replays are deterministic and faster than real time, and the live microphone path pays zero additional per-tick cost when playback is unused. On top of the seam: two new public data containers, `VoxrAudioTestCase` and `VoxrAudioTestSuiteAsset` (**Assets > Create > VoXR > Audio Test Suite**), pairing a fixture WAV with an expected intent, slots, and optional transcript; a byte-level 48 kHz-gated WAV reader; and, in the repository (stripped from the published package with the rest of `Tests~`), a 16-fixture TTS corpus at the measured Quest 3 microphone amplitude (peaks 0.04–0.4) covering all 11 demo-grammar intents plus homophone, filler, split-command, and silence cases, a reproducible `generate.sh` + phrase-manifest pipeline, and a PlayMode suite that replays every fixture through a real VOSK model and asserts the recognized command. The suite is a regression detector against committed audio, not an absolute recognition-quality benchmark — TTS speech is cleaner than human speech.
+
 ## [1.4.0] - 2026-07-28
 
 ### Added

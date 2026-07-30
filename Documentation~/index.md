@@ -22,7 +22,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - [VoxrCommandRecogniser](api/command-recogniser.md) -- Command parsing component: configuration, events, injection
 - [Data Types](api/data-types.md) -- VoxrResult, VoxrWord, VoxrCommand, and related structs
 - [Command Definitions](api/command-definitions.md) -- VoxrCommandDefinition, VoxrSlotDefinition, VoxrCommandSet
-- [ScriptableObject Assets](api/scriptable-objects.md) -- VoxrSlotAsset, VoxrCommandAsset, VoxrCommandSetAsset, VoxrTestSuiteAsset
+- [ScriptableObject Assets](api/scriptable-objects.md) -- VoxrSlotAsset, VoxrCommandAsset, VoxrCommandSetAsset, VoxrTestSuiteAsset, VoxrAudioTestSuiteAsset
 - [VoxrNumberParser](api/number-parser.md) -- Digit word to integer conversion
 - [VoxrBridgeErrorCode](api/error-codes.md) -- Structured error codes for all failure modes
 - [VoxrBatchTestRunner](api/batch-test-runner.md) -- Regression-testing runner, test cases, batch results
