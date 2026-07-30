@@ -4,13 +4,15 @@
 #include "downsampler.h"
 #include "agc.h"
 #include "result_queue.h"
-#include "audio_capture_audiorecord.h"
+#include "audio_capture.h"
 
 #include <thread>
 #include <atomic>
 #include <string>
 #include <cstring>
 #include <chrono>
+#include <cmath>
+#include <algorithm>
 #include "logging.h"
 
 // --- Static global state (singleton bridge) ---
@@ -28,6 +30,12 @@ static Agc               g_agc;
 static std::thread       g_recognition_thread;
 static std::atomic<bool> g_running{false};
 static std::atomic<bool> g_initialised{false};
+
+// Push mode: audio arrives via vosk_bridge_push_audio instead of a capture
+// backend. Owned by the start helper; cleared on stop/destroy so a stale
+// flag can never let pushes into a capture session (single-producer ring).
+static std::atomic<bool>  g_push_mode{false};
+static std::atomic<float> g_input_level{0.0f};
 
 static std::string       g_last_error;
 static std::string       g_last_partial;
@@ -67,7 +75,11 @@ static void recognition_loop() {
     LOGI("Recognition thread started");
 
     while (g_running.load(std::memory_order_acquire)) {
-        if (g_audio_capture.HasError()) {
+        // Capture errors are only meaningful when capture runs: the error
+        // flag is sticky (cleared only by a capture Start, which push mode
+        // skips), so it must be ignored in push mode (design §7.1 amendment).
+        if (!g_push_mode.load(std::memory_order_acquire) &&
+            g_audio_capture.HasError()) {
             LOGE("Audio capture error detected, stopping recognition");
             g_result_queue.Push(
                 std::string("{\"error\": \"audio device error\", \"code\": ")
@@ -81,6 +93,23 @@ static void recognition_loop() {
         if (read_count == 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
+        }
+
+        // Rolling RMS of the pre-DSP chunk for the input-level getter.
+        // Alpha derives from the chunk length so the ~300 ms effective
+        // window holds for any producer chunk size (capture writes ~20 ms
+        // chunks, push typically larger).
+        {
+            float sum_sq = 0.0f;
+            for (uint32_t i = 0; i < read_count; ++i)
+                sum_sq += read_buf[i] * read_buf[i];
+            float chunk_rms = std::sqrt(sum_sq / static_cast<float>(read_count));
+            float pre_dsp_rate = g_sample_rate * Downsampler::kDecimationFactor;
+            float chunk_ms = static_cast<float>(read_count) * 1000.0f / pre_dsp_rate;
+            float alpha = 1.0f - std::exp(-chunk_ms / 300.0f);
+            float level = g_input_level.load(std::memory_order_relaxed);
+            g_input_level.store(level + alpha * (chunk_rms - level),
+                                std::memory_order_relaxed);
         }
 
         // Downsample 48 kHz -> 16 kHz
@@ -133,6 +162,38 @@ static void recognition_loop() {
         LOGE("vosk_recognizer_final_result returned NULL");
 
     LOGI("Recognition thread exiting");
+}
+
+// Shared start path for capture and push modes. Owns g_push_mode: exactly
+// one producer (capture thread or pusher) exists per session by construction.
+static int start_internal(bool start_capture) {
+    g_last_error.clear();
+
+    if (!g_initialised.load(std::memory_order_acquire))
+        return VOSK_BRIDGE_ERR_NOT_INITIALISED;
+
+    if (g_running.load(std::memory_order_acquire))
+        return VOSK_BRIDGE_ERR_ALREADY_RUNNING;
+
+    reset_pipeline();
+    g_input_level.store(0.0f, std::memory_order_relaxed);
+    g_push_mode.store(!start_capture, std::memory_order_release);
+
+    if (start_capture) {
+        int audio_result = g_audio_capture.Start(&g_ring_buffer);
+        if (audio_result != VOSK_BRIDGE_OK) {
+            g_last_error = "Failed to start audio capture";
+            g_push_mode.store(false, std::memory_order_release);
+            return audio_result;
+        }
+    }
+
+    // Launch recognition thread
+    g_running.store(true, std::memory_order_release);
+    g_recognition_thread = std::thread(recognition_loop);
+
+    LOGI("Recognition started%s", start_capture ? "" : " (push mode)");
+    return VOSK_BRIDGE_OK;
 }
 
 // --- Bridge C API implementation ---
@@ -192,6 +253,9 @@ void vosk_bridge_destroy() {
     if (g_recognition_thread.joinable())
         g_recognition_thread.join();
 
+    g_push_mode.store(false, std::memory_order_release);
+    g_input_level.store(0.0f, std::memory_order_relaxed);
+
     if (g_recognizer) {
         vosk_recognizer_free(g_recognizer);
         g_recognizer = nullptr;
@@ -209,29 +273,11 @@ void vosk_bridge_destroy() {
 }
 
 int vosk_bridge_start() {
-    g_last_error.clear();
+    return start_internal(true);
+}
 
-    if (!g_initialised.load(std::memory_order_acquire))
-        return VOSK_BRIDGE_ERR_NOT_INITIALISED;
-
-    if (g_running.load(std::memory_order_acquire))
-        return VOSK_BRIDGE_ERR_ALREADY_RUNNING;
-
-    reset_pipeline();
-
-    // Start audio capture
-    int audio_result = g_audio_capture.Start(&g_ring_buffer);
-    if (audio_result != VOSK_BRIDGE_OK) {
-        g_last_error = "Failed to start audio capture";
-        return audio_result;
-    }
-
-    // Launch recognition thread
-    g_running.store(true, std::memory_order_release);
-    g_recognition_thread = std::thread(recognition_loop);
-
-    LOGI("Recognition started");
-    return VOSK_BRIDGE_OK;
+int vosk_bridge_start_push() {
+    return start_internal(false);
 }
 
 void vosk_bridge_stop() {
@@ -240,6 +286,9 @@ void vosk_bridge_stop() {
 
     if (g_recognition_thread.joinable())
         g_recognition_thread.join();
+
+    g_push_mode.store(false, std::memory_order_release);
+    g_input_level.store(0.0f, std::memory_order_relaxed);
 
     LOGI("Recognition stopped");
 }
@@ -251,18 +300,47 @@ int vosk_bridge_reset() {
         return VOSK_BRIDGE_ERR_NOT_INITIALISED;
 
     bool was_running = g_running.load(std::memory_order_acquire);
+    bool was_push    = g_push_mode.load(std::memory_order_acquire);
     if (was_running)
         vosk_bridge_stop();
 
     vosk_recognizer_reset(g_recognizer);
 
     if (was_running) {
-        int restart = vosk_bridge_start();
+        // Restart in the mode that was active — a reset must never convert
+        // a push session into a capture session (single-producer ring).
+        int restart = start_internal(!was_push);
         if (restart != VOSK_BRIDGE_OK)
             return restart;
     }
 
     return VOSK_BRIDGE_OK;
+}
+
+int vosk_bridge_push_audio(const float* samples, uint32_t count) {
+    if (!g_initialised.load(std::memory_order_acquire))
+        return -VOSK_BRIDGE_ERR_NOT_INITIALISED;
+
+    if (!g_running.load(std::memory_order_acquire) ||
+        !g_push_mode.load(std::memory_order_acquire))
+        return -VOSK_BRIDGE_ERR_NOT_RUNNING;
+
+    if (!samples || count == 0)
+        return 0;
+
+    // Clamp to free space so pushed audio is never overwritten: a short
+    // write tells the caller to drain and retry (capture backends instead
+    // overwrite oldest and flag overflow). Writing up to capacity exactly
+    // is safe — the overflow checks use strict '>'.
+    uint32_t free_space = RingBuffer<float>::kCapacity - g_ring_buffer.Available();
+    uint32_t to_write = std::min(count, free_space);
+    if (to_write > 0)
+        g_ring_buffer.Write(samples, to_write);
+    return static_cast<int>(to_write);
+}
+
+float vosk_bridge_get_input_level() {
+    return g_input_level.load(std::memory_order_relaxed);
 }
 
 int vosk_bridge_set_grammar(const char* grammar_json) {

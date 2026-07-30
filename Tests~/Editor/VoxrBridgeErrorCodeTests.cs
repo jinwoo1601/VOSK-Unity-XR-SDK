@@ -13,6 +13,7 @@ namespace VoXR.Tests.Editor
         [TestCase(VoxrBridgeErrorCode.AlreadyRunning, 5)]
         [TestCase(VoxrBridgeErrorCode.NotInitialised, 6)]
         [TestCase(VoxrBridgeErrorCode.AlreadyInitialised, 7)]
+        [TestCase(VoxrBridgeErrorCode.NotRunning, 8)]
         public void ErrorCode_HasExpectedIntegerValue(VoxrBridgeErrorCode code, int expected)
         {
             Assert.AreEqual(expected, (int)code);

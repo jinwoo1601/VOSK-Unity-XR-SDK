@@ -1,0 +1,202 @@
+{
+    "_comment": "Bridge-level committed baseline for the Tier C harness (see harness/README.md). Relationship to Tests~/Fixtures/audio/manifest.json: that file carries PARSER-level expectations (expectedIntent/expectedSlots; expectedTranscript deliberately empty for filler/split/homophone-negative cases), while expectedFinals here are the raw final transcripts the desktop bridge emits — [unk] tokens included — under the exact grammar/gain/libvosk pinned in this file. 'file' is a basename resolved against --fixtures; the corpus manifest's same-named key is Tests~/Fixtures/-relative. Per the Tier B F7-amendment policy, raw transcripts belong to this committed baseline: regenerating the corpus or bumping libvosk re-baselines via --write-baseline as a conscious, reviewed step. grammar is the verbatim output of VoxrCommandParser.GenerateGrammarJson over the demo grammar (pattern literals + slot values + alias keys + digit vocabulary + confirm/cancel follow-up words + [unk], ordinal-sorted).",
+    "cases": [
+        {
+            "expectedFinals": [
+                "launch one missiles target hotel one"
+            ],
+            "file": "launch_one_missiles_target_hotel_one.wav"
+        },
+        {
+            "expectedFinals": [
+                "cease fire"
+            ],
+            "file": "cease_fire.wav"
+        },
+        {
+            "expectedFinals": [
+                "resume fire"
+            ],
+            "file": "resume_fire.wav"
+        },
+        {
+            "expectedFinals": [
+                "approach target alpha one"
+            ],
+            "file": "approach_target_alpha_one.wav"
+        },
+        {
+            "expectedFinals": [
+                "fall back from target bravo two"
+            ],
+            "file": "fall_back_from_target_bravo_two.wav"
+        },
+        {
+            "expectedFinals": [
+                "switch two navigation"
+            ],
+            "file": "switch_to_navigation.wav"
+        },
+        {
+            "expectedFinals": [
+                "navigation mode"
+            ],
+            "file": "navigation_mode.wav"
+        },
+        {
+            "expectedFinals": [
+                "enable all"
+            ],
+            "file": "enable_all.wav"
+        },
+        {
+            "expectedFinals": [
+                "disable all"
+            ],
+            "file": "disable_all.wav"
+        },
+        {
+            "expectedFinals": [
+                "fire two torpedoes at bravo two"
+            ],
+            "file": "fire_two_torpedoes_at_bravo_two.wav"
+        },
+        {
+            "expectedFinals": [
+                "launch jackals target hotel two"
+            ],
+            "file": "launch_jackals_target_hotel_two.wav"
+        },
+        {
+            "expectedFinals": [
+                "set heading two seven zero"
+            ],
+            "file": "set_heading_two_seven_zero.wav"
+        },
+        {
+            "expectedFinals": [
+                "switch to weapons"
+            ],
+            "file": "switch_to_weapons.wav"
+        },
+        {
+            "expectedFinals": [
+                "[unk] launch three torpedoes target alpha three"
+            ],
+            "file": "filler_launch_three_torpedoes_target_alpha_three.wav"
+        },
+        {
+            "expectedFinals": [
+                "close distance safe range",
+                "target hotel one"
+            ],
+            "file": "split_close_distance_safe_range_target_hotel_one.wav"
+        },
+        {
+            "expectedFinals": [],
+            "file": "silence_negative.wav"
+        }
+    ],
+    "gain": -18.0,
+    "grammar": [
+        "[unk]",
+        "a",
+        "abort",
+        "affirmative",
+        "ahead",
+        "all",
+        "alpha",
+        "approach",
+        "at",
+        "away",
+        "back",
+        "belay",
+        "bravo",
+        "cancel",
+        "cease",
+        "close",
+        "commands",
+        "confirm",
+        "cqb",
+        "disable",
+        "disengage",
+        "distance",
+        "do",
+        "eight",
+        "eighteen",
+        "eighty",
+        "eleven",
+        "enable",
+        "fall",
+        "fifteen",
+        "fifty",
+        "fire",
+        "firing",
+        "five",
+        "forty",
+        "four",
+        "fourteen",
+        "from",
+        "get",
+        "go",
+        "heading",
+        "hotel",
+        "hundred",
+        "in",
+        "it",
+        "jackal",
+        "jackals",
+        "launch",
+        "make",
+        "mark",
+        "mind",
+        "missiles",
+        "mode",
+        "modes",
+        "move",
+        "navigation",
+        "negative",
+        "never",
+        "nine",
+        "nineteen",
+        "ninety",
+        "on",
+        "one",
+        "open",
+        "orient",
+        "pdc",
+        "pull",
+        "railgun",
+        "range",
+        "reengage",
+        "resume",
+        "safe",
+        "set",
+        "seven",
+        "seventeen",
+        "seventy",
+        "shoot",
+        "six",
+        "sixteen",
+        "sixty",
+        "stop",
+        "switch",
+        "target",
+        "ten",
+        "that",
+        "thirteen",
+        "thirty",
+        "thousand",
+        "three",
+        "to",
+        "torpedo",
+        "torpedoes",
+        "twelve",
+        "twenty",
+        "two",
+        "weapons",
+        "yes",
+        "zero"
+    ],
+    "libvosk": "0.3.45 (Alphacephei vosk-linux-x86_64 prebuilt)"
+}

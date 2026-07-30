@@ -16,6 +16,7 @@ namespace VoXR
         AlreadyRunning = 5,
         NotInitialised = 6,
         AlreadyInitialised = 7,
+        NotRunning = 8,
     }
 
     public static class VoxrBridgeErrorCodeExtensions
@@ -30,6 +31,8 @@ namespace VoXR
             VoxrBridgeErrorCode.AlreadyRunning => "Recognition is already running.",
             VoxrBridgeErrorCode.NotInitialised => "Bridge is not initialised. Call Initialise() first.",
             VoxrBridgeErrorCode.AlreadyInitialised => "Bridge is already initialised.",
+                VoxrBridgeErrorCode.NotRunning =>
+                    "Recognition is not running (push mode requires a prior start).",
             _ => $"Unknown error code ({(int)code})",
         };
     }

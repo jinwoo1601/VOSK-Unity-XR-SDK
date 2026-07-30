@@ -1,0 +1,18 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "desktop-linux",
+      "displayName": "Desktop Linux x86_64 (stub capture, WSL harness)",
+      "description": "Tier C build: stub capture backend, libvosk from vendor/, harness enabled. See harness/README.md for provisioning.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-desktop",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VOSK_BRIDGE_CAPTURE": "stub",
+        "VOSK_BRIDGE_BUILD_HARNESS": "ON",
+        "VOSK_LIB_DIR": "${sourceDir}/vendor"
+      }
+    }
+  ]
+}
