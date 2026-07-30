@@ -80,3 +80,10 @@ if(ANDROID)
     target_compile_options(vosk-bridge PRIVATE $<$<CONFIG:Release>:-flto=thin>)
     target_link_options(vosk-bridge PRIVATE $<$<CONFIG:Release>:-flto=thin>)
 endif()
+
+# --- WSL harness (Tier C) ---
+
+option(VOSK_BRIDGE_BUILD_HARNESS "Build the WAV->transcript harness CLI (desktop preset)" OFF)
+if(VOSK_BRIDGE_BUILD_HARNESS)
+    add_subdirectory(harness)
+endif()

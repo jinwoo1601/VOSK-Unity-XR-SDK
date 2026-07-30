@@ -11,10 +11,12 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 #else // Desktop fallback: plain stdio, no liblog dependency.
+      // Both levels go to stderr — stdout belongs to tool output (the
+      // harness prints its JSON report there).
 
 #include <cstdio>
 
-#define LOGI(...) (std::printf("[" LOG_TAG "] "), std::printf(__VA_ARGS__), std::printf("\n"))
+#define LOGI(...) (std::fprintf(stderr, "[" LOG_TAG "] "), std::fprintf(stderr, __VA_ARGS__), std::fprintf(stderr, "\n"))
 #define LOGE(...) (std::fprintf(stderr, "[" LOG_TAG "] "), std::fprintf(stderr, __VA_ARGS__), std::fprintf(stderr, "\n"))
 
 #endif
