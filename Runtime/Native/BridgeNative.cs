@@ -46,6 +46,23 @@ namespace VoXR.Native
         [DllImport(LibraryName)] [Preserve]
         internal static extern int vosk_bridge_set_grammar(string grammarJson);
 
+        // Push-audio seam (Tier C/D verification): recognition without capture.
+        // No runtime caller yet — the on-device test rig (Tier D) is the consumer.
+        [DllImport(LibraryName)]
+        [Preserve]
+        internal static extern int vosk_bridge_start_push();
+
+        // Returns samples written (short write = ring full, pace and retry) or a
+        // NEGATIVE VoskBridgeError on misuse — do not cast this result to
+        // VoxrBridgeErrorCode without negating it first (unlike every other binding).
+        [DllImport(LibraryName)]
+        [Preserve]
+        internal static extern int vosk_bridge_push_audio(float[] samples, int count);
+
+        [DllImport(LibraryName)]
+        [Preserve]
+        internal static extern float vosk_bridge_get_input_level();
+
         // The returned span wraps native memory owned by the bridge (g_current_result.json
         // for Android, libvosk's internal result buffer in the Editor). That memory is
         // valid until the next vosk_bridge_get_result / vosk_recognizer_*_result call.
