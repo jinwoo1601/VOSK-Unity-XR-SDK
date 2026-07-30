@@ -33,6 +33,14 @@ cmake --build build-desktop
 
 The preset selects the **stub** capture backend (`VOSK_BRIDGE_CAPTURE=stub` — no JNI, no Android anywhere) and builds the harness (`VOSK_BRIDGE_BUILD_HARNESS=ON`). The Android build commands in the project CLAUDE.md are untouched by any of this.
 
+Presets need CMake ≥ 3.21; on an older CMake the equivalent raw configure is:
+
+```bash
+cmake -B build-desktop -S . -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DVOSK_BRIDGE_CAPTURE=stub -DVOSK_BRIDGE_BUILD_HARNESS=ON \
+      -DVOSK_LIB_DIR="$(pwd)/vendor"
+```
+
 ## Run
 
 ```bash
@@ -43,7 +51,13 @@ cd NativeBridge~
   --manifest harness/expectations.json
 ```
 
-Output: a JSON report (per-fixture expected/actual/pass plus a summary). Exit codes: **0** = all fixtures match the baseline; **1** = at least one transcript mismatch; **2** = operational error (unreadable model/manifest/WAV, bridge error, `{"error": ...}` result entries such as ring overflow).
+Output: a JSON report (per-fixture expected/actual/pass plus a summary). Exit codes: **0** = all fixtures match the baseline; **1** = at least one transcript mismatch; **2** = operational error (unreadable model/manifest/WAV, schema-invalid manifest, bridge error, `{"error": ...}` result entries such as ring overflow).
+
+Guards that make a green run meaningful (all exit 2 when violated):
+
+- The decode-regime pins `gain`, `grammar`, and `libvosk` are **required** manifest keys — a run without them (e.g. a free decode) would silently invalidate the baseline.
+- A manifest with zero cases is refused (no vacuous greens).
+- Every `.wav` in the fixtures directory must have a manifest entry (corpus-drift guard — the mirror of Tier B's `EveryCommittedWav_IsListedInTheManifest`).
 
 Fixture WAVs must be 48 kHz mono 16-bit PCM (the corpus format) — anything else is rejected naming the actual and required format.
 

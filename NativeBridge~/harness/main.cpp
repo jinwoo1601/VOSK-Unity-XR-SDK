@@ -16,7 +16,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -96,7 +98,7 @@ int Fail(const std::string& msg) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int RunHarness(int argc, char** argv) {
     std::string model_dir, fixtures_dir, manifest_path;
     bool write_baseline = false;
 
@@ -117,26 +119,75 @@ int main(int argc, char** argv) {
     json manifest = json::parse(mf, nullptr, false);
     if (manifest.is_discarded())
         return Fail("manifest is not valid JSON: " + manifest_path);
+
+    // Schema validation up front: a hand-edited manifest must fail legibly
+    // (exit 2), never abort mid-run — and the decode-regime pins are REQUIRED,
+    // because a baseline decoded without them is meaningless (a grammar-less
+    // run would free-decode and silently invalidate every expectation).
     if (!manifest.contains("cases") || !manifest["cases"].is_array())
         return Fail("manifest has no 'cases' array: " + manifest_path);
+    if (manifest["cases"].empty())
+        return Fail("manifest has zero cases — refusing to report a vacuous green run: " + manifest_path);
+    if (!manifest.contains("gain") || !manifest["gain"].is_number())
+        return Fail("manifest 'gain' missing or not a number (required decode-regime pin): " + manifest_path);
+    if (!manifest.contains("grammar") || !manifest["grammar"].is_array() ||
+        manifest["grammar"].empty())
+        return Fail("manifest 'grammar' missing or empty (required — free decode would invalidate the baseline): " + manifest_path);
+    for (const auto& w : manifest["grammar"]) {
+        if (!w.is_string())
+            return Fail("manifest 'grammar' must be an array of strings: " + manifest_path);
+    }
+    if (!manifest.contains("libvosk") || !manifest["libvosk"].is_string() ||
+        manifest["libvosk"].get<std::string>().empty())
+        return Fail("manifest 'libvosk' pin missing (record the provisioned libvosk version): " + manifest_path);
+    for (const auto& c : manifest["cases"]) {
+        if (!c.is_object() || !c.contains("file") || !c["file"].is_string())
+            return Fail("every manifest case needs a string 'file': " + manifest_path);
+        if (c.contains("expectedFinals")) {
+            if (!c["expectedFinals"].is_array())
+                return Fail("case '" + c["file"].get<std::string>() + "': expectedFinals must be an array: " + manifest_path);
+            for (const auto& e : c["expectedFinals"]) {
+                if (!e.is_string())
+                    return Fail("case '" + c["file"].get<std::string>() + "': expectedFinals entries must be strings: " + manifest_path);
+            }
+        }
+    }
 
-    float gain = manifest.value("gain", -18.0f);
+    // Corpus-drift guard: every WAV in the fixtures dir must be listed, or a
+    // committed fixture could silently go unverified forever (mirror of Tier
+    // B's EveryCommittedWav_IsListedInTheManifest).
+    {
+        std::set<std::string> listed;
+        for (const auto& c : manifest["cases"])
+            listed.insert(c["file"].get<std::string>());
+        std::error_code ec;
+        std::filesystem::directory_iterator dir(fixtures_dir, ec);
+        if (ec)
+            return Fail("cannot enumerate fixtures dir: " + fixtures_dir + " (" + ec.message() + ")");
+        std::string unlisted;
+        for (const auto& entry : dir) {
+            if (entry.path().extension() == ".wav" &&
+                listed.count(entry.path().filename().string()) == 0)
+                unlisted += (unlisted.empty() ? "" : ", ") + entry.path().filename().string();
+        }
+        if (!unlisted.empty())
+            return Fail("fixture WAVs have no manifest entry (add cases or remove files): " + unlisted);
+    }
+
+    float gain = manifest["gain"].get<float>();
 
     int rc = vosk_bridge_init(model_dir.c_str(), 16000.0f, gain);
     if (rc != VOSK_BRIDGE_OK)
         return Fail("vosk_bridge_init failed with code " + std::to_string(rc) +
                     " (model: " + model_dir + ")");
 
-    if (manifest.contains("grammar") && manifest["grammar"].is_array() &&
-        !manifest["grammar"].empty()) {
+    {
         std::string grammar = manifest["grammar"].dump();
         rc = vosk_bridge_set_grammar(grammar.c_str());
         if (rc != VOSK_BRIDGE_OK) {
             vosk_bridge_destroy();
             return Fail("vosk_bridge_set_grammar failed with code " + std::to_string(rc));
         }
-    } else {
-        std::fprintf(stderr, "vosk-bridge-harness: warning: no grammar in manifest — free decode\n");
     }
 
     // Padding pushed after each fixture: 1 s of silence lets endpointing fire
@@ -211,4 +262,14 @@ int main(int argc, char** argv) {
     if (run_error)
         return 2;
     return passed == static_cast<int>(outcomes.size()) ? 0 : 1;
+}
+
+int main(int argc, char** argv) {
+    // Backstop: anything the up-front validation missed still lands on the
+    // legible exit-2 path instead of std::terminate.
+    try {
+        return RunHarness(argc, argv);
+    } catch (const std::exception& e) {
+        return Fail(std::string("unhandled error: ") + e.what());
+    }
 }
