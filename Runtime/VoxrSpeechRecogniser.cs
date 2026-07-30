@@ -87,7 +87,16 @@ namespace VoXR
             }
         }
 
-        public bool IsRecognising
+        public bool IsRecognising => IsRecognisingCore;
+
+        // Test seam (issue #49). VoxrPushToTalkController's lifecycle state machine
+        // reads recognition state and drives start/stop only through these three
+        // internal virtual members, so a test double can subclass this component and
+        // count the calls — "resume must not double-start" is a call-count assertion
+        // no IsRecognising reading can express. Internal keeps the public surface
+        // free of an extension point; overriding needs the InternalsVisibleTo grant
+        // in Runtime/AssemblyInfo.cs.
+        internal virtual bool IsRecognisingCore
         {
             get
             {
@@ -198,7 +207,9 @@ namespace VoXR
             IsModelReady = false;
         }
 
-        public void StartRecognition()
+        public void StartRecognition() => StartRecognitionCore();
+
+        internal virtual void StartRecognitionCore()
         {
             _ = StartRecognitionAsync();
         }
@@ -282,7 +293,9 @@ namespace VoXR
 #endif
         }
 
-        public void StopRecognition()
+        public void StopRecognition() => StopRecognitionCore();
+
+        internal virtual void StopRecognitionCore()
         {
             _isRecognising = false;
 #if UNITY_EDITOR_WIN
