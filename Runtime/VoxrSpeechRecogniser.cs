@@ -9,23 +9,29 @@ using System.Collections;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using UnityEngine;
+using VoXR.Native;
 #if UNITY_ANDROID
 using UnityEngine.Android;
 #endif
-using VoXR.Native;
 
 namespace VoXR
 {
     [AddComponentMenu("VoXR/Speech Recogniser")]
     public class VoxrSpeechRecogniser : MonoBehaviour
     {
-        [SerializeField] string modelRelativePath = "vosk-model-small-en-us-0.15";
-        [SerializeField] float sampleRate = 16000f;
+        [SerializeField]
+        string modelRelativePath = "vosk-model-small-en-us-0.15";
 
-        [Tooltip("AGC target audio level in dBFS. Higher values (e.g. -12) produce a louder " +
-                 "signal for VOSK; lower values (e.g. -24) are more conservative. " +
-                 "The default of -18 dBFS works well for typical speech on Quest 3.")]
-        [SerializeField] float micGainTargetDb = -18f;
+        [SerializeField]
+        float sampleRate = 16000f;
+
+        [Tooltip(
+            "AGC target audio level in dBFS. Higher values (e.g. -12) produce a louder "
+                + "signal for VOSK; lower values (e.g. -24) are more conservative. "
+                + "The default of -18 dBFS works well for typical speech on Quest 3."
+        )]
+        [SerializeField]
+        float micGainTargetDb = -18f;
 
         public event Action<string> OnPartialResult;
         public event Action<string> OnFinalResult;
@@ -41,6 +47,7 @@ namespace VoXR
 
 #if UNITY_EDITOR_WIN
         EditorMicBackend _editorBackend;
+
         // Cached method-group → delegate to avoid per-frame allocation when handing
         // DispatchJsonResult to the editor backend's Tick/Stop.
         EditorJsonDispatcher _editorDispatcher;
@@ -65,9 +72,17 @@ namespace VoXR
 #if UNITY_EDITOR_WIN
                 return _editorBackend != null && _editorBackend.IsInitialised;
 #else
-                if (!_bridgeAvailable) return false;
-                try { return BridgeNative.vosk_bridge_is_initialised() == 1; }
-                catch (DllNotFoundException) { MarkBridgeUnavailable(); return false; }
+                if (!_bridgeAvailable)
+                    return false;
+                try
+                {
+                    return BridgeNative.vosk_bridge_is_initialised() == 1;
+                }
+                catch (DllNotFoundException)
+                {
+                    MarkBridgeUnavailable();
+                    return false;
+                }
 #endif
             }
         }
@@ -79,9 +94,17 @@ namespace VoXR
 #if UNITY_EDITOR_WIN
                 return _editorBackend != null && _editorBackend.IsRunning;
 #else
-                if (!_bridgeAvailable) return false;
-                try { return BridgeNative.vosk_bridge_is_running() == 1; }
-                catch (DllNotFoundException) { MarkBridgeUnavailable(); return false; }
+                if (!_bridgeAvailable)
+                    return false;
+                try
+                {
+                    return BridgeNative.vosk_bridge_is_running() == 1;
+                }
+                catch (DllNotFoundException)
+                {
+                    MarkBridgeUnavailable();
+                    return false;
+                }
 #endif
             }
         }
@@ -93,21 +116,31 @@ namespace VoXR
 
         public async Task InitialiseAsync()
         {
-            if (!_bridgeAvailable) return;
-            if (_initialising) return;
-            if (IsInitialised) return;
+            if (!_bridgeAvailable)
+                return;
+            if (_initialising)
+                return;
+            if (IsInitialised)
+                return;
 
             _initialising = true;
             try
             {
-                string modelPath = await ModelExtractor.ExtractModelAsync(modelRelativePath, FireError);
+                string modelPath = await ModelExtractor.ExtractModelAsync(
+                    modelRelativePath,
+                    FireError
+                );
                 if (modelPath == null)
                     return;
 
 #if UNITY_EDITOR_WIN
                 _editorBackend = new EditorMicBackend();
                 bool editorOk = await _editorBackend.InitialiseAsync(
-                    modelPath, sampleRate, micGainTargetDb, FireError);
+                    modelPath,
+                    sampleRate,
+                    micGainTargetDb,
+                    FireError
+                );
                 if (editorOk)
                 {
                     IsModelReady = true;
@@ -172,12 +205,14 @@ namespace VoXR
 
         public async Task StartRecognitionAsync()
         {
-            if (!_bridgeAvailable) return;
+            if (!_bridgeAvailable)
+                return;
 
             if (!IsInitialised)
                 await InitialiseAsync();
 
-            if (!IsInitialised) return;
+            if (!IsInitialised)
+                return;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (!Permission.HasUserAuthorizedPermission(Permission.Microphone))
@@ -197,9 +232,19 @@ namespace VoXR
             bool responded = false;
             bool granted = false;
 
-            callbacks.PermissionGranted += _ => { granted = true; responded = true; };
-            callbacks.PermissionDenied += _ => { responded = true; };
-            callbacks.PermissionDeniedAndDontAskAgain += _ => { responded = true; };
+            callbacks.PermissionGranted += _ =>
+            {
+                granted = true;
+                responded = true;
+            };
+            callbacks.PermissionDenied += _ =>
+            {
+                responded = true;
+            };
+            callbacks.PermissionDeniedAndDontAskAgain += _ =>
+            {
+                responded = true;
+            };
 
             Permission.RequestUserPermission(Permission.Microphone, callbacks);
 
@@ -209,8 +254,10 @@ namespace VoXR
             if (granted)
                 StartRecognitionInternal();
             else
-                FireError(VoxrBridgeErrorCode.PermissionDenied,
-                    "Microphone permission denied by user.");
+                FireError(
+                    VoxrBridgeErrorCode.PermissionDenied,
+                    "Microphone permission denied by user."
+                );
         }
 #endif
 
@@ -247,7 +294,8 @@ namespace VoXR
                 _editorBackend.Stop(EnsureEditorDispatcher());
             }
 #else
-            if (!_bridgeAvailable) return;
+            if (!_bridgeAvailable)
+                return;
             try
             {
                 BridgeNative.vosk_bridge_stop();
@@ -255,7 +303,10 @@ namespace VoXR
                 // vosk_recognizer_final_result before exit (vosk_bridge.cpp:130-134).
                 // Drain it now for the same reason as the Editor branch above.
                 IntPtr ptr;
-                while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt, out int length)) != IntPtr.Zero)
+                while (
+                    (ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt, out int length))
+                    != IntPtr.Zero
+                )
                 {
                     // Span wraps g_current_result.json, valid only until the next
                     // vosk_bridge_get_result call. Consume inline; do not store.
@@ -274,7 +325,8 @@ namespace VoXR
 #if UNITY_EDITOR_WIN
             _editorBackend?.Reset();
 #else
-            if (!_bridgeAvailable) return;
+            if (!_bridgeAvailable)
+                return;
             try
             {
                 int result = BridgeNative.vosk_bridge_reset();
@@ -292,7 +344,8 @@ namespace VoXR
 #if UNITY_EDITOR_WIN
             _editorBackend?.SetGrammar(grammarJson, FireError);
 #else
-            if (!_bridgeAvailable) return;
+            if (!_bridgeAvailable)
+                return;
             try
             {
                 int result = BridgeNative.vosk_bridge_set_grammar(grammarJson);
@@ -322,7 +375,8 @@ namespace VoXR
 
         public static VoxrWord[] CreateSimulatedWords(string text, float confidence = 1.0f)
         {
-            if (string.IsNullOrWhiteSpace(text)) return Array.Empty<VoxrWord>();
+            if (string.IsNullOrWhiteSpace(text))
+                return Array.Empty<VoxrWord>();
 
             var tokens = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var words = new VoxrWord[tokens.Length];
@@ -331,7 +385,8 @@ namespace VoXR
                     tokens[i],
                     confidence,
                     i * SimulatedWordDurationSeconds,
-                    (i + 1) * SimulatedWordDurationSeconds);
+                    (i + 1) * SimulatedWordDurationSeconds
+                );
             return words;
         }
 
@@ -347,8 +402,10 @@ namespace VoXR
 
         static void AssertMainThread(string method)
         {
-            Debug.Assert(System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
-                $"{method} must be called from the Unity main thread.");
+            Debug.Assert(
+                System.Threading.Thread.CurrentThread.ManagedThreadId == 1,
+                $"{method} must be called from the Unity main thread."
+            );
         }
 
         void Update()
@@ -357,7 +414,8 @@ namespace VoXR
             if (_editorBackend != null && _isRecognising)
             {
                 _editorBackend.Tick(FireError, EnsureEditorDispatcher());
-                if (!_editorBackend.IsRunning) _isRecognising = false;
+                if (!_editorBackend.IsRunning)
+                    _isRecognising = false;
                 return;
             }
 #endif
@@ -368,7 +426,10 @@ namespace VoXR
             {
                 bool hadActivity = false;
                 IntPtr ptr;
-                while ((ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt, out int length)) != IntPtr.Zero)
+                while (
+                    (ptr = BridgeNative.vosk_bridge_get_result(out int isFinalInt, out int length))
+                    != IntPtr.Zero
+                )
                 {
                     hadActivity = true;
                     // Span wraps g_current_result.json, valid only until the next
@@ -389,8 +450,13 @@ namespace VoXR
         }
 
 #if UNITY_EDITOR_WIN
-        EditorJsonDispatcher EnsureEditorDispatcher()
-            => _editorDispatcher ??= DispatchJsonResult;
+        EditorJsonDispatcher EnsureEditorDispatcher() => _editorDispatcher ??= DispatchJsonResult;
+
+        // Test-only access to the editor playback seam (design §6.1): tests drive
+        // EditorBackend.StartPlayback/TickPlayback with EditorDispatcher so replayed
+        // audio flows through the same dispatch chain as live microphone results.
+        internal EditorMicBackend EditorBackend => _editorBackend;
+        internal EditorJsonDispatcher EditorDispatcher => EnsureEditorDispatcher();
 #endif
 
         // Parses a VOSK JSON byte span and fires the appropriate event(s).
@@ -445,7 +511,8 @@ namespace VoXR
 
         void CheckBridgeError(int returnCode, string context)
         {
-            if (returnCode == 0) return;
+            if (returnCode == 0)
+                return;
 
             var code = (VoxrBridgeErrorCode)returnCode;
             string detail = BridgeNative.GetLastError();
@@ -457,13 +524,15 @@ namespace VoXR
 
         void MarkBridgeUnavailable()
         {
-            if (!_bridgeAvailable) return;
+            if (!_bridgeAvailable)
+                return;
             _bridgeAvailable = false;
             _isRecognising = false;
-            FireError(VoxrBridgeErrorCode.ModelLoadFailed,
-                "Native bridge library (libvosk-bridge) not found. " +
-                "Ensure the native plugins are built and placed in Runtime/Plugins/Android/arm64-v8a/.");
+            FireError(
+                VoxrBridgeErrorCode.ModelLoadFailed,
+                "Native bridge library (libvosk-bridge) not found. "
+                    + "Ensure the native plugins are built and placed in Runtime/Plugins/Android/arm64-v8a/."
+            );
         }
-
     }
 }
