@@ -4,7 +4,7 @@
 #include "downsampler.h"
 #include "agc.h"
 #include "result_queue.h"
-#include "audio_capture_audiorecord.h"
+#include "audio_capture.h"
 
 #include <thread>
 #include <atomic>
