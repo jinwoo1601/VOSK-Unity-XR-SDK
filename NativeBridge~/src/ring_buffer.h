@@ -74,6 +74,9 @@ public:
         return to_read;
     }
 
+    // Total capacity in samples (for producers that pace instead of overwrite).
+    static constexpr uint32_t kCapacity = Size;
+
     // Number of samples available for reading.
     uint32_t Available() const {
         uint32_t w = write_pos_.load(std::memory_order_acquire);
