@@ -16,10 +16,13 @@ Error codes reported by the native bridge via `VoxrSpeechRecogniser.OnError`.
 | `AlreadyRunning` | 5 | Recognition is already running |
 | `NotInitialised` | 6 | Bridge not initialised |
 | `AlreadyInitialised` | 7 | Bridge already initialised |
+| `NotRunning` | 8 | Recognition not running (push mode requires a prior start) |
 
 ## Extension Method
 
 `ToDescription()` returns a human-readable string for each code.
+
+> `NotRunning` is reported by the bridge's push-audio seam (`vosk_bridge_push_audio`, a verification-only API with no managed caller yet). Unlike every other bridge call, that function returns error codes **negated** (negative values), reserving the non-negative range for sample counts — it never surfaces through `OnError`.
 
 ## Example
 
