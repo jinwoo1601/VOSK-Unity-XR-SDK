@@ -47,6 +47,12 @@ namespace VoXR
         byte[] _lastPartialBuffer;
         int _lastPartialLength;
 
+        // WAV playback state (test seam; design §6.1). Allocated only by
+        // StartPlayback so the microphone path never pays for the mode.
+        float[] _playbackSamples;
+        float[] _playbackChunk;
+        int _playbackPos;
+
         internal bool IsInitialised { get; private set; }
         internal bool IsRunning { get; private set; }
 
@@ -142,6 +148,16 @@ namespace VoXR
             }
             if (IsRunning) return true;
 
+            if (IsInPlayback)
+            {
+                fireError?.Invoke(
+                    VoxrBridgeErrorCode.AlreadyRunning,
+                    "EditorMicBackend.Start called while WAV playback is active. "
+                        + "Call StopPlayback first."
+                );
+                return false;
+            }
+
             if (Microphone.devices.Length == 0)
             {
                 fireError?.Invoke(VoxrBridgeErrorCode.AudioDeviceUnavailable,
@@ -212,7 +228,10 @@ namespace VoXR
 
         internal void Reset()
         {
-            if (!IsInitialised) return;
+            // No-op during playback: resetting the recognizer mid-stream would
+            // corrupt the replay's determinism (Reset has no error channel).
+            if (!IsInitialised || IsInPlayback)
+                return;
             VoxrNative.vosk_recognizer_reset(_recognizer);
             _downsampler.Reset();
             _agc.Reset();
@@ -234,6 +253,15 @@ namespace VoXR
                 fireError?.Invoke(VoxrBridgeErrorCode.AlreadyRunning,
                     "EditorMicBackend.SetGrammar called while recognition is running. " +
                     "Stop recognition first.");
+                return;
+            }
+            if (IsInPlayback)
+            {
+                fireError?.Invoke(
+                    VoxrBridgeErrorCode.AlreadyRunning,
+                    "EditorMicBackend.SetGrammar called while WAV playback is active. "
+                        + "The recognizer cannot be recreated mid-stream; stop playback first."
+                );
                 return;
             }
 
@@ -284,6 +312,9 @@ namespace VoXR
             _int16Buffer = null;
             _lastPartialBuffer = null;
             _lastPartialLength = 0;
+            _playbackSamples = null;
+            _playbackChunk = null;
+            _playbackPos = 0;
 
             IsInitialised = false;
         }
@@ -332,7 +363,16 @@ namespace VoXR
 
             _lastSamplePos = (_lastSamplePos + available) % clipSamples;
 
-            int dsCount = _downsampler.Process(_workBuffer, available, _downsampledBuffer);
+            ProcessChunk(_workBuffer, available, dispatch);
+        }
+
+        // Source-agnostic processing pipeline shared by microphone capture and
+        // WAV playback: Downsampler → AGC → int16 → VOSK → result dispatch.
+        // Requires _downsampledBuffer/_int16Buffer sized for `count` by the caller's
+        // start path (Start for the microphone, StartPlayback for replay).
+        void ProcessChunk(float[] samples, int count, EditorJsonDispatcher dispatch)
+        {
+            int dsCount = _downsampler.Process(samples, count, _downsampledBuffer);
             if (dsCount == 0) return;
 
             PreAgcRms = ComputeRms(_downsampledBuffer, dsCount);
@@ -364,6 +404,123 @@ namespace VoXR
                     dispatch?.Invoke(json, false);
                 }
             }
+        }
+
+        // --- WAV playback (test seam; design §6.1) ---------------------------
+
+        // Fixed chunk so replay results are machine- and frame-rate-independent:
+        // 4800 samples = 100 ms at 48 kHz, divisible by the decimation factor.
+        internal const int PlaybackChunkSamples = 4800;
+
+        internal bool IsInPlayback => _playbackSamples != null;
+
+        // Arms playback over a 48 kHz mono sample buffer. Mutually exclusive with
+        // microphone capture; re-arming over an active playback discards the prior
+        // session. Resets the full pipeline state (downsampler, AGC, partial-dedup
+        // cache, recognizer) so every replay starts identical.
+        internal bool StartPlayback(
+            float[] samples,
+            int sampleRate,
+            Action<VoxrBridgeErrorCode, string> fireError
+        )
+        {
+            if (!IsInitialised)
+            {
+                fireError?.Invoke(
+                    VoxrBridgeErrorCode.NotInitialised,
+                    "EditorMicBackend.StartPlayback called before InitialiseAsync."
+                );
+                return false;
+            }
+            if (IsRunning)
+            {
+                fireError?.Invoke(
+                    VoxrBridgeErrorCode.AlreadyRunning,
+                    "EditorMicBackend.StartPlayback called while the microphone is "
+                        + "running. Stop recognition first."
+                );
+                return false;
+            }
+            if (samples == null || samples.Length == 0)
+            {
+                fireError?.Invoke(
+                    VoxrBridgeErrorCode.AudioDeviceUnavailable,
+                    "EditorMicBackend.StartPlayback called with no samples."
+                );
+                return false;
+            }
+            if (sampleRate != SourceSampleRate)
+            {
+                fireError?.Invoke(
+                    VoxrBridgeErrorCode.AudioDeviceUnavailable,
+                    $"StartPlayback received {sampleRate} Hz audio; {SourceSampleRate} Hz "
+                        + "is required. The 48 kHz → 16 kHz downsampler cannot handle other "
+                        + "input rates; resample the fixture instead."
+                );
+                return false;
+            }
+
+            _playbackSamples = samples;
+            _playbackPos = 0;
+            if (_playbackChunk == null)
+                _playbackChunk = new float[PlaybackChunkSamples];
+
+            // Size the shared pipeline buffers for the fixed chunk. Mic Start()
+            // re-sizes them for the mic clip when it next runs.
+            int dsSize = PlaybackChunkSamples / Downsampler.DecimationFactor + 1;
+            if (_downsampledBuffer == null || _downsampledBuffer.Length < dsSize)
+            {
+                _downsampledBuffer = new float[dsSize];
+                _int16Buffer = new short[dsSize];
+            }
+
+            _downsampler.Reset();
+            _agc.Reset();
+            _lastPartialLength = 0;
+            VoxrNative.vosk_recognizer_reset(_recognizer);
+
+            return true;
+        }
+
+        // Feeds the next fixed-size chunk through the shared pipeline. Returns
+        // true while more audio remains; on exhaustion flushes the recognizer's
+        // final result once (the same flush Stop() performs), disarms playback,
+        // and returns false.
+        internal bool TickPlayback(EditorJsonDispatcher dispatch)
+        {
+            if (!IsInPlayback)
+                return false;
+
+            int remaining = _playbackSamples.Length - _playbackPos;
+            if (remaining > 0)
+            {
+                int count = Math.Min(PlaybackChunkSamples, remaining);
+                Array.Copy(_playbackSamples, _playbackPos, _playbackChunk, 0, count);
+                _playbackPos += count;
+                ProcessChunk(_playbackChunk, count, dispatch);
+                return true;
+            }
+
+            // The span wraps libvosk's internal result buffer, valid only until
+            // the next vosk_recognizer_*_result call. Consume inline; do not store.
+            if (_recognizer != IntPtr.Zero && dispatch != null)
+            {
+                ReadOnlySpan<byte> finalJson = BridgeNative.SpanFromNullTerminated(
+                    VoxrNative.vosk_recognizer_final_result(_recognizer)
+                );
+                if (finalJson.Length > 0)
+                    dispatch(finalJson, true);
+            }
+            StopPlayback();
+            return false;
+        }
+
+        // Disarms playback without flushing — safe to call from test teardown.
+        // The chunk buffer is kept for reuse across replays; Release() frees it.
+        internal void StopPlayback()
+        {
+            _playbackSamples = null;
+            _playbackPos = 0;
         }
 
         bool PartialMatchesLast(ReadOnlySpan<byte> json)
