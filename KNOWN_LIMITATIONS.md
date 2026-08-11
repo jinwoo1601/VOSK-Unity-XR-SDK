@@ -346,9 +346,10 @@ deliberate trade-offs rather than oversights.
   candidate covering more of the utterance. Removing the literal outright
   (`["decelerate", "{burn_level}"]`) works too, at the cost of the phrasing.
   `VoxrCommandParser` logs a validation warning at construction naming the literal
-  and the slot at risk — deliberately only for the single-literal, same-command,
-  literally-compared shape, so wider forms of the same hazard (two literals before
-  the slot, or the pair split across two intents) are real but unwarned.
+  and the slot at risk. The scan follows what the parser itself compares, so it
+  covers the hazard across *different intents* as well as within one command, behind
+  a run of two or more literals, and after expanding a bare pattern's own optional
+  elements; only patterns with more than six optionals are compared unexpanded.
   **The optional-literal swap has two costs**, neither of them a no-op: a matched
   optional literal scores 0.5 on both sides of the ratio where a required one scores
   1.0, so any *imperfect* match scores strictly lower than before and may now fall

@@ -294,25 +294,27 @@ namespace VoXR.Commands
         }
 
         // A common pattern-set shape that silently throws away a slot value the speaker did
-        // say (issue #42): a bare pattern P and a sibling that extends it with a required
-        // literal followed by a slot. Drop that literal — short function words are the most
-        // dropped tokens in practice — and the sibling is charged RequiredLiteralMissPenalty
-        // while P still matches perfectly, so P wins and the spoken slot content is discarded
-        // with nothing to signal it. No penalty tuning reaches this: P scores a clean 1.0 and
-        // nothing normalized to 1.0 can beat it. Marking the literal optional does, so that is
-        // what the warning asks for — an omitted optional leaves both sides of the ratio, so
-        // the sibling reaches 1.0 whether or not the literal was spoken and takes the
-        // consumed-span tie-break (issue #41) over the bare form.
+        // say (issue #42): a bare pattern P and a longer pattern that extends it with one or
+        // more required literals followed by a slot. Drop such a literal — short function
+        // words are the most dropped tokens in practice — and the longer pattern is charged
+        // RequiredLiteralMissPenalty while P still matches perfectly, so P wins and the spoken
+        // slot content is discarded with nothing to signal it. No penalty tuning reaches this:
+        // P scores a clean 1.0 and nothing normalized to 1.0 can beat it. Marking the literal
+        // optional does — an omitted optional leaves both sides of the ratio, so the longer
+        // pattern reaches 1.0 whether or not the literal was spoken and takes the consumed-span
+        // tie-break (issue #41) over the bare form.
         //
-        // Deliberately narrow, so the warning stays actionable rather than ambient. It
-        // compares patterns WITHIN one command, requires EXACTLY one required literal between
-        // the shared prefix and the slot, and compares elements literally rather than over
-        // ExpandOptionals forms the way ComputeCanCommitEarly's prefix analysis does. The same
-        // hazard split across two intents, behind a run of two or more literals, or reachable
-        // only after expanding an optional inside the bare pattern is real and is NOT warned
-        // about — the authoring rule has to be applied by hand there. Widening it is costed in
-        // the PR #58 review: measured 0 new warnings on the demo grammar for the cross-command
-        // and multi-literal variants, while the expansion variant needs its own recursion bound.
+        // The scan mirrors what ParseInternal actually compares, which is why it is this wide:
+        //   - ACROSS COMMANDS, not just within one. Selection runs over every pattern of every
+        //     command through a single IsBetterCandidate, so splitting the two phrasings across
+        //     two intents reproduces the hazard exactly.
+        //   - Over a RUN of required literals, not a single one. Dropping any one word in
+        //     "decelerate by the {burn_level}" strands the value just as "by" alone does.
+        //   - Over EXPANDED optional forms, like ComputeCanCommitEarly's prefix analysis, so a
+        //     bare pattern that only becomes a prefix once its own optional is omitted still
+        //     counts ("fire {?quantity} {weapon}" vs "fire {weapon} at {target}").
+        // Widening cost was measured on the 11-intent/32-pattern demo grammar: 0 warnings for
+        // every variant, and exactly the one expected warning on the pre-#42 grammar.
         //
         // The remedy is not free, and the message must not imply it is: an optional literal
         // scores OptionalLiteralScore on both sides rather than MatchScore, so any match that
@@ -321,53 +323,134 @@ namespace VoXR.Commands
         // can then claim adjacent tokens the literal never introduced.
         static void WarnOnDroppableRequiredLiteral(VoxrCommandDefinition[] commands)
         {
-            foreach (var command in commands)
+            int patternCount = 0;
+            for (int ci = 0; ci < commands.Length; ci++)
+                patternCount += commands[ci].Patterns.Length;
+            if (patternCount < 2)
+                return;
+
+            // Flatten (command, pattern) into one list so the scan can pair across commands,
+            // expanding each pattern's optional elements once up front.
+            var intents = new string[patternCount];
+            var raw = new string[patternCount][];
+            var forms = new List<string[]>[patternCount];
+            for (int ci = 0, n = 0; ci < commands.Length; ci++)
             {
-                var patterns = command.Patterns;
-                for (int bi = 0; bi < patterns.Length; bi++)
+                var patterns = commands[ci].Patterns;
+                for (int pi = 0; pi < patterns.Length; pi++, n++)
                 {
-                    string[] bare = patterns[bi];
-                    if (bare.Length == 0)
+                    intents[n] = commands[ci].Intent;
+                    raw[n] = patterns[pi];
+                    forms[n] = WarningForms(patterns[pi]);
+                }
+            }
+
+            // One hazard can surface from several form pairs; report each only once.
+            HashSet<string> reported = null;
+
+            for (int b = 0; b < patternCount; b++)
+            {
+                for (int e = 0; e < patternCount; e++)
+                {
+                    if (e == b)
                         continue;
 
-                    for (int ei = 0; ei < patterns.Length; ei++)
+                    var bareForms = forms[b];
+                    var extForms = forms[e];
+                    for (int bf = 0; bf < bareForms.Count; bf++)
                     {
-                        if (ei == bi)
+                        string[] bare = bareForms[bf];
+                        if (bare.Length == 0)
                             continue;
 
-                        string[] extended = patterns[ei];
-                        if (extended.Length < bare.Length + 2)
-                            continue;
+                        for (int ef = 0; ef < extForms.Count; ef++)
+                        {
+                            string[] extended = extForms[ef];
+                            if (extended.Length <= bare.Length)
+                                continue;
+                            if (!IsElementPrefix(bare, extended))
+                                continue;
 
-                        // The two elements immediately past the bare form must be "required
-                        // literal, then slot" — the hazard needs a droppable word standing
-                        // between the shared prefix and the value the speaker wants heard.
-                        // Anything the sibling adds beyond those two is irrelevant to it.
-                        string literal = extended[bare.Length];
-                        if (ExtractSlotName(literal) != null || IsOptionalLiteral(literal))
-                            continue;
-                        if (ExtractSlotName(extended[bare.Length + 1]) == null)
-                            continue;
-                        if (!IsElementPrefix(bare, extended))
-                            continue;
+                            // Walk the literals the longer form adds. At least one must be
+                            // required (an optional one is already droppable for free), and a
+                            // slot must follow them — that slot is what gets stranded.
+                            int k = bare.Length;
+                            int requiredLiterals = 0;
+                            string firstRequired = null;
+                            while (k < extended.Length && ExtractSlotName(extended[k]) == null)
+                            {
+                                if (!IsOptionalLiteral(extended[k]))
+                                {
+                                    requiredLiterals++;
+                                    if (firstRequired == null)
+                                        firstRequired = extended[k];
+                                }
+                                k++;
+                            }
+                            if (requiredLiterals == 0 || k >= extended.Length)
+                                continue;
 
-                        UnityEngine.Debug.LogWarning(
-                            $"[VoxrCommandParser] Intent '{command.Intent}' has the pattern "
-                                + $"\"{string.Join(" ", bare)}\" and the sibling \"{string.Join(" ", extended)}\", "
-                                + $"which extends it with the required literal \"{literal}\" in front of "
-                                + $"slot \"{extended[bare.Length + 1]}\". If that literal is dropped, the "
-                                + "longer pattern is penalized for the miss while the bare one still "
-                                + "matches perfectly — so the bare one wins and the slot value the "
-                                + "speaker did say is discarded silently. Make the literal optional "
-                                + $"(\"?{literal}\") so an otherwise-complete match reaches the same "
-                                + "score with or without the word and wins on consumed span. That "
-                                + "trade is not free: an optional literal also lowers the score of "
-                                + "matches that are already missing something, and stops anchoring "
-                                + "the slot behind it, which can then claim adjacent tokens."
-                        );
+                            string message = BuildDroppableLiteralWarning(
+                                intents[b], raw[b], bare,
+                                intents[e], raw[e], extended,
+                                firstRequired, requiredLiterals, extended[k]);
+
+                            reported = reported ?? new HashSet<string>(StringComparer.Ordinal);
+                            if (reported.Add(message))
+                                UnityEngine.Debug.LogWarning(message);
+                        }
                     }
                 }
             }
+        }
+
+        // Concrete forms of a pattern for the warning scan. Patterns with no optional elements
+        // are their own single form, with no copy. The expansion is capped well below
+        // MaxOptionalExpansion because this scan runs unconditionally in the ctor — and so on
+        // every parser rebuild — where ComputeCanCommitEarly's expansion is lazy; past the cap
+        // the pattern is compared raw, costing recall on that one pattern only.
+        const int MaxWarningExpansion = 6;
+
+        static List<string[]> WarningForms(string[] pattern)
+        {
+            int optionals = CountOptionalElements(pattern);
+            if (optionals == 0 || optionals > MaxWarningExpansion)
+                return new List<string[]>(1) { pattern };
+            return ExpandOptionals(pattern);
+        }
+
+        static string BuildDroppableLiteralWarning(
+            string bareIntent, string[] bareRaw, string[] bareForm,
+            string extIntent, string[] extRaw, string[] extForm,
+            string firstRequired, int requiredLiterals, string slot)
+        {
+            // Report the patterns as authored; note when a form differs, so an author looking
+            // for the quoted text in their asset is not left hunting for something else.
+            string bareText = string.Join(" ", bareRaw);
+            if (bareForm.Length != bareRaw.Length)
+                bareText += " (with its optional elements omitted)";
+            string extText = string.Join(" ", extRaw);
+            if (extForm.Length != extRaw.Length)
+                extText += " (with its optional elements omitted)";
+
+            string gap = requiredLiterals == 1
+                ? $"the required literal \"{firstRequired}\""
+                : $"required literals including \"{firstRequired}\"";
+            string sameIntent = string.Equals(bareIntent, extIntent, StringComparison.Ordinal)
+                ? $"Intent '{bareIntent}' has the pattern \"{bareText}\" and the longer "
+                    + $"\"{extText}\""
+                : $"Pattern \"{bareText}\" (intent '{bareIntent}') is a bare form of "
+                    + $"\"{extText}\" (intent '{extIntent}')";
+
+            return $"[VoxrCommandParser] {sameIntent}, which extends it with {gap} in front of "
+                + $"slot \"{slot}\". If that literal is dropped, the longer pattern is penalized "
+                + "for the miss while the bare one still matches perfectly — so the bare one wins "
+                + "and the slot value the speaker did say is discarded silently. Make the literal "
+                + $"optional (\"?{firstRequired}\") so an otherwise-complete match reaches the same "
+                + "score with or without the word and wins on consumed span. That trade is not "
+                + "free: an optional literal also lowers the score of matches that are already "
+                + "missing something, and stops anchoring the slot behind it, which can then "
+                + "claim adjacent tokens.";
         }
 
         static bool IsElementPrefix(string[] prefix, string[] pattern)

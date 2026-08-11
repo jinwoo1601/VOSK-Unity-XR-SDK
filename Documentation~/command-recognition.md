@@ -115,7 +115,13 @@ With the literal optional, an omitted optional drops out of both sides of the ra
 
 The parser logs a validation warning at construction naming the literal and the slot at risk. This holds whether the trailing slot is required or optional (`{?elevation}` after a required `mark` strands the elevation exactly the same way).
 
-**The check is deliberately narrow**, so that it stays actionable. It compares patterns *within a single command*, requires *exactly one* required literal between the shared prefix and the slot, and compares pattern elements literally -- an optional element inside the shorter pattern is not expanded away first. The same hazard in wider forms is real and is **not** warned about: two or more required words before the slot (`decelerate by the {burn_level}`), the bare pattern and its slot-filled sibling declared under *different intents*, or a bare pattern that is only a prefix once its own optional element is omitted. Apply the rule above by hand in those cases.
+**The check follows what the parser actually compares**, so it covers the hazard in every form it takes:
+
+- **Across commands, not just within one.** Selection runs over every pattern of every command through a single comparison, so declaring the two phrasings as separate intents (`decelerate` and `decelerate_by`) reproduces the hazard exactly. It is warned about.
+- **Over a run of required literals, not just one.** Dropping any single word in `decelerate by the {burn_level}` strands the value just as dropping `by` alone does.
+- **Over optional forms.** `fire {?quantity} {weapon}` is not literally a prefix of `fire {weapon} at {target}`, but it is once its own optional is omitted -- which is exactly the form the parser matches when no quantity is spoken. Patterns are expanded before comparison, as the eager-flush prefix analysis already does.
+
+The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild and expansion is exponential. That costs recall on that pattern only.
 
 ---
 

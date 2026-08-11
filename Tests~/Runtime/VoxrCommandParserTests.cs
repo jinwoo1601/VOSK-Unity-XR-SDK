@@ -1453,5 +1453,101 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("two seven zero", stray.Command.GetSlot("heading"));
             Assert.AreEqual("four", stray.Command.GetSlot("elevation"));
         }
+
+        // ---------- Widened detector scope (PR #58 review) ----------
+        // The scan mirrors what ParseInternal compares, so all three of these strand a slot
+        // value the same way the single-literal same-command shape does, and all three warn.
+
+        [Test]
+        public void MultipleRequiredLiteralsBeforeTheSlot_Warn()
+        {
+            // "decelerate hard burn" with only "the" dropped still loses to the bare pattern.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("required literals including \"by\"")
+            );
+
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "decelerate",
+                        new[]
+                        {
+                            new[] { "decelerate" },
+                            new[] { "decelerate", "by", "the", "{burn_level}" },
+                        }
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+        }
+
+        [Test]
+        public void HazardSplitAcrossTwoIntents_Warns()
+        {
+            // Selection runs across every command, so declaring the two phrasings as separate
+            // intents reproduces the hazard exactly — a per-command scan would miss it.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("is a bare form of"));
+
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition("decelerate", new[] { new[] { "decelerate" } }),
+                    new VoxrCommandDefinition(
+                        "decelerate_by",
+                        new[] { new[] { "decelerate", "by", "{burn_level}" } }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "decelerate hard burn");
+            Assert.AreEqual(
+                "decelerate",
+                result.Command.Intent,
+                "the bare intent wins and the spoken burn level is stranded"
+            );
+            Assert.IsFalse(result.Command.HasSlot("burn_level"));
+        }
+
+        [Test]
+        public void BareFormReachableOnlyByOmittingAnOptional_Warns()
+        {
+            // "fire {?quantity} {weapon}" is not literally a prefix of "fire {weapon} at
+            // {target}", but it is once its own optional is omitted — which is exactly the
+            // form the parser matches when no quantity is spoken.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"at\""));
+
+            var parser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("weapon", new[] { "missiles" }),
+                    new VoxrSlotDefinition("quantity", new[] { "two" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire",
+                        new[]
+                        {
+                            new[] { "fire", "{?quantity}", "{weapon}" },
+                            new[] { "fire", "{weapon}", "at", "{target}" },
+                        }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "fire missiles hotel one");
+            Assert.AreEqual(
+                0,
+                result.Command.MatchedPatternIndex,
+                "the bare form wins at 1.0 and the target is stranded"
+            );
+            Assert.IsFalse(result.Command.HasSlot("target"));
+        }
     }
 }
