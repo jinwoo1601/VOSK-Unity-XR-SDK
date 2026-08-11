@@ -120,7 +120,7 @@ namespace VoXR.Tests.Runtime
                         new[]
                         {
                             new[] { "orient", "heading", "{heading}" },
-                            new[] { "orient", "heading", "{heading}", "mark", "{?elevation}" },
+                            new[] { "orient", "heading", "{heading}", "?mark", "{?elevation}" },
                             new[] { "set", "heading", "{heading}" },
                         }
                     ),

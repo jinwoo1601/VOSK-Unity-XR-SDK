@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
+using UnityEngine.TestTools;
 using VoXR;
 using VoXR.Commands;
 
@@ -1250,6 +1252,136 @@ namespace VoXR.Tests.Runtime
                 ParseOne(parser, "fire [unk]").Command.MatchedPatternIndex,
                 "a stray [unk] must not flip which pattern is reported"
             );
+        }
+
+        // ---------- Droppable required literal before a slot (issue #42) ----------
+
+        static VoxrSlotDefinition[] BurnSlots() =>
+            new[] { new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" }) };
+
+        static VoxrCommandDefinition[] DecelerateCommands(string separator) =>
+            new[]
+            {
+                new VoxrCommandDefinition(
+                    "decelerate",
+                    new[]
+                    {
+                        new[] { "decelerate" },
+                        new[] { "decelerate", separator, "{burn_level}" },
+                    }
+                ),
+            };
+
+        [Test]
+        public void RequiredLiteralBeforeSlot_WarnsAtConstruction()
+        {
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"by\""));
+
+            var parser = new VoxrCommandParser(BurnSlots(), DecelerateCommands("by"));
+
+            Assert.IsNotNull(
+                parser,
+                "the shape is a warning, not an error — construction still succeeds"
+            );
+        }
+
+        [Test]
+        public void RequiredLiteralDropped_BarePatternWinsAndDiscardsTheSpokenSlot()
+        {
+            // The behaviour the warning names. VOSK drops short unstressed function words
+            // more than any other token, and when "by" goes the slot-filled pattern is
+            // charged for the miss while the bare one still matches perfectly.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"by\""));
+            var parser = new VoxrCommandParser(BurnSlots(), DecelerateCommands("by"));
+
+            var result = ParseOne(parser, "decelerate hard burn");
+
+            Assert.AreEqual(
+                0,
+                result.Command.MatchedPatternIndex,
+                "the bare pattern scores a clean 1.0 and wins"
+            );
+            Assert.IsFalse(
+                result.Command.HasSlot("burn_level"),
+                "the spoken burn level is discarded with nothing to signal it"
+            );
+        }
+
+        [Test]
+        public void OptionalLiteralBeforeSlot_KeepsTheSlotWhenTheLiteralIsDropped()
+        {
+            // The remedy the warning recommends: with the literal optional the slot-filled
+            // pattern scores 1.0 whether or not the word was spoken, so it takes the
+            // consumed-span tie-break (issue #41) over the bare form instead of losing to it.
+            var parser = new VoxrCommandParser(BurnSlots(), DecelerateCommands("?by"));
+
+            var dropped = ParseOne(parser, "decelerate hard burn");
+            Assert.AreEqual(1, dropped.Command.MatchedPatternIndex);
+            Assert.AreEqual("hard burn", dropped.Command.GetSlot("burn_level"));
+
+            var spoken = ParseOne(parser, "decelerate by hard burn");
+            Assert.AreEqual(1, spoken.Command.MatchedPatternIndex);
+            Assert.AreEqual("hard burn", spoken.Command.GetSlot("burn_level"));
+
+            var bare = ParseOne(parser, "decelerate");
+            Assert.AreEqual(
+                0,
+                bare.Command.MatchedPatternIndex,
+                "the bare form still wins when no value was spoken"
+            );
+            Assert.IsFalse(bare.Command.HasSlot("burn_level"));
+
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void NonHazardPatternShapes_DoNotWarn()
+        {
+            // A sibling that adds the slot directly has no literal to drop; one that adds a
+            // second literal instead of a slot has no value to discard; and a sibling that is
+            // not an element-prefix of the short pattern is a different phrasing, not a bare
+            // form of it. None of them can strand a spoken value, so none of them warn.
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "decelerate",
+                        new[]
+                        {
+                            new[] { "decelerate" },
+                            new[] { "decelerate", "{burn_level}" },
+                            new[] { "decelerate", "to", "station", "keeping" },
+                            new[] { "slow", "by", "{burn_level}" },
+                        }
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void OptionalSlotAfterTheLiteral_AlsoWarns()
+        {
+            // The stranded value need not be required to be lost: "orient heading two seven
+            // zero mark one five" with "mark" dropped scores 0.7 against the bare pattern's
+            // 1.0, so the elevation goes the same way the burn level does.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"mark\""));
+
+            var parser = new VoxrCommandParser(
+                new[] { VoxrSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "orient",
+                        new[] { new[] { "orient" }, new[] { "orient", "mark", "{?elevation}" } }
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
         }
     }
 }

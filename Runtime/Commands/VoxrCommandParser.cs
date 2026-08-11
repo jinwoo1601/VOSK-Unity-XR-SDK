@@ -223,6 +223,7 @@ namespace VoXR.Commands
             // precompute on Configure/RebuildParser/NotifySlotChanged.
 
             RunValidationWarnings(slots);
+            WarnOnDroppableRequiredLiteral(commands);
         }
 
         static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
@@ -290,6 +291,71 @@ namespace VoXR.Commands
                     }
                 }
             }
+        }
+
+        // The one pattern-set shape that silently throws away a slot value the speaker did
+        // say (issue #42): a bare pattern P and a sibling that extends it with a required
+        // literal followed by a slot. Drop that literal — short function words are the most
+        // dropped tokens in practice — and the sibling is charged RequiredLiteralMissPenalty
+        // while P still matches perfectly, so P wins and the spoken slot content is discarded
+        // with nothing to signal it. No penalty tuning reaches this: P scores a clean 1.0 and
+        // nothing normalized to 1.0 can beat it. Marking the literal optional does, so that is
+        // what the warning asks for — the sibling then scores 1.0 whether or not the literal
+        // was spoken, and takes the consumed-span tie-break (issue #41) over the bare form.
+        static void WarnOnDroppableRequiredLiteral(VoxrCommandDefinition[] commands)
+        {
+            foreach (var command in commands)
+            {
+                var patterns = command.Patterns;
+                for (int bi = 0; bi < patterns.Length; bi++)
+                {
+                    string[] bare = patterns[bi];
+                    if (bare.Length == 0)
+                        continue;
+
+                    for (int ei = 0; ei < patterns.Length; ei++)
+                    {
+                        if (ei == bi)
+                            continue;
+
+                        string[] extended = patterns[ei];
+                        if (extended.Length < bare.Length + 2)
+                            continue;
+
+                        // The two elements immediately past the bare form must be "required
+                        // literal, then slot" — the hazard needs a droppable word standing
+                        // between the shared prefix and the value the speaker wants heard.
+                        // Anything the sibling adds beyond those two is irrelevant to it.
+                        string literal = extended[bare.Length];
+                        if (ExtractSlotName(literal) != null || IsOptionalLiteral(literal))
+                            continue;
+                        if (ExtractSlotName(extended[bare.Length + 1]) == null)
+                            continue;
+                        if (!IsElementPrefix(bare, extended))
+                            continue;
+
+                        UnityEngine.Debug.LogWarning(
+                            $"[VoxrCommandParser] Intent '{command.Intent}' has the pattern "
+                                + $"\"{string.Join(" ", bare)}\" and the sibling \"{string.Join(" ", extended)}\", "
+                                + $"which extends it with the required literal \"{literal}\" in front of "
+                                + $"slot \"{extended[bare.Length + 1]}\". If that literal is dropped, the "
+                                + "longer pattern is penalized for the miss while the bare one still "
+                                + "matches perfectly — so the bare one wins and the slot value the "
+                                + "speaker did say is discarded silently. Make the literal optional "
+                                + $"(\"?{literal}\") so the slot-filled pattern scores the same and wins "
+                                + "on consumed span."
+                        );
+                    }
+                }
+            }
+        }
+
+        static bool IsElementPrefix(string[] prefix, string[] pattern)
+        {
+            for (int i = 0; i < prefix.Length; i++)
+                if (!string.Equals(prefix[i], pattern[i], StringComparison.Ordinal))
+                    return false;
+            return true;
         }
 
         public VoxrCommandResult[] Parse(string text, VoxrWord[] words)

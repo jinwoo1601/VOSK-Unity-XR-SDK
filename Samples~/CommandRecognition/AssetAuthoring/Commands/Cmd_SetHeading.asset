@@ -15,5 +15,5 @@ MonoBehaviour:
   intent: set_heading
   patterns:
   - 'orient heading {heading}'
-  - 'orient heading {heading} mark {?elevation}'
+  - 'orient heading {heading} ?mark {?elevation}'
   - 'set heading {heading}'

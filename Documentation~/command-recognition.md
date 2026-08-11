@@ -86,6 +86,30 @@ new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" }
 
 Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character words are unreliable in VOSK grammar mode -- the acoustic model frequently misrecognises or drops them. Prefer slot value aliases instead (see below).
 
+### Never leave a required function word between a bare pattern and its slot
+
+If a command has a bare pattern *and* a sibling that extends it with one required literal followed by a slot, mark that literal optional:
+
+```csharp
+// Hazardous -- a dropped "by" discards the burn level the speaker did say
+new VoxrCommandDefinition("decelerate", new[] {
+    new[] { "decelerate" },
+    new[] { "decelerate", "by", "{burn_level}" },
+})
+
+// Safe -- the same two phrasings, with the droppable word optional
+new VoxrCommandDefinition("decelerate", new[] {
+    new[] { "decelerate" },
+    new[] { "decelerate", "?by", "{burn_level}" },
+})
+```
+
+Short unstressed function words (`by`, `at`, `to`, `mark`) are the tokens VOSK drops most, and speakers elide them too. When one goes missing, the slot-filled pattern is penalised for the missing *required* literal while the bare pattern still matches perfectly -- so the bare pattern wins, and the slot value that was recognised is discarded with nothing to signal it. "decelerate hard burn" executes a default-level decelerate. No threshold tuning reaches this: the bare pattern scores a clean 1.0, which nothing normalised to 1.0 can beat.
+
+With the literal optional, an omitted optional drops out of both sides of the ratio, so the slot-filled pattern also scores 1.0 whether or not the word was spoken -- and being the candidate that covers more of the utterance, it wins. Both phrasings then extract the slot, and a bare "decelerate" still matches the bare pattern.
+
+The parser logs a validation warning at construction for every command carrying the hazardous shape, naming the literal and the slot at risk. This holds whether the trailing slot is required or optional (`{?elevation}` after a required `mark` strands the elevation exactly the same way).
+
 ---
 
 ## Scored Matching

@@ -260,9 +260,10 @@ deliberate trade-offs rather than oversights.
 - **Where seen**: v2.5 test matrix Phases 5–8. Visible in logcat after every
   mode-switch command.
 - **Root cause**: `SetActiveSets()` constructs a fresh `VoxrCommandParser` via
-  `RebuildParserAndGrammar()`, and the parser ctor unconditionally re-runs
-  `RunValidationWarnings()`. The warnings are correct, just noisier than they
-  should be.
+  `RebuildParserAndGrammar()`, and the parser ctor unconditionally re-runs its
+  validation passes — `RunValidationWarnings()` for slot values and aliases, and
+  the pattern-shape check that flags a droppable required literal before a slot.
+  The warnings are correct, just noisier than they should be.
 - **Workaround**: None at user level. This is a candidate for cleanup —
   validation should run once per `Configure()` call, not per parser rebuild.
   Filed as a low-priority follow-up.
@@ -323,6 +324,29 @@ deliberate trade-offs rather than oversights.
     zero-latency endpoint.
   - Avoid registering commands that are exact prefixes of others when low latency
     matters — e.g. give the shorter command a distinct extra keyword.
+
+### A dropped required literal hands the utterance to the bare sibling pattern
+
+- **Repro**: Register `["decelerate"]` and `["decelerate", "by", "{burn_level}"]` on
+  one command, then say "decelerate hard burn" (the "by" elided by the speaker, or
+  dropped by VOSK). The bare pattern fires at score 1.0 and `burn_level` is empty —
+  the command runs at its default level, with nothing reporting that a burn level
+  was heard and thrown away. Observed in-headset.
+- **Root cause**: Inherent to comparing siblings by score. The slot-filled pattern
+  is charged `RequiredLiteralMissPenalty` for the missing "by" (1.5/3 = 0.5) while
+  the bare pattern matches perfectly (1/1 = 1.0), so the bare pattern wins on score
+  and sequential extraction finds nothing to do with the stranded "hard burn". No
+  threshold or penalty tuning reaches this case: a score normalised to 1.0 is the
+  ceiling, so nothing can outrank the bare pattern while it matches exactly. Short
+  unstressed function words are the most-dropped tokens in practice, which is what
+  makes the shape worth avoiding rather than tolerating.
+- **Workaround**: Mark the droppable literal optional — `["decelerate", "?by",
+  "{burn_level}"]`. An omitted optional leaves both sides of the score ratio, so the
+  slot-filled pattern also scores 1.0 with or without the word, and wins as the
+  candidate covering more of the utterance. Removing the literal outright
+  (`["decelerate", "{burn_level}"]`) works too, at the cost of the phrasing.
+  `VoxrCommandParser` logs a validation warning at construction for any command
+  carrying the hazardous shape, naming the literal and the slot at risk.
 
 ### Confidence of `-1.00` means "no data", not "zero confidence"
 

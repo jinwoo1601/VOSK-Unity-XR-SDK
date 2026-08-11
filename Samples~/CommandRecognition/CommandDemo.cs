@@ -114,7 +114,7 @@ public class CommandDemo : MonoBehaviour
             new VoxrCommandDefinition(Intents.SetHeading, new[]
             {
                 new[] { "orient", "heading", "{heading}" },
-                new[] { "orient", "heading", "{heading}", "mark", "{?elevation}" },
+                        new[] { "orient", "heading", "{heading}", "?mark", "{?elevation}" },
                 new[] { "set", "heading", "{heading}" },
             }),
         });
