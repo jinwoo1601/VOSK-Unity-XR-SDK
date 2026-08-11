@@ -86,6 +86,43 @@ new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" }
 
 Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character words are unreliable in VOSK grammar mode -- the acoustic model frequently misrecognises or drops them. Prefer slot value aliases instead (see below).
 
+### Never leave a required function word between a bare pattern and its slot
+
+If a command has a bare pattern *and* a sibling that extends it with one required literal followed by a slot, mark that literal optional:
+
+```csharp
+// Hazardous -- a dropped "by" discards the burn level the speaker did say
+new VoxrCommandDefinition("decelerate", new[] {
+    new[] { "decelerate" },
+    new[] { "decelerate", "by", "{burn_level}" },
+})
+
+// Safe -- the same two phrasings, with the droppable word optional
+new VoxrCommandDefinition("decelerate", new[] {
+    new[] { "decelerate" },
+    new[] { "decelerate", "?by", "{burn_level}" },
+})
+```
+
+Short unstressed function words (`by`, `at`, `to`, `mark`) are the tokens VOSK drops most, and speakers elide them too. When one goes missing, the slot-filled pattern is penalised for the missing *required* literal while the bare pattern still matches perfectly -- so the bare pattern wins, and the slot value that was recognised is discarded with nothing to signal it. "decelerate hard burn" executes a default-level decelerate. No threshold tuning reaches this: the bare pattern scores a clean 1.0, which nothing normalised to 1.0 can beat.
+
+With the literal optional, an omitted optional drops out of both sides of the ratio, so the slot-filled pattern also scores 1.0 whether or not the word was spoken -- and being the candidate that covers more of the utterance, it wins. Both phrasings then extract the slot, and a bare "decelerate" still matches the bare pattern.
+
+**The swap is not free.** Two costs, both worth knowing before you apply it wholesale:
+
+- **It lowers the score of imperfect matches.** A matched *required* literal adds 1.0 to both sides of the ratio; a matched *optional* literal adds only 0.5 to both. Those are equivalent only when everything else in the pattern matches. As soon as something else misses, `(r - 0.5) / (d - 0.5)` is strictly below `r / d` -- so a partial match that used to clear `minScore` can fall under it. Usually an improvement (a half-heard command stops firing with slots missing), but it is a behaviour change, not a no-op.
+- **It stops anchoring what follows it.** A required literal is a word that *must be spoken* before the next element can consume anything. Make it optional and the following slot can claim adjacent tokens the literal never introduced. With `orient heading {heading} ?mark {?elevation}`, a spurious digit after a full three-word heading -- "orient heading two seven zero **four**" -- is now absorbed as `elevation = "four"` and wins on span, where the required form scored 0.7, lost, and dropped the stray digit. Be wary when the slot after the literal is a `NumberSequence` or otherwise shares vocabulary with the slot before it.
+
+The parser logs a validation warning at construction naming the literal and the slot at risk. This holds whether the trailing slot is required or optional (`{?elevation}` after a required `mark` strands the elevation exactly the same way).
+
+**The check follows what the parser actually compares**, so it covers the hazard in every form it takes:
+
+- **Across commands, not just within one.** Selection runs over every pattern of every command through a single comparison, so declaring the two phrasings as separate intents (`decelerate` and `decelerate_by`) reproduces the hazard exactly. It is warned about.
+- **Over a run of required literals, not just one.** Dropping any single word in `decelerate by the {burn_level}` strands the value just as dropping `by` alone does.
+- **Over optional forms.** `fire {?quantity} {weapon}` is not literally a prefix of `fire {weapon} at {target}`, but it is once its own optional is omitted -- which is exactly the form the parser matches when no quantity is spoken. Patterns are expanded before comparison, as the eager-flush prefix analysis already does.
+
+The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild and expansion is exponential. That costs recall on that pattern only.
+
 ---
 
 ## Scored Matching
