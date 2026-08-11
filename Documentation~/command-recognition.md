@@ -108,7 +108,14 @@ Short unstressed function words (`by`, `at`, `to`, `mark`) are the tokens VOSK d
 
 With the literal optional, an omitted optional drops out of both sides of the ratio, so the slot-filled pattern also scores 1.0 whether or not the word was spoken -- and being the candidate that covers more of the utterance, it wins. Both phrasings then extract the slot, and a bare "decelerate" still matches the bare pattern.
 
-The parser logs a validation warning at construction for every command carrying the hazardous shape, naming the literal and the slot at risk. This holds whether the trailing slot is required or optional (`{?elevation}` after a required `mark` strands the elevation exactly the same way).
+**The swap is not free.** Two costs, both worth knowing before you apply it wholesale:
+
+- **It lowers the score of imperfect matches.** A matched *required* literal adds 1.0 to both sides of the ratio; a matched *optional* literal adds only 0.5 to both. Those are equivalent only when everything else in the pattern matches. As soon as something else misses, `(r - 0.5) / (d - 0.5)` is strictly below `r / d` -- so a partial match that used to clear `minScore` can fall under it. Usually an improvement (a half-heard command stops firing with slots missing), but it is a behaviour change, not a no-op.
+- **It stops anchoring what follows it.** A required literal is a word that *must be spoken* before the next element can consume anything. Make it optional and the following slot can claim adjacent tokens the literal never introduced. With `orient heading {heading} ?mark {?elevation}`, a spurious digit after a full three-word heading -- "orient heading two seven zero **four**" -- is now absorbed as `elevation = "four"` and wins on span, where the required form scored 0.7, lost, and dropped the stray digit. Be wary when the slot after the literal is a `NumberSequence` or otherwise shares vocabulary with the slot before it.
+
+The parser logs a validation warning at construction naming the literal and the slot at risk. This holds whether the trailing slot is required or optional (`{?elevation}` after a required `mark` strands the elevation exactly the same way).
+
+**The check is deliberately narrow**, so that it stays actionable. It compares patterns *within a single command*, requires *exactly one* required literal between the shared prefix and the slot, and compares pattern elements literally -- an optional element inside the shorter pattern is not expanded away first. The same hazard in wider forms is real and is **not** warned about: two or more required words before the slot (`decelerate by the {burn_level}`), the bare pattern and its slot-filled sibling declared under *different intents*, or a bare pattern that is only a prefix once its own optional element is omitted. Apply the rule above by hand in those cases.
 
 ---
 

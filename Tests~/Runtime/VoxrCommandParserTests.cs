@@ -1365,9 +1365,9 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void OptionalSlotAfterTheLiteral_AlsoWarns()
         {
-            // The stranded value need not be required to be lost: "orient heading two seven
-            // zero mark one five" with "mark" dropped scores 0.7 against the bare pattern's
-            // 1.0, so the elevation goes the same way the burn level does.
+            // The stranded value need not be required to be lost. For this grammar, "orient
+            // mark one five" with "mark" dropped scores (1 - 0.5 + 1) / 3 = 0.5 against the
+            // bare pattern's 1.0, so the elevation goes the same way the burn level does.
             LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"mark\""));
 
             var parser = new VoxrCommandParser(
@@ -1382,6 +1382,76 @@ namespace VoXR.Tests.Runtime
             );
 
             Assert.IsNotNull(parser);
+        }
+
+        // Mirrors the shipped set_heading grammar (DemoGrammar / CommandDemo /
+        // Cmd_SetHeading.asset) after the "mark" -> "?mark" change, so the edit made to the
+        // sample is pinned here rather than only reasoned about. Both halves matter: what
+        // the optional literal buys, and what it costs.
+        static VoxrCommandParser HeadingParser() =>
+            new VoxrCommandParser(
+                new[]
+                {
+                    VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3),
+                    VoxrSlotDefinition.NumberSequence("elevation", minWords: 1, maxWords: 2),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_heading",
+                        new[]
+                        {
+                            new[] { "orient", "heading", "{heading}" },
+                            new[] { "orient", "heading", "{heading}", "?mark", "{?elevation}" },
+                        }
+                    ),
+                }
+            );
+
+        [Test]
+        public void OptionalLiteralBeforeNumberSequence_RecoversTheElidedLiteral()
+        {
+            var parser = HeadingParser();
+
+            var spoken = ParseOne(parser, "orient heading two seven zero mark one five");
+            Assert.AreEqual(1, spoken.Command.MatchedPatternIndex);
+            Assert.AreEqual("two seven zero", spoken.Command.GetSlot("heading"));
+            Assert.AreEqual("one five", spoken.Command.GetSlot("elevation"));
+
+            // The point of the change: with "mark" gone the elevation survives. Under the
+            // required form this scored 3.5/5 = 0.7, lost to the bare pattern's 1.0, and the
+            // elevation was discarded.
+            var elided = ParseOne(parser, "orient heading two seven zero one five");
+            Assert.AreEqual(1, elided.Command.MatchedPatternIndex);
+            Assert.AreEqual("one five", elided.Command.GetSlot("elevation"));
+
+            var plain = ParseOne(parser, "orient heading two seven zero");
+            Assert.AreEqual(
+                0,
+                plain.Command.MatchedPatternIndex,
+                "with nothing after the heading, the bare pattern still wins the span tie"
+            );
+            Assert.IsFalse(plain.Command.HasSlot("elevation"));
+
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void OptionalLiteralBeforeNumberSequence_AlsoClaimsAnUnmarkedStrayDigit()
+        {
+            // The documented price of the remedy (KNOWN_LIMITATIONS, "A dropped required
+            // literal…"): an optional literal no longer anchors the slot behind it, so a
+            // spurious fourth digit past the maxed-out heading is absorbed as an elevation
+            // nobody marked, and wins on span at 4/4 = 1.0. The required form scored
+            // 3.5/5 = 0.7 here and correctly dropped the stray token. Pinned so the tradeoff
+            // is a known, tested consequence rather than a surprise.
+            var parser = HeadingParser();
+
+            var stray = ParseOne(parser, "orient heading two seven zero four");
+
+            Assert.AreEqual(1, stray.Command.MatchedPatternIndex);
+            Assert.AreEqual("two seven zero", stray.Command.GetSlot("heading"));
+            Assert.AreEqual("four", stray.Command.GetSlot("elevation"));
         }
     }
 }

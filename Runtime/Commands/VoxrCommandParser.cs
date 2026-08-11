@@ -293,15 +293,32 @@ namespace VoXR.Commands
             }
         }
 
-        // The one pattern-set shape that silently throws away a slot value the speaker did
+        // A common pattern-set shape that silently throws away a slot value the speaker did
         // say (issue #42): a bare pattern P and a sibling that extends it with a required
         // literal followed by a slot. Drop that literal — short function words are the most
         // dropped tokens in practice — and the sibling is charged RequiredLiteralMissPenalty
         // while P still matches perfectly, so P wins and the spoken slot content is discarded
         // with nothing to signal it. No penalty tuning reaches this: P scores a clean 1.0 and
         // nothing normalized to 1.0 can beat it. Marking the literal optional does, so that is
-        // what the warning asks for — the sibling then scores 1.0 whether or not the literal
-        // was spoken, and takes the consumed-span tie-break (issue #41) over the bare form.
+        // what the warning asks for — an omitted optional leaves both sides of the ratio, so
+        // the sibling reaches 1.0 whether or not the literal was spoken and takes the
+        // consumed-span tie-break (issue #41) over the bare form.
+        //
+        // Deliberately narrow, so the warning stays actionable rather than ambient. It
+        // compares patterns WITHIN one command, requires EXACTLY one required literal between
+        // the shared prefix and the slot, and compares elements literally rather than over
+        // ExpandOptionals forms the way ComputeCanCommitEarly's prefix analysis does. The same
+        // hazard split across two intents, behind a run of two or more literals, or reachable
+        // only after expanding an optional inside the bare pattern is real and is NOT warned
+        // about — the authoring rule has to be applied by hand there. Widening it is costed in
+        // the PR #58 review: measured 0 new warnings on the demo grammar for the cross-command
+        // and multi-literal variants, while the expansion variant needs its own recursion bound.
+        //
+        // The remedy is not free, and the message must not imply it is: an optional literal
+        // scores OptionalLiteralScore on both sides rather than MatchScore, so any match that
+        // is already imperfect scores strictly lower than the required form would —
+        // (r-0.5)/(d-0.5) < r/d for r < d. It also stops anchoring the element after it, which
+        // can then claim adjacent tokens the literal never introduced.
         static void WarnOnDroppableRequiredLiteral(VoxrCommandDefinition[] commands)
         {
             foreach (var command in commands)
@@ -342,8 +359,11 @@ namespace VoXR.Commands
                                 + "longer pattern is penalized for the miss while the bare one still "
                                 + "matches perfectly — so the bare one wins and the slot value the "
                                 + "speaker did say is discarded silently. Make the literal optional "
-                                + $"(\"?{literal}\") so the slot-filled pattern scores the same and wins "
-                                + "on consumed span."
+                                + $"(\"?{literal}\") so an otherwise-complete match reaches the same "
+                                + "score with or without the word and wins on consumed span. That "
+                                + "trade is not free: an optional literal also lowers the score of "
+                                + "matches that are already missing something, and stops anchoring "
+                                + "the slot behind it, which can then claim adjacent tokens."
                         );
                     }
                 }

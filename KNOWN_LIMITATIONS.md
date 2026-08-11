@@ -345,8 +345,19 @@ deliberate trade-offs rather than oversights.
   slot-filled pattern also scores 1.0 with or without the word, and wins as the
   candidate covering more of the utterance. Removing the literal outright
   (`["decelerate", "{burn_level}"]`) works too, at the cost of the phrasing.
-  `VoxrCommandParser` logs a validation warning at construction for any command
-  carrying the hazardous shape, naming the literal and the slot at risk.
+  `VoxrCommandParser` logs a validation warning at construction naming the literal
+  and the slot at risk — deliberately only for the single-literal, same-command,
+  literally-compared shape, so wider forms of the same hazard (two literals before
+  the slot, or the pair split across two intents) are real but unwarned.
+  **The optional-literal swap has two costs**, neither of them a no-op: a matched
+  optional literal scores 0.5 on both sides of the ratio where a required one scores
+  1.0, so any *imperfect* match scores strictly lower than before and may now fall
+  under `minScore`; and an optional literal no longer anchors the element after it,
+  so a following slot can claim adjacent tokens the literal never introduced (with
+  `orient heading {heading} ?mark {?elevation}`, a stray fourth digit is absorbed as
+  `elevation` and wins on span, where the required form scored 0.7 and dropped it).
+  Prefer the swap where the trailing slot's vocabulary is distinct from its
+  neighbours'; be careful where it is a `NumberSequence`.
 
 ### Confidence of `-1.00` means "no data", not "zero confidence"
 
