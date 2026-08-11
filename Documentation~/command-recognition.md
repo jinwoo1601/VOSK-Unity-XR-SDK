@@ -450,6 +450,25 @@ By default, `VoxrCommandRecogniser` constrains VOSK's decoder to only the words 
 
 Setting `freeSpeechMode = true` disables the grammar constraint, allowing VOSK to recognise any word in its vocabulary. Command matching becomes best-effort.
 
+### What the grammar contains
+
+The grammar is not just a bag of words. Each **contiguous run of required literals** in a pattern, and each **multi-word slot value or alias**, is emitted as a single multi-word entry, alongside the individual words:
+
+```csharp
+new[] { "close", "distance", "{range}", "target", "{target}" }
+// entries: "close distance", "target", plus "close", "distance", "target",
+//          plus each {range}/{target} surface form ("safe range", "hotel one", ...)
+```
+
+VOSK charges one language-model transition per entry, so a three-word entry costs one transition where the same three words cost three. That makes the order you declared the cheaper path through the decoder's search, which is what stops in-grammar words substituting freely for one another -- `switch to navigation` no longer decodes as `switch two navigation`.
+
+Two consequences worth knowing when you author patterns:
+
+- **A slot or an optional literal ends a run.** Neither is guaranteed to be spoken, so the words either side of it are not reliably adjacent and are never welded together. Literals stranded alone between two slots get no phrase protection -- that is one more reason to prefer runs of required literals over lone function words (see [Known Limitations](../KNOWN_LIMITATIONS.md)).
+- **The single words are still there.** The phrase entries bias the decoder; they do not forbid anything. An utterance the VAD splits mid-phrase still decodes as fragments, and the parser's sliding start reassembles what it can.
+
+This is automatic -- there is no setting, and nothing about your pattern or slot declarations changes.
+
 ### When to use each mode
 
 | | Grammar Mode (default) | Free Speech Mode |

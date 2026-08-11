@@ -18,15 +18,22 @@ mitigate some of these but at the cost of memory and download size.
 
 ### "to" misrecognised as "two"
 
-- **Repro**: Say "switch to weapons". VOSK transcribes `switch two weapons`.
-  Confirmed acoustically by the WAV-replay regression suite: the TTS fixture
-  for "switch to navigation" is transcribed `switch two navigation` and no
-  command matches, while the same voice's "switch to weapons" fixture is
-  recognised correctly — the substitution is phrase- and delivery-dependent,
-  not uniform. The failing phrase is pinned in the corpus as a negative
-  baseline (`Tests~/Fixtures/audio/tts/switch_to_navigation.wav`, expects no
-  command), so if a model or parser change ever fixes it, the suite flags the
-  improvement for conscious re-baselining.
+- **Status**: substantially mitigated by phrase-chunked grammar emission
+  ([#45](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/45)), not
+  eliminated. Because `switch to navigation` is now one grammar entry, the
+  decoder pays a single language-model transition for the whole phrase against
+  three for `switch` + `two` + `navigation`, so the substitution no longer wins.
+  The TTS fixture that used to be pinned as a negative baseline now decodes
+  correctly and fires `mode_navigation`, and has been re-baselined as a positive.
+  The underlying acoustic bias is untouched — it can still surface wherever the
+  competing words are not separated by a phrase entry, e.g. inside a
+  `NumberSequence` slot, where no phrase constrains the digits.
+- **Repro** (historical, pre-#45): Say "switch to weapons". VOSK transcribes
+  `switch two weapons`. Confirmed acoustically by the WAV-replay regression
+  suite: the TTS fixture for "switch to navigation" was transcribed
+  `switch two navigation` and no command matched, while the same voice's
+  "switch to weapons" fixture was recognised correctly — the substitution is
+  phrase- and delivery-dependent, not uniform.
 - **Where seen**: v2.5 test matrix Phase 4.5; WAV-replay acoustic suite (v1.5 dev).
 - **Root cause**: The small English model is acoustically biased toward "two"
   in this context, especially when the speaker emphasises the vowel slightly
@@ -38,7 +45,9 @@ mitigate some of these but at the cost of memory and download size.
     `mode_weapons` command uses both `["switch", "to", "weapons"]` and
     `["weapons", "mode"]`; the latter recognises reliably.
   - When designing your own commands, avoid `to`, `for`, `four`, `or`, `are`
-    and similar short homophones inside required tokens.
+    and similar short homophones inside required tokens — and where you must
+    use one, keep it inside a run of required literals so phrase chunking can
+    protect it, rather than adjacent to a slot boundary.
 
 ### "all" misrecognised as "fall" when navigation words dominate grammar
 
