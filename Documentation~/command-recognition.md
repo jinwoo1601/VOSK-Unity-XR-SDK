@@ -273,6 +273,7 @@ By default the buffer is purely time-driven: every command -- complete or not --
 - **Complete and unambiguous** -> fires immediately, with zero buffer latency.
 - **A prefix of a longer command**, or a **trailing slot that could still grow** (a multi-word enumerated value such as `"red"` -> `"red dragon"`, or a variable-length number sequence) -> keeps waiting the full window, so split commands are still recovered. "Prefix" is judged against slot vocabularies, not just pattern shape: a lone `{burn_level}` is *not* a prefix of `decelerate {burn_level}`, because no value of the slot begins with "decelerate".
 - **Split command** -> fires as soon as its second half completes, instead of waiting another full window on top.
+- **Out-of-grammar preamble** (a station address such as "Helm, ...", reported by VOSK as `[unk]`) is skipped, so an addressed command commits as fast as the bare one. Only a *leading* run is skipped: anything left over at the end -- recognised or `[unk]` -- is treated as an in-progress tail and keeps waiting, as does a leading word VOSK did resolve.
 
 The feature is off by default; leaving it off preserves the exact time-only behaviour above. Each command's eligibility is computed once when commands are configured, so the only per-utterance cost is a single speculative parse of the buffer.
 
@@ -288,7 +289,7 @@ commandRecogniser.prefixHoldSeconds = 0.6f;     // held matches wait 0.6s, not 2
 
 With `["fire"]` and `["fire", "at", "{target}"]` registered, "fire" alone now fires ~0.6s after the speaker stops instead of ~2.0s, while "fire at hotel one" still parses as the longer command -- the continuation lands well inside 0.6s.
 
-- Applies **only** to a buffer that already parses as one complete, confident command spanning the whole buffer. Partial speech mid-split-command, speech that matches nothing, and grammars too complex for the eligibility precompute to analyse all keep the full `bufferWindow`.
+- Applies **only** to a buffer that already parses as one complete, confident command spanning the whole buffer (bar a leading `[unk]` run). Partial speech mid-split-command, speech that matches nothing, and grammars too complex for the eligibility precompute to analyse all keep the full `bufferWindow`.
 - **Never lengthens** the wait: a value above `bufferWindow` is ignored.
 - Re-evaluated on every VOSK result, so a continuation that does arrive puts the buffer back on the full window for the rest of the utterance.
 - Requires `eagerFlushOnCompleteMatch`. Default `0` keeps the full window, i.e. the pre-`prefixHoldSeconds` behaviour.

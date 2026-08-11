@@ -556,5 +556,107 @@ namespace VoXR.Tests.Runtime
                 "an unrecognised trailing word means more speech may still be coming"
             );
         }
+
+        // ---------- Leading [unk] does not block the gate (issue #43) ----------
+
+        [Test]
+        public void TryEagerCommit_LeadingUnk_StillCommits()
+        {
+            // An out-of-grammar station prefix ("Helm, fire missiles") pushes the match start
+            // past 0. Nothing arriving later can extend the utterance leftward, so the leading
+            // [unk] run is skipped and the command commits instead of paying the full window.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("weapon", new[] { "missiles" })),
+                Commands(Cmd("fire", P("fire", "{weapon}")))
+            );
+
+            var results = parser.Parse("[unk] fire missiles");
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("fire", results[0].Command.Intent);
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("[unk] fire missiles"), null, 0.6f, 0.4f),
+                "the eager verdict must name the command the subsequent flush fires"
+            );
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("[unk] [unk] fire missiles"), null, 0.6f, 0.4f),
+                "a run of leading [unk] is skipped, not just a single token"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_LeadingUnkPrefixCommand_ReturnsHoldExtendable()
+        {
+            // Previously None — the full window. Now the prefix reaches its real verdict, so
+            // the addressed form arms the shortened prefix hold (issue #32) like the bare one.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("target", new[] { "hotel one" })),
+                Commands(
+                    Cmd("status", P("status")),
+                    Cmd("status_report", P("status", "report", "{target}"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("[unk] status"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_LeadingUnkWithLeftoverTail_StillReturnsNone()
+        {
+            // Only the leading run is forgiven. A tail — recognised or [unk] — is still an
+            // in-progress utterance that more speech could complete.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("cease_fire", P("cease", "fire")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("[unk] cease fire now"), null, 0.6f, 0.4f)
+            );
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("[unk] cease fire [unk]"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_LeadingRecognisedLeftover_StillReturnsNone()
+        {
+            // The trim is specific to [unk]. A leading word VOSK did resolve is skipped speech
+            // the match failed to cover, which the gate must keep refusing.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("cease_fire", P("cease", "fire")),
+                    Cmd("greet", P("hello"), P("hello", "there"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("hello cease fire"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_AllUnkTokens_ReturnsNone()
+        {
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("cease_fire", P("cease", "fire")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("[unk] [unk]"), null, 0.6f, 0.4f),
+                "a buffer of pure filler matches nothing and must not commit"
+            );
+        }
     }
 }
