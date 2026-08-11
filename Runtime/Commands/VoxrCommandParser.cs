@@ -1262,9 +1262,23 @@ namespace VoXR.Commands
             if (bestCommandIdx < 0 || bestScore < minScore)
                 return EagerCommitVerdict.None;
 
-            // The match must span the whole buffer: anything left over (including trailing
-            // [unk]) means an in-progress tail that more speech could still complete.
-            if (bestStartIdx != 0 || bestEndIdx != tokens.Length)
+            // The match must span the whole buffer from the first recognised token: anything
+            // left over at the END (including trailing [unk]) means an in-progress tail that
+            // more speech could still complete. A LEADING [unk] run carries no such ambiguity
+            // — nothing arriving later extends the utterance leftward — so out-of-grammar
+            // preamble ("Helm, coast") is skipped rather than blocking the commit (issue #43),
+            // matching the sliding start that already absorbs it for free everywhere else.
+            //
+            // Only [unk] may precede the match. ParseInternal charges skipped *recognised*
+            // words against the score after selection (issue #31) and this scan does not, so
+            // relaxing this to tolerate any leading leftover would let the gate commit a
+            // buffer the subsequent flush then scores below minScore. [unk] is exempt from
+            // that penalty, which is what keeps the two scores identical here.
+            int firstRecognisedIdx = 0;
+            while (firstRecognisedIdx < tokens.Length && tokens[firstRecognisedIdx] == UnkToken)
+                firstRecognisedIdx++;
+
+            if (bestStartIdx != firstRecognisedIdx || bestEndIdx != tokens.Length)
                 return EagerCommitVerdict.None;
 
             float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
