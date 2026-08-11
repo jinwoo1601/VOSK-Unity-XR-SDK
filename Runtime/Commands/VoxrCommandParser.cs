@@ -43,8 +43,10 @@ namespace VoXR.Commands
 
         // Upper bound on optional elements in a single pattern for eager-commit analysis
         // (issue #25). ExpandOptionals enumerates 2^optionals concrete forms; past this the
-        // expansion is unbounded/overflowing, so the whole parser disables eager commit
-        // rather than partially (and unsoundly) analyse. Pathological grammars only.
+        // expansion is unbounded/overflowing, so the whole parser abandons the analysis
+        // rather than partially (and unsoundly) analyse it. Nothing then commits early —
+        // every complete match degrades to HoldExtendable (issue #44). Pathological grammars
+        // only, and reported at construction by WarnOnExcessiveOptionalExpansion.
         const int MaxOptionalExpansion = 12;
 
         internal static readonly char[] SplitSeparator = { ' ' };
@@ -94,8 +96,9 @@ namespace VoXR.Commands
         // match of the pattern cannot be extended or completed by further speech — i.e. it
         // is not a prefix of any other pattern and its trailing element can't grow.
         // Computed lazily on first eager check (see EnsureCanCommitEarly): opted-out callers
-        // never reach an eager entry point, so they never pay the precompute. May be left
-        // null when the grammar is too complex to analyse soundly (see MaxOptionalExpansion).
+        // never reach an eager entry point, so they never pay the precompute. Left null when
+        // the grammar is too complex to analyse soundly (see MaxOptionalExpansion) — nothing
+        // commits early then, and complete matches are held instead (issue #44).
         bool[][] _canCommitEarly;
         bool _canCommitEarlyComputed;
 
@@ -224,6 +227,7 @@ namespace VoXR.Commands
 
             RunValidationWarnings(slots);
             WarnOnDroppableRequiredLiteral(commands);
+            WarnOnExcessiveOptionalExpansion(commands);
         }
 
         static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
@@ -451,6 +455,39 @@ namespace VoXR.Commands
                 + "free: an optional literal also lowers the score of matches that are already "
                 + "missing something, and stops anchoring the slot behind it, which can then "
                 + "claim adjacent tokens.";
+        }
+
+        // The other hazard the eager-flush analysis carries (issue #44): one pattern past
+        // MaxOptionalExpansion abandons the precompute for the WHOLE command set, so no
+        // command in it commits early and every complete match is held instead. That is
+        // knowable from the assets alone, so it is reported here at construction — naming the
+        // pattern responsible — rather than only from ComputeCanCommitEarly, which runs
+        // lazily on the first eager probe and so says nothing at all until a play session
+        // that has eager flush enabled reaches one.
+        static void WarnOnExcessiveOptionalExpansion(VoxrCommandDefinition[] commands)
+        {
+            for (int ci = 0; ci < commands.Length; ci++)
+            {
+                var patterns = commands[ci].Patterns;
+                for (int pi = 0; pi < patterns.Length; pi++)
+                {
+                    int optionals = CountOptionalElements(patterns[pi]);
+                    if (optionals <= MaxOptionalExpansion)
+                        continue;
+
+                    string message =
+                        $"[VoxrCommandParser] Pattern \"{string.Join(" ", patterns[pi])}\" "
+                        + $"(intent '{commands[ci].Intent}') has {optionals} optional elements, "
+                        + $"more than the {MaxOptionalExpansion} the eager-flush analysis can "
+                        + "expand (it enumerates 2^optionals concrete forms). That analysis is "
+                        + "then abandoned for the whole command set, not just this pattern: with "
+                        + "eagerFlushOnCompleteMatch on, no command commits early — every "
+                        + "complete match is held for prefixHoldSeconds where it is set, and for "
+                        + "the full bufferWindow where it is not. Reduce this pattern's optional "
+                        + "elements to restore early commit.";
+                    UnityEngine.Debug.LogWarning(message);
+                }
+            }
         }
 
         static bool IsElementPrefix(string[] prefix, string[] pattern)
@@ -1286,11 +1323,16 @@ namespace VoXR.Commands
                 return EagerCommitVerdict.None;
 
             // _canCommitEarly is legitimately null when the grammar was too complex to
-            // analyse (MaxOptionalExpansion). HoldExtendable is a product of that analysis,
-            // so without it report None and leave the full window in force rather than
-            // shorten the wait on a pattern nothing has vetted.
+            // analyse (MaxOptionalExpansion). Nothing may commit early then — that verdict is
+            // exactly what the missing analysis would have vetted — but everything above has
+            // already established what HoldExtendable asserts: one complete, confident match
+            // spanning the buffer. So report the hold rather than None (issue #44). It is the
+            // conservative side either way — nothing commits early — and it costs the
+            // un-analysable grammar the short prefixHoldSeconds wait instead of the full
+            // bufferWindow. Grammars that leave prefixHoldSeconds at 0 hold the full window,
+            // exactly as before.
             if (_canCommitEarly == null)
-                return EagerCommitVerdict.None;
+                return EagerCommitVerdict.HoldExtendable;
 
             // Guarded accessor: the indices come from a separate scan, so route through the
             // bounds-checked path rather than indexing raw.
@@ -1303,22 +1345,18 @@ namespace VoXR.Commands
         {
             // Guard pathological grammars: ExpandOptionals enumerates 2^optionals forms, which
             // overflows/allocates unboundedly past MaxOptionalExpansion. If ANY pattern is over
-            // the limit, disable eager commit for the whole parser (return null -> CanCommitEarly
-            // reports false) rather than partially analyse — an un-expanded pattern used as the
-            // "longer" side would unsoundly let a real prefix through and fire the wrong command.
+            // the limit, abandon the analysis for the whole parser (return null -> CanCommitEarly
+            // reports false, TryEagerCommit holds) rather than partially analyse — an un-expanded
+            // pattern used as the "longer" side would unsoundly let a real prefix through and
+            // fire the wrong command. The author already heard about this at construction
+            // (WarnOnExcessiveOptionalExpansion), so this path stays silent.
             for (int ci = 0; ci < _commands.Length; ci++)
             {
                 var patterns = _commands[ci].Patterns;
                 for (int pi = 0; pi < patterns.Length; pi++)
                 {
                     if (CountOptionalElements(patterns[pi]) > MaxOptionalExpansion)
-                    {
-                        UnityEngine.Debug.LogWarning(
-                            $"[VoXR] Pattern for intent '{_commands[ci].Intent}' has more than " +
-                            $"{MaxOptionalExpansion} optional elements; eager flush is disabled for " +
-                            "this command set. Reduce optional tokens to re-enable it.");
                         return null;
-                    }
                 }
             }
 
