@@ -646,5 +646,80 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f,
                 "a flushed buffer holds nothing, so the next utterance starts on the full window");
         }
+
+        // -------- Un-analysable grammar degrades to the hold (issue #44) --------
+
+        // The prefix-hold grammar plus one pattern past MaxOptionalExpansion (12), which
+        // abandons the eager-eligibility analysis for the whole command set.
+        static VoxrCommandDefinition[] UnanalysableCommands()
+        {
+            // 13 optional literals, written space-separated for legibility.
+            var noisy = new VoxrCommandDefinition(
+                "noisy",
+                new[] { "noisy ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m".Split(' ') }
+            );
+
+            var basic = PrefixHoldCommands();
+            var all = new VoxrCommandDefinition[basic.Length + 1];
+            basic.CopyTo(all, 0);
+            all[basic.Length] = noisy;
+            return all;
+        }
+
+        void ConfigureForUnanalysableGrammar(float prefixHold)
+        {
+            // Construction is where the over-limit pattern is reported now.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
+            _recogniser.Configure(PrefixHoldSlots(), UnanalysableCommands());
+            _recogniser.BufferWindow = 2.0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+            _recogniser.PrefixHoldSeconds = prefixHold;
+        }
+
+        [Test]
+        public void UnanalysableGrammar_HoldsInsteadOfPayingTheFullWindow()
+        {
+            ConfigureForUnanalysableGrammar(0.6f);
+
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += _ => fireCount++;
+
+            // "cease fire" is terminal and prefixes nothing, so it would commit early in an
+            // analysable set. Without the analysis it must not — but it is still a complete,
+            // confident, whole-buffer match, so it waits the short hold, not the full window.
+            _recogniser.InjectText("cease fire");
+
+            Assert.AreEqual(
+                0,
+                fireCount,
+                "nothing commits early on a grammar the eligibility analysis never vetted"
+            );
+            Assert.AreEqual(0.6f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+        }
+
+        [Test]
+        public void UnanalysableGrammar_ZeroHold_KeepsTheFullWindow()
+        {
+            // Grammars that never opted into the short hold see exactly the old behaviour.
+            ConfigureForUnanalysableGrammar(0f);
+
+            _recogniser.InjectText("cease fire");
+
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+        }
+
+        [Test]
+        public void UnanalysableGrammar_IncompleteSpeech_KeepsTheFullWindow()
+        {
+            // The degrade sits behind the completeness gates, so a half-spoken command still
+            // gets the full window to be completed in.
+            ConfigureForUnanalysableGrammar(0.6f);
+
+            _recogniser.InjectText("cease");
+
+            Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+        }
     }
 }

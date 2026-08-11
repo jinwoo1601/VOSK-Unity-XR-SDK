@@ -309,19 +309,31 @@ namespace VoXR.Tests.Runtime
 
         // ---------- Optional-expansion guard (issue #25, review fix #2) ----------
 
+        // A command carrying 13 optional literals — one past MaxOptionalExpansion — so the
+        // eligibility analysis is abandoned for whatever set it appears in. The elements are
+        // written space-separated for legibility; Tok is just a split.
+        static VoxrCommandDefinition OverLimitCommand() =>
+            Cmd("noisy", Tok("noisy ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l ?m"));
+
+        // The same command exactly at the limit (12 optionals), which is still analysable.
+        static VoxrCommandDefinition AtLimitCommand() =>
+            Cmd("noisy", Tok("noisy ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j ?k ?l"));
+
         [Test]
         public void ManyOptionalElements_DisablesEagerCommitForWholeParser()
         {
             // ExpandOptionals enumerates 2^optionals concrete forms; past MaxOptionalExpansion
             // (12) the parser refuses to analyse and disables eager commit for the whole command
             // set rather than overflow or partially (and unsoundly) analyse a single pattern.
-            var noisy = Cmd("noisy", P("noisy",
-                "?a", "?b", "?c", "?d", "?e", "?f", "?g", "?h", "?i", "?j", "?k", "?l", "?m"));
+            //
+            // The warning is authoring-time now (issue #44), so it lands during construction,
+            // before any eager probe — hence the expectation goes up here.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
             var parser = new VoxrCommandParser(
                 Slots(),
-                Commands(noisy, Cmd("cease_fire", P("cease", "fire"))));
-
-            LogAssert.Expect(LogType.Warning, new Regex("more than 12 optional"));
+                Commands(OverLimitCommand(), Cmd("cease_fire", P("cease", "fire")))
+            );
 
             bool overLimit = true, normal = true;
             Assert.DoesNotThrow(() =>
@@ -333,6 +345,41 @@ namespace VoXR.Tests.Runtime
             Assert.IsFalse(overLimit, "the over-limit pattern is disabled");
             Assert.IsFalse(normal,
                 "a normal command in the same set is also disabled (whole-parser, never partial)");
+        }
+
+        [Test]
+        public void ManyOptionalElements_WarnsAtConstruction_NamingThePattern()
+        {
+            // The condition is knowable from the assets alone, so the author must learn about
+            // it — and about which pattern caused it — without a play session, and without
+            // eager flush being enabled at all (issue #44). Nothing here probes eager commit.
+            LogAssert.Expect(
+                LogType.Warning,
+                new Regex(@"Pattern ""noisy \?a .*"" \(intent 'noisy'\) has 13 optional elements")
+            );
+
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(OverLimitCommand(), Cmd("cease_fire", P("cease", "fire")))
+            );
+
+            Assert.IsNotNull(parser);
+        }
+
+        [Test]
+        public void OptionalElementsAtTheLimit_DoNotWarn()
+        {
+            // Exactly MaxOptionalExpansion is still analysable — the guard is strictly "more
+            // than" — so an at-the-limit pattern must stay silent and keep the analysis.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(AtLimitCommand(), Cmd("cease_fire", P("cease", "fire")))
+            );
+
+            Assert.IsTrue(
+                parser.CanCommitEarly(1, 0),
+                "the analysis still runs, so an unextendable command commits early"
+            );
         }
 
         [Test]
@@ -429,21 +476,49 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void TryEagerCommit_UnanalysableGrammar_ReturnsNone()
+        public void TryEagerCommit_UnanalysableGrammar_ReturnsHoldExtendable()
         {
             // Past MaxOptionalExpansion the eager precompute is abandoned for the whole
-            // parser. HoldExtendable is a product of that analysis, so with no analysis the
-            // verdict must be None — the full window stays in force.
-            var noisy = Cmd("noisy", P("noisy",
-                "?a", "?b", "?c", "?d", "?e", "?f", "?g", "?h", "?i", "?j", "?k", "?l", "?m"));
+            // parser, so nothing may commit early. Everything the hold asserts has still been
+            // established though — one complete, confident, whole-buffer match — so the
+            // verdict degrades to HoldExtendable rather than None (issue #44), which costs
+            // the un-analysable grammar prefixHoldSeconds instead of the full window.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
             var parser = new VoxrCommandParser(
                 Slots(),
-                Commands(noisy, Cmd("cease_fire", P("cease", "fire"))));
+                Commands(OverLimitCommand(), Cmd("cease_fire", P("cease", "fire")))
+            );
 
-            LogAssert.Expect(LogType.Warning, new Regex("more than 12 optional"));
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("cease fire"), null, 0.6f, 0.4f),
+                "an un-analysable grammar holds — it never commits early"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_UnanalysableGrammar_IncompleteSpeech_StillReturnsNone()
+        {
+            // The degrade rides on the gates above it, not around them: speech that is not a
+            // complete, confident, whole-buffer match must still report None, so the split
+            // command it might be continuing keeps the full window to arrive in.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(OverLimitCommand(), Cmd("cease_fire", P("cease", "fire")))
+            );
 
             Assert.AreEqual(EagerCommitVerdict.None,
-                parser.TryEagerCommit(Tok("cease fire"), null, 0.6f, 0.4f));
+                parser.TryEagerCommit(Tok("cease"), null, 0.6f, 0.4f),
+                "half a command is not a complete match, analysed or not"
+            );
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("banana"), null, 0.6f, 0.4f),
+                "speech matching nothing must not arm the shortened hold"
+            );
         }
 
         // ---------- Tie-break parity with ParseInternal (Review MF-5) ----------

@@ -277,6 +277,8 @@ By default the buffer is purely time-driven: every command -- complete or not --
 
 The feature is off by default; leaving it off preserves the exact time-only behaviour above. Each command's eligibility is computed once when commands are configured, so the only per-utterance cost is a single speculative parse of the buffer.
 
+**Grammars past the analysis limit.** Deciding eligibility means expanding a pattern's optional elements, which is exponential (2^optionals), so a pattern carrying more than 12 of them is refused rather than partially analysed -- and since a partially analysed set could commit the wrong command, the refusal covers the whole command set. Nothing in it then commits early; every complete match is *held* instead, so it waits `prefixHoldSeconds` where that is set and the full `bufferWindow` where it is not. The parser names the offending pattern, its intent, and its optional count in a warning at construction, so the condition surfaces when the grammar is authored rather than mid-session.
+
 ### Prefix hold (shortening the ambiguous wait)
 
 The second bullet above -- a complete command that more speech could still extend -- has to wait, but it does not have to wait the *whole* window. It is only waiting on a continuation, and a speaker who is continuing starts almost immediately; the rest of `bufferWindow` is dead air. `prefixHoldSeconds` gives that state its own, shorter timer:
@@ -289,7 +291,8 @@ commandRecogniser.prefixHoldSeconds = 0.6f;     // held matches wait 0.6s, not 2
 
 With `["fire"]` and `["fire", "at", "{target}"]` registered, "fire" alone now fires ~0.6s after the speaker stops instead of ~2.0s, while "fire at hotel one" still parses as the longer command -- the continuation lands well inside 0.6s.
 
-- Applies **only** to a buffer that already parses as one complete, confident command spanning the whole buffer (bar a leading `[unk]` run). Partial speech mid-split-command, speech that matches nothing, and grammars too complex for the eligibility precompute to analyse all keep the full `bufferWindow`.
+- Applies **only** to a buffer that already parses as one complete, confident command spanning the whole buffer (bar a leading `[unk]` run). Partial speech mid-split-command and speech that matches nothing keep the full `bufferWindow`.
+- A grammar too complex for the eligibility precompute to analyse (above) never commits early, but its complete matches are held like any other, so the hold applies to them too.
 - **Never lengthens** the wait: a value above `bufferWindow` is ignored.
 - Re-evaluated on every VOSK result, so a continuation that does arrive puts the buffer back on the full window for the rest of the utterance.
 - Requires `eagerFlushOnCompleteMatch`. Default `0` keeps the full window, i.e. the pre-`prefixHoldSeconds` behaviour.
