@@ -798,8 +798,10 @@ namespace VoXR.Tests.Runtime
         public void TryEagerCommit_MissedRequiredLiteral_AllSlotsFilled_StillCommits()
         {
             // The "target" literal is dropped but every slot is filled, so the command is
-            // fully determined — score (1 + 1 + 1 - 0.5 + 1) / 5 = 0.70. The completeness
-            // condition is deliberately scoped to slots and must not catch this.
+            // fully determined — score (1 + 1 + 1 - 0.5 + 1) / 5 = 0.70. Neither completeness
+            // condition may catch this: the slot condition is scoped to slots, and the miss
+            // is MEDIAL, so {target} matches afterwards and the tail condition (issue #70)
+            // clears too.
             Assert.AreEqual(
                 EagerCommitVerdict.Commit,
                 LaunchParser()
@@ -828,6 +830,134 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 EagerCommitVerdict.None,
                 parser.TryEagerCommit(Tok("launch all missiles target"), null, 0.6f, 0.4f),
+                "an incomplete command must not reach the degrade's hold either"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // ---------- Unmatched required tail (issue #70) ----------
+
+        // Two mode commands sharing a two-word prefix and diverging only on the last word —
+        // the shipped demo grammar's shape (Tests~/Runtime/DemoGrammar.cs).
+        static VoxrCommandParser ModeSwitchParser() =>
+            new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("mode_weapons", P("switch", "to", "weapons")),
+                    Cmd("mode_navigation", P("switch", "to", "navigation"))
+                )
+            );
+
+        [Test]
+        public void TryEagerCommit_UnmatchedTerminalLiteral_ReturnsNone()
+        {
+            // "switch to" is two words into "switch to navigation". The trailing literal
+            // matched nothing, and a miss consumes no token — so EndIdx still reaches the end
+            // of the buffer and the whole-buffer condition cannot catch it, exactly as a
+            // missed slot evades it (issue #66). Both patterns score (1 + 1 - 0.5) / 3 = 0.50
+            // and tie, so registration order would decide: the speaker says "navigation" and
+            // mode_weapons fires. The wrong command, not merely an early one.
+            //
+            // minScore is lowered to 0.4 deliberately. At the 0.6 default this particular
+            // buffer is caught by the score gate today, which would make the test green
+            // without the fix; below the gate only the tail condition stands in the way.
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                ModeSwitchParser().TryEagerCommit(Tok("switch to"), null, 0.4f, 0.4f),
+                "a pattern still owing its last word must not commit early"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_UnmatchedTerminalLiteral_LiveAtDefaultThreshold()
+        {
+            // The same hole at the DEFAULT minScore, so this is not a low-threshold curiosity.
+            // Four required literals with the last unspoken score (1 + 1 + 1 - 0.5) / 4 =
+            // 0.625, over the 0.6 default, with every other eager condition satisfied.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("autopilot_on", P("set", "auto", "pilot", "on")),
+                    Cmd("autopilot_off", P("set", "auto", "pilot", "off"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("set auto pilot"), null, 0.6f, 0.4f),
+                "0.625 clears minScore, so only the tail condition can refuse this"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_CompletedTerminalLiteral_StillCommits()
+        {
+            // Guards against over-correcting: once the last word arrives the pattern owes
+            // nothing and must commit exactly as before.
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                ModeSwitchParser().TryEagerCommit(Tok("switch to navigation"), null, 0.4f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_OmittedTrailingOptional_IsNotAnUnmatchedTail()
+        {
+            // An omitted trailing OPTIONAL is not an unmatched required tail: it leaves both
+            // sides of the ratio, so the match is a perfect 1.0 and the pattern owes nothing.
+            // The verdict must therefore be one ABOVE None — the tail condition must not fire.
+            //
+            // It is HoldExtendable rather than Commit for an unrelated, pre-existing reason:
+            // IsTerminalPattern treats any pattern whose last element is optional as
+            // non-terminal, since later speech could still fill it, which
+            // TrailingOptional_IsNotCommittable above pins independently. That rule is older
+            // than this condition and untouched by it — what matters here is that the verdict
+            // did not collapse to None.
+            var parser = new VoxrCommandParser(Slots(), Commands(Cmd("go", P("go", "?now"))));
+
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("go"), null, 0.6f, 0.4f),
+                "optionality is not incompleteness — the tail condition must not refuse this"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_OmittedMedialOptional_StillCommits()
+        {
+            // The counter behind the tail condition must not treat an omitted optional as a
+            // miss. "turn light on" omits "?the" and then matches two more required literals,
+            // so the pattern ends on the buffer's last token owing nothing — a perfect 1.0,
+            // terminal, and committable exactly as before.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("light_on", P("turn", "?the", "light", "on")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("turn light on"), null, 0.6f, 0.4f),
+                "an omitted optional mid-pattern leaves no unmatched tail behind it"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_UnmatchedTerminalLiteral_UnanalysableGrammar_StillReturnsNone()
+        {
+            // Same ordering requirement the slot condition has (issue #66): the tail condition
+            // must sit ABOVE the issue #44 degrade, or an un-analysable grammar would hand a
+            // still-incomplete match HoldExtendable and arm the shortened hold on precisely
+            // the buffer whose missing word needs the full window to arrive in.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(OverLimitCommand(), Cmd("autopilot_on", P("set", "auto", "pilot", "on")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("set auto pilot"), null, 0.6f, 0.4f),
                 "an incomplete command must not reach the degrade's hold either"
             );
             LogAssert.NoUnexpectedReceived();

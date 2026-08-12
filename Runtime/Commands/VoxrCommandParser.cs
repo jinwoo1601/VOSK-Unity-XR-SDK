@@ -842,6 +842,15 @@ namespace VoXR.Commands
             // legitimate parse result there (it becomes a pending command).
             public bool MissedRequiredSlot;
 
+            // Whether any REQUIRED element sits after the last element that actually
+            // matched — i.e. the pattern ran out of buffer still owing words, rather than
+            // ending where the buffer ends. Neither index below can express this: a miss
+            // consumes nothing, so a pattern whose trailing elements were never spoken
+            // leaves both of them at the buffer end. Drives the eager gate's second
+            // completeness condition (issue #70); ParseInternal ignores it for the same
+            // reason it ignores MissedRequiredSlot.
+            public bool HasUnmatchedRequiredTail;
+
             // Where the match stopped, including any [unk] skipped ahead of a trailing
             // element that matched nothing. Drives searchStart and the eager whole-buffer gate.
             public int EndIdx;
@@ -913,6 +922,11 @@ namespace VoXR.Commands
             int literalCount = 0;
             int slotCount = 0;
             bool missedRequiredSlot = false;
+            // Required elements that have missed since the last one that actually matched.
+            // Reset by every match, so a non-zero value at the end means the pattern's TAIL
+            // is what went unmatched (issue #70) — a medial miss is followed by a match and
+            // clears it.
+            int requiredAfterLastMatch = 0;
             // Where the last element that actually matched something left off. EndIdx alone
             // overstates the span: the [unk] skip below runs before every element, including
             // one that then matches nothing, so a trailing unmatched optional leaves EndIdx
@@ -955,12 +969,14 @@ namespace VoXR.Commands
                         consumedEndIdx = tokenIdx;
                         rawScore += MatchScore;
                         denominator += MatchScore;
+                        requiredAfterLastMatch = 0;
                     }
                     else if (!isOptional)
                     {
                         rawScore += RequiredSlotMissPenalty;
                         denominator += MatchScore;
                         missedRequiredSlot = true;
+                        requiredAfterLastMatch++;
                     }
                     // Unmatched optional slot: contributes nothing to score or denominator.
                 }
@@ -974,6 +990,7 @@ namespace VoXR.Commands
                         literalCount++;
                         tokenIdx++;
                         consumedEndIdx = tokenIdx;
+                        requiredAfterLastMatch = 0;
                     }
                     // Unmatched optional literal: contributes nothing to score or denominator.
                 }
@@ -987,10 +1004,12 @@ namespace VoXR.Commands
                         literalCount++;
                         tokenIdx++;
                         consumedEndIdx = tokenIdx;
+                        requiredAfterLastMatch = 0;
                     }
                     else
                     {
                         rawScore += RequiredLiteralMissPenalty;
+                        requiredAfterLastMatch++;
                     }
                 }
             }
@@ -1006,6 +1025,7 @@ namespace VoXR.Commands
                 LiteralCount = literalCount,
                 SlotCount = slotCount,
                 MissedRequiredSlot = missedRequiredSlot,
+                HasUnmatchedRequiredTail = requiredAfterLastMatch > 0,
                 EndIdx = tokenIdx,
                 ConsumedEndIdx = consumedEndIdx,
             };
@@ -1308,6 +1328,7 @@ namespace VoXR.Commands
             int bestEndIdx = 0;
             int bestConsumedEndIdx = 0;
             bool bestMissedRequiredSlot = false;
+            bool bestHasUnmatchedRequiredTail = false;
 
             for (int ci = 0; ci < _commands.Length; ci++)
             {
@@ -1340,6 +1361,7 @@ namespace VoXR.Commands
                             bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                             bestEndIdx = matchResult.EndIdx;
                             bestMissedRequiredSlot = matchResult.MissedRequiredSlot;
+                            bestHasUnmatchedRequiredTail = matchResult.HasUnmatchedRequiredTail;
                         }
                     }
                 }
@@ -1360,11 +1382,31 @@ namespace VoXR.Commands
             // still missing an argument, and committing fires it right before the words that
             // would have filled the slot arrive.
             //
-            // Required LITERALS are deliberately exempt: "launch all missiles hotel one"
-            // against ["launch", "{?quantity}", "{weapon}", "target", "{target}"] drops the
-            // "target" function word but still fills every slot, so the command is fully
-            // determined and must not be blocked from committing.
+            // Required LITERALS are not covered by this condition — a dropped function word
+            // still leaves every argument present. They are covered by the tail condition
+            // below instead, which is the case that actually matters for them.
             if (bestMissedRequiredSlot)
+                return EagerCommitVerdict.None;
+
+            // Completeness, part two: no required element may sit after the last element
+            // that actually MATCHED (issue #70). The whole-buffer condition below cannot
+            // express this — a miss consumes no token, so a pattern whose trailing elements
+            // were never spoken leaves EndIdx (and ConsumedEndIdx) at the buffer end just
+            // as a pattern that genuinely ended there does. That condition is then satisfied
+            // vacuously by exactly the utterances still in progress.
+            //
+            // Left unguarded, ["switch", "to", "weapons"] commits on the buffer "switch to"
+            // while the speaker is still saying "navigation" — and where a sibling pattern
+            // shares the prefix, both score identically and registration order picks the
+            // committed intent, so the wrong command fires, not merely an early one.
+            //
+            // This is a TAIL test rather than a ban on missed literals because a medial
+            // miss is genuinely safe: "launch all missiles hotel one" against
+            // ["launch", "{?quantity}", "{weapon}", "target", "{target}"] drops the "target"
+            // function word, yet fills every slot and still lands its final element on the
+            // last token of the buffer. Nothing the speaker says next was owed to it, so it
+            // commits early exactly as before.
+            if (bestHasUnmatchedRequiredTail)
                 return EagerCommitVerdict.None;
 
             // The match must span the whole buffer from the first recognised token: anything
