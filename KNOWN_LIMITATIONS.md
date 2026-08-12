@@ -373,16 +373,21 @@ deliberate trade-offs rather than oversights.
 
 ### Confidence of `-1.00` means "no data", not "zero confidence"
 
-- **Repro**: Say a command with leading filler or out-of-grammar words
-  ("okay cease fire"). VOSK transcribes `[unk] cease fire`; the sliding start
-  skips `[unk]`, and the logged per-command confidence is `-1.00`.
+- **Repro**: Inject text through `InjectText` without a `VoxrWord[]`, or take
+  any result VOSK delivered with no per-word data. The logged per-command
+  confidence is `-1.00`.
 - **Where seen**: v2.1 Phase 2.3 (triggered the bug that introduced the
   sentinel), v2.2 Phase 6.2, v2.3 Phase 3.2–3.3, v2.4 Phase 3.8.
-- **Root cause**: When the matched span of the transcript contains only
-  `[unk]` tokens (or no VOSK confidence data at all), the parser cannot
-  compute a meaningful average. It returns `-1.0` as a sentinel meaning
-  "no data" and `VoxrCommandRecogniser` treats this as *not subject to*
-  `minConfidence`, so the command still fires based on pattern-match score.
+- **Root cause**: The aggregate is the *minimum* per-word confidence over the
+  matched span, never an average. When no per-word confidence is available for
+  that span, there is nothing to take the minimum of, so the parser returns
+  `-1.0` as a sentinel meaning "no data" and `VoxrCommandRecogniser` treats
+  this as *not subject to* `minConfidence`, so the command still fires based
+  on pattern-match score. A leading `[unk]` run is **not** a cause — selection
+  never starts a match on `[unk]`, so a winning span always holds at least one
+  matched word. See
+  [Matching and Scoring](Documentation~/scoring.md#minconfidence-default-04)
+  for the second, less obvious way `-1` arises.
   Without this sentinel (v2.0 used raw `0.0`), genuine noise that drove
   confidence to 0 was indistinguishable from "no data" and either bypassed
   the threshold or was falsely rejected.
