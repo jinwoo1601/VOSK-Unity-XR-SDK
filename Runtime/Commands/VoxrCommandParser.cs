@@ -1352,8 +1352,11 @@ namespace VoXR.Commands
             // Nothing else here asserts that. The score arithmetic only sinks such candidates
             // below minScore by coincidence — at five elements one missed slot lands on
             // exactly 0.60, which clears the default gate — and the end-of-buffer condition
-            // below cannot catch it either, because a miss consumes no tokens and so never
-            // advances EndIdx. The buffer therefore looks fully spanned while the command is
+            // below cannot catch it either: a miss consumes no RECOGNISED token, so it never
+            // advances EndIdx past anything the pattern actually matched. (It can still carry
+            // EndIdx over a trailing [unk] run, since the skip above runs before every element
+            // including one that then matches nothing — which only makes that condition pass
+            // more readily.) The buffer therefore looks fully spanned while the command is
             // still missing an argument, and committing fires it right before the words that
             // would have filled the slot arrive.
             //
