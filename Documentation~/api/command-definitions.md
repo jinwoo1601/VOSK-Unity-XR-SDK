@@ -46,11 +46,11 @@ Declares a named slot with allowed values or number-sequence behaviour.
 | Field | Type | Description |
 |-------|------|-------------|
 | `Name` | `string` | Slot name referenced in patterns as `{name}` or `{?name}` |
-| `Type` | `VoxrSlotType` | `Enumerated` (fixed values) or `NumberSequence` (digit words) |
+| `Type` | `VoxrSlotType` | `Enumerated` (fixed values) or `NumberSequence` (number words) |
 | `Values` | `string[]` | Allowed values (Enumerated only) |
 | `Aliases` | `Dictionary<string, string>` | Maps variant words to canonical values |
-| `MinWords` | `int` | Minimum digit words to consume (NumberSequence only) |
-| `MaxWords` | `int` | Maximum digit words to consume (NumberSequence only) |
+| `MinWords` | `int` | Minimum number words to consume (NumberSequence only). Counts words from `DigitVocabulary`, not digits — `"seventeen"` is one word. |
+| `MaxWords` | `int` | Maximum number words to consume (NumberSequence only). Counts words from `DigitVocabulary`, not digits — `"seventeen"` is one word. |
 
 ### Factory Methods
 
@@ -63,9 +63,10 @@ var quantity = new VoxrSlotDefinition("quantity",
     new[] { "one", "two", "three", "all" },
     new Dictionary<string, string> { { "a", "one" } });
 
-// NumberSequence slot for digit words
+// NumberSequence slot for number words
 var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
-// Matches: "two seven zero" -> 270, "one eight" -> 18
+// Matches: "two seven zero" -> heading="two seven zero", "one eight" -> heading="one eight"
+// The slot value is the spoken words; convert to an int with VoxrNumberParser.
 ```
 
 ## VoxrSlotType
@@ -75,7 +76,7 @@ var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords
 | Value | Description |
 |-------|-------------|
 | `Enumerated` | Matches against a fixed set of allowed values and aliases |
-| `NumberSequence` | Greedily consumes consecutive digit-word tokens ("zero" through "nine") |
+| `NumberSequence` | Greedily consumes consecutive number-word tokens from `VoxrNumberParser.DigitVocabulary` (zero–nineteen, the tens, plus "hundred" and "thousand"). The matched value is those words as spoken, not a number — convert with [`VoxrNumberParser`](number-parser.md). |
 
 ## VoxrCommandSet
 

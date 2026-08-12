@@ -48,7 +48,7 @@ GameObjects:
 | `cease fire` | `cease_fire` — logged |
 | `approach target alpha one` | `approach_target` — Alpha One flashes green |
 | `open distance from target bravo two` | `retreat_from_target` — Bravo Two flashes blue |
-| `set heading two seven zero` | `set_heading` with `heading = 270` (NumberSequence slot) |
+| `set heading two seven zero` | `set_heading` with `heading = "two seven zero"` — `CommandDemo.LogHeading` converts it to `270` via `VoxrNumberParser` |
 | `weapons mode` / `navigation mode` | Mode chip updates; only that set's grammar is active |
 | `all modes` | All three sets active |
 | `disable all` | Grammar fully disabled for 5 s, then auto-restored by `CommandDemo` |
@@ -56,7 +56,10 @@ GameObjects:
 ## What the sample covers
 
 - **Slots**: targets, weapons, quantity, named ranges, plus digit-sequence slots
-  for heading/elevation.
+  for heading/elevation. A `NumberSequence` slot value is the words as spoken
+  (`"two seven zero"`, not `"270"`); `CommandDemo.TryParseNumberSlot` shows the
+  canonical `VoxrNumberParser` conversion — digit sequence first, cardinal as
+  fallback — that every consumer of such a slot needs.
 - **Command sets**: `weapons`, `navigation`, and `common`, each with multiple
   phrasings per intent.
 - **Runtime mode switching**: the mode commands call `SetActiveSets(...)` to
@@ -106,3 +109,4 @@ All injection methods are main-thread only.
 - [Command Sets](../../Documentation~/command-sets.md) -- named sets, runtime mode switching
 - [Editor Testing](../../Documentation~/editor-testing.md) -- debug window, live mic, text injection, batch runner
 - [CommandRecogniser API](../../Documentation~/api/command-recogniser.md) -- full event and method reference
+- [Number Parser](../../Documentation~/api/number-parser.md) -- converting a `NumberSequence` slot's spoken words into an integer

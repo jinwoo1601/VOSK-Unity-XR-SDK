@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -186,10 +187,68 @@ public class CommandDemo : MonoBehaviour
             case Intents.ModeDisable:
                 DisableAllModes();
                 break;
+
+            case Intents.SetHeading:
+                LogHeading(cmd);
+                break;
         }
     }
 
     void OnCommandBatch(VoxrCommand[] commands) { }
+
+    // --- NumberSequence slots ---
+
+    // A NumberSequence slot holds the words as spoken: cmd.GetSlot("heading") is
+    // "two seven zero", never "270". int.TryParse on it fails on every utterance and
+    // silently yields 0 — convert with VoxrNumberParser instead.
+    void LogHeading(VoxrCommand cmd)
+    {
+        if (!TryParseNumberSlot(cmd, "heading", out int heading))
+        {
+            Debug.LogWarning(
+                $"[CommandDemo] Heading \"{cmd.GetSlot("heading")}\" is not a number."
+            );
+            return;
+        }
+
+        // "elevation" is optional in the pattern, so an absent slot is not an error.
+        if (TryParseNumberSlot(cmd, "elevation", out int elevation))
+            Debug.Log($"[CommandDemo] Heading {heading} mark {elevation}");
+        else
+            Debug.Log($"[CommandDemo] Heading {heading}");
+    }
+
+    // Try the digit-by-digit reading first ("two seven zero" -> 270), then the cardinal
+    // one ("two hundred" -> 200). Both parsers throw on words they do not accept rather
+    // than returning a sentinel, so the fallback is expressed with try/catch. The empty
+    // check is separate and load-bearing: an unmatched slot yields "", which both parsers
+    // map to 0 instead of throwing. Returns false when the slot is absent or the words
+    // parse as neither form.
+    static bool TryParseNumberSlot(VoxrCommand cmd, string slotName, out int value)
+    {
+        value = 0;
+
+        string words = cmd.GetSlot(slotName);
+        if (string.IsNullOrEmpty(words))
+            return false;
+
+        try
+        {
+            value = VoxrNumberParser.ParseDigitSequence(words);
+            return true;
+        }
+        catch (FormatException) { }
+
+        try
+        {
+            value = VoxrNumberParser.ParseCardinal(words);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 
     void OnUnrecognised(string text)
     {
