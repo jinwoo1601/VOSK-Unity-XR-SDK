@@ -733,5 +733,99 @@ namespace VoXR.Tests.Runtime
                 "a buffer of pure filler matches nothing and must not commit"
             );
         }
+
+        // ---------- Unfilled required slot (issue #66) ----------
+
+        static VoxrSlotDefinition[] LaunchSlots() =>
+            Slots(
+                new VoxrSlotDefinition("quantity", new[] { "all", "one", "two", "three" }),
+                new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                new VoxrSlotDefinition("target", new[] { "hotel one", "alpha three" })
+            );
+
+        // The shipped demo pattern, whose five elements are what put the missed-slot score on
+        // exactly the default minScore instead of safely below it.
+        static VoxrCommandDefinition LaunchCommand() =>
+            Cmd("launch_weapon", P("launch", "{?quantity}", "{weapon}", "target", "{target}"));
+
+        static VoxrCommandParser LaunchParser() =>
+            new VoxrCommandParser(LaunchSlots(), Commands(LaunchCommand()));
+
+        [Test]
+        public void TryEagerCommit_UnfilledRequiredSlot_ReturnsNone()
+        {
+            // Four of five elements match; {target} matches nothing. Score is
+            // (1 + 1 + 1 + 1 - 1) / 5 = exactly 0.60, so minScore does NOT catch it — and a
+            // missed slot consumes no tokens, so EndIdx still reaches the end of the buffer
+            // and the whole-buffer condition does not catch it either. Only the completeness
+            // condition stands between this and a launch_weapon fired with no target, one
+            // word before "hotel one" arrives.
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                LaunchParser().TryEagerCommit(Tok("launch all missiles target"), null, 0.6f, 0.4f),
+                "a command missing a required argument must never commit early"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_RequiredSlotFilled_StillCommits()
+        {
+            // Guards against over-correcting: the same pattern with the slot filled is a
+            // complete, terminal match and must still commit.
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                LaunchParser()
+                    .TryEagerCommit(Tok("launch all missiles target hotel one"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_UnfilledOptionalSlot_StillCommits()
+        {
+            // {?quantity} is optional, so omitting it is not a missed required slot.
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                LaunchParser()
+                    .TryEagerCommit(Tok("launch missiles target hotel one"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_MissedRequiredLiteral_AllSlotsFilled_StillCommits()
+        {
+            // The "target" literal is dropped but every slot is filled, so the command is
+            // fully determined — score (1 + 1 + 1 - 0.5 + 1) / 5 = 0.70. The completeness
+            // condition is deliberately scoped to slots and must not catch this.
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                LaunchParser()
+                    .TryEagerCommit(Tok("launch all missiles hotel one"), null, 0.6f, 0.4f),
+                "a dropped function word does not make the command incomplete"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_UnfilledRequiredSlot_UnanalysableGrammar_StillReturnsNone()
+        {
+            // The completeness condition has to sit ABOVE the issue #44 degrade, not in its
+            // shadow. That degrade returns HoldExtendable for any otherwise-complete match in
+            // a grammar too complex to analyse, so a check running later would hand an
+            // incomplete command a verdict above None — arming the shortened prefixHoldSeconds
+            // hold on exactly the buffer whose missing words still need the full window to
+            // arrive in. Nothing else in the suite reaches the degrade with a missed slot:
+            // both other un-analysable cases use a slot-free grammar.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
+            var parser = new VoxrCommandParser(
+                LaunchSlots(),
+                Commands(OverLimitCommand(), LaunchCommand())
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("launch all missiles target"), null, 0.6f, 0.4f),
+                "an incomplete command must not reach the degrade's hold either"
+            );
+        }
     }
 }

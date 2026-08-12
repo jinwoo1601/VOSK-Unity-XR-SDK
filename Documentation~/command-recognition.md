@@ -297,6 +297,7 @@ By default the buffer is purely time-driven: every command -- complete or not --
 
 - **Complete and unambiguous** -> fires immediately, with zero buffer latency.
 - **A prefix of a longer command**, or a **trailing slot that could still grow** (a multi-word enumerated value such as `"red"` -> `"red dragon"`, or a variable-length number sequence) -> keeps waiting the full window, so split commands are still recovered. "Prefix" is judged against slot vocabularies, not just pattern shape: a lone `{burn_level}` is *not* a prefix of `decelerate {burn_level}`, because no value of the slot begins with "decelerate".
+- **Missing a required slot** (the pattern's literals are all in, but an argument has not been spoken yet) -> keeps waiting the full window, even where the arithmetic leaves the partial match above `minScore`. Unlike the case above it never qualifies for the shortened `prefixHoldSeconds` hold, because it is not a complete match. An unspoken slot consumes no words, so such a buffer otherwise looks complete right up to the moment the missing words arrive.
 - **Split command** -> fires as soon as its second half completes, instead of waiting another full window on top.
 - **Out-of-grammar preamble** (a station address such as "Helm, ...", reported by VOSK as `[unk]`) is skipped, so an addressed command commits as fast as the bare one. Only a *leading* run is skipped: anything left over at the end -- recognised or `[unk]` -- is treated as an in-progress tail and keeps waiting, as does a leading word VOSK did resolve.
 
