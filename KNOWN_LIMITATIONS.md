@@ -240,6 +240,48 @@ model you use.
 Limitations that come from how the SDK is structured. Most of these are
 deliberate trade-offs rather than oversights.
 
+### Only one `VoxrSpeechRecogniser` can be initialised per process
+
+- **Repro**: Put two `VoxrSpeechRecogniser` components in a scene (two GameObjects,
+  or two additively-loaded scenes each carrying one) and call `InitialiseAsync()`
+  on both. The second logs an error, reports `IsInitialised == false`, and never
+  loads its own model.
+- **Root cause**: The native bridge is file-scope C++ state — `g_model`,
+  `g_recognizer`, `g_initialised` in `NativeBridge~/src/vosk_bridge.cpp` — and its
+  C ABI carries no handle, so on device there is exactly one bridge per process.
+  Nothing on the managed side can make two components genuinely independent there
+  without changing that ABI.
+- **Why it also applies in the Windows Editor, where it need not**: the Editor
+  backend (`EditorMicBackend`) is per-instance — it loads its own VOSK model and
+  never calls `vosk_bridge_*` — so two recognisers could coexist there, and did
+  before #57. The rule is enforced uniformly anyway. The alternative is worse: a
+  two-recogniser scene that runs in the Editor and silently corrupts on device is
+  harder to diagnose than one that fails identically in both, and the Editor is
+  where the developer can still see the error. Enforcing on both branches is also
+  what makes the constraint testable at all — the automated coverage this has runs
+  in EditMode/PlayMode, not on device.
+- **What this used to do**: Before the enforcement landed (#57) the sharing was
+  silent. The second component's `InitialiseAsync()` early-returned on the *first*
+  one's `IsInitialised` and quietly discarded its own model path, sample rate, and
+  AGC target; then either component's `OnDestroy` called the unconditional
+  `vosk_bridge_destroy()` and freed the survivor's recognizer and model, which on
+  ordinary additive scene unload left the survivor calling into freed memory.
+- **Workaround**: Keep one recogniser for the lifetime of the process — a
+  persistent GameObject (`DontDestroyOnLoad`) that per-scene code holds a reference
+  to, rather than one recogniser per scene. Where a handover is genuinely needed,
+  call `ReleaseNativeResources()` on the outgoing recogniser first: that frees the
+  claim **synchronously**, so the incoming one initialises in the same frame.
+  Destroying it also frees the claim, but only via `OnDestroy` — which Unity defers
+  to the end of the frame, so `Destroy(outgoing); incoming.Initialise();` in one
+  frame is rejected with an error, as is an `UnloadSceneAsync` that overlaps the
+  incoming scene's `Start()`. Under the default push-to-talk wiring the next press
+  retries and succeeds (losing only the pre-warm); in `Continuous` listening mode
+  nothing retries, so the explicit `ReleaseNativeResources()` handover matters there.
+- **Note**: Refcounting the bridge, or giving the ABI a per-instance handle so two
+  recognisers could genuinely coexist on device, remain open as native-side work —
+  unfiled; this entry is their only record. What ships today makes the constraint
+  explicit and loud instead of silently corrupting state.
+
 ### Active set switching has a brief audio gap
 
 - **Repro**: Trigger a `SetActiveSets()` call (e.g. via a `mode_*` command),

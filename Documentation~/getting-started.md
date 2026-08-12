@@ -143,6 +143,8 @@ The SDK uses a two-tier lifecycle that separates the expensive model load from t
 - `Initialise()` / `InitialiseAsync()` -- loads the VOSK model and creates the recogniser. Takes seconds on first launch (model extraction from StreamingAssets).
 - `ReleaseNativeResources()` -- frees all native resources. Called automatically by `OnDestroy()`.
 
+The native bridge is one per process, so **only one `VoxrSpeechRecogniser` can be initialised at a time**. A second one logs an error and stays inert rather than sharing the first's model; see [VoxrSpeechRecogniser](api/speech-recogniser.md#one-recogniser-per-process).
+
 ### Lightweight (audio stream start / stop)
 
 - `StartRecognition()` / `StartRecognitionAsync()` -- opens audio stream, starts recognition. Milliseconds. Calls `Initialise()` if needed.
