@@ -524,14 +524,21 @@ namespace VoXR.Tests.Runtime
 
             // "close distance {range} target {target}" must not weld literals across
             // a slot — the slot's value sits between them when the pattern is spoken.
+            // Assert the exact welds the boundary prevents: these are what the
+            // emitter produces if EITHER the flush or the reset at the slot branch
+            // is dropped, so they fail on both forms of the defect.
             Assert.IsFalse(
-                json.Contains("\"close distance safe range\""),
+                json.Contains("\"close distance target\""),
                 "Phrase must not span a slot boundary"
             );
             Assert.IsFalse(
-                json.Contains("\"distance target\""),
-                "Phrase must not weld literals either side of a slot"
+                json.Contains("\"set distance target\""),
+                "Phrase must not span a slot boundary"
             );
+
+            // ...while the runs either side must still be emitted in their own right.
+            Assert.IsTrue(json.Contains("\"close distance\""), "Expected the pre-slot run");
+            Assert.IsTrue(json.Contains("\"target\""), "Expected the post-slot run");
         }
 
         [Test]
