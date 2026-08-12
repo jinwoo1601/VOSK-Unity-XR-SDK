@@ -6,22 +6,30 @@ The core speech recognition MonoBehaviour. Attach to a GameObject, configure via
 
 ## One recogniser per process
 
-**Only one `VoxrSpeechRecogniser` may hold the native bridge at a time.** The bridge is
-file-scope native state with no per-instance handle in its ABI, so a process has exactly
-one recogniser and one model no matter how many components reference it.
+**Only one `VoxrSpeechRecogniser` may be initialised at a time.** On device the recogniser
+is file-scope native state with no per-instance handle in its ABI, so the process has
+exactly one bridge and one model no matter how many components reference it.
 
-Ownership is claimed by whichever component initialises the bridge and released when that
-component calls `ReleaseNativeResources()` or is destroyed. A second component may exist
-in the scene, but until the owner lets go it is **inert** towards the bridge:
+Ownership is claimed by whichever component initialises it and released when that component
+calls `ReleaseNativeResources()` or is destroyed. A second component may exist in the
+scene, but until the owner lets go it is **inert**:
 
 - `IsInitialised` and `IsRecognising` report `false` — it initialised nothing, whatever the
   process-wide bridge is doing.
 - `InitialiseAsync()`, `SetGrammar()`, and `ResetRecogniser()` reject the call, logging an
   error and firing `OnError` with `AlreadyInitialised` and the owner's GameObject name.
-- `StopRecognition()` and `ReleaseNativeResources()` are quiet no-ops, so its `OnDestroy`
-  cannot free the owner's recognizer.
+  `Initialise()` and `StartRecognition()` route through `InitialiseAsync()`, so they inherit
+  that rejection — under push-to-talk wiring it is reported once per press.
+- `StopRecognition()` is a quiet no-op, and `ReleaseNativeResources()` frees only that
+  component's own resources, so its `OnDestroy` cannot free the owner's recognizer.
 
 A single recogniser is unaffected — this only engages once a second one exists.
+
+> **Editor note.** The Windows Editor backend (`EditorMicBackend`) is genuinely
+> per-instance: it loads its own VOSK model and never touches the native bridge, so two
+> recognisers *could* coexist there. The rule is nevertheless enforced uniformly, so that a
+> scene which works in the Editor cannot fail on device. Treat the constraint as a property
+> of the package, not of the platform you happen to be running on.
 
 **Handing the bridge over:** call `ReleaseNativeResources()` on the outgoing recogniser
 before initialising the incoming one. That frees the claim **synchronously**, so the

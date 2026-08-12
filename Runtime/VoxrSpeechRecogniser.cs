@@ -630,11 +630,13 @@ namespace VoXR
 
             string message =
                 $"{context}: another VoxrSpeechRecogniser (on GameObject "
-                + $"'{s_bridgeOwner.name}') already owns the native bridge. VoXR supports "
-                + "one active recogniser per process — the bridge is file-scope native "
-                + "state with no per-instance handle, so a second instance would inherit "
-                + "the first's model path, sample rate and gain, and free its recognizer "
-                + "on destroy. Call ReleaseNativeResources() on the existing recogniser "
+                + $"'{s_bridgeOwner.name}') already owns the recogniser. VoXR supports one "
+                + "active recogniser per process. On device the bridge is file-scope native "
+                + "state with no per-instance handle, so a second instance would inherit the "
+                + "first's model path, sample rate and gain, and free its recognizer on "
+                + "destroy; the Windows Editor backend is per-instance and could have "
+                + "coexisted, but is held to the same rule so a scene that works here cannot "
+                + "fail on device. Call ReleaseNativeResources() on the existing recogniser "
                 + "first — that frees the claim synchronously, whereas Object.Destroy "
                 + "only frees it at the end of the frame.";
             Debug.LogError(message, this);

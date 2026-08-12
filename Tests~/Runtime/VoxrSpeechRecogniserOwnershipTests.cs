@@ -25,7 +25,7 @@ namespace VoXR.Tests.Runtime
     // needs a backend that actually initialises, which here is EditorMicBackend.
     public class VoxrSpeechRecogniserOwnershipTests
     {
-        static readonly Regex DuplicateOwner = new Regex("already owns the native bridge");
+        static readonly Regex DuplicateOwner = new Regex("already owns the recogniser");
 
         GameObject _ownerGo;
         GameObject _secondGo;
