@@ -469,6 +469,95 @@ namespace VoXR.Tests.Runtime
             Assert.IsTrue(json.Contains("\"a\""), "Optional literal 'a' should be in grammar");
         }
 
+        // --- Phrase-chunked grammar entries (issue #45) ---
+
+        [Test]
+        public void GrammarJson_EmitsContiguousLiteralRunAsPhrase()
+        {
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            Assert.IsTrue(json.Contains("\"cease fire\""), "Expected phrase entry 'cease fire'");
+            Assert.IsTrue(json.Contains("\"stop firing\""), "Expected phrase entry 'stop firing'");
+            Assert.IsTrue(
+                json.Contains("\"close distance\""),
+                "Expected phrase entry 'close distance'"
+            );
+        }
+
+        [Test]
+        public void GrammarJson_EmitsMultiWordSlotValuesAsPhrases()
+        {
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            Assert.IsTrue(json.Contains("\"hotel one\""), "Expected slot surface form 'hotel one'");
+            Assert.IsTrue(
+                json.Contains("\"safe range\""),
+                "Expected slot surface form 'safe range'"
+            );
+        }
+
+        [Test]
+        public void GrammarJson_PhraseEntriesKeepTheirIndividualWords()
+        {
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            // A VAD split mid-phrase still has to decode as fragments, so every word
+            // of a phrase stays individually legal — the phrase is a bias, not a rule.
+            Assert.IsTrue(json.Contains("\"cease\""), "'cease' should remain a single-word entry");
+            Assert.IsTrue(json.Contains("\"fire\""), "'fire' should remain a single-word entry");
+            Assert.IsTrue(json.Contains("\"hotel\""), "'hotel' should remain a single-word entry");
+            Assert.IsTrue(json.Contains("\"range\""), "'range' should remain a single-word entry");
+        }
+
+        [Test]
+        public void GrammarJson_SlotBoundaryEndsThePhrase()
+        {
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            // "close distance {range} target {target}" must not weld literals across
+            // a slot — the slot's value sits between them when the pattern is spoken.
+            // Assert the exact welds the boundary prevents: these are what the
+            // emitter produces if EITHER the flush or the reset at the slot branch
+            // is dropped, so they fail on both forms of the defect.
+            Assert.IsFalse(
+                json.Contains("\"close distance target\""),
+                "Phrase must not span a slot boundary"
+            );
+            Assert.IsFalse(
+                json.Contains("\"set distance target\""),
+                "Phrase must not span a slot boundary"
+            );
+
+            // ...while the runs either side must still be emitted in their own right.
+            Assert.IsTrue(json.Contains("\"close distance\""), "Expected the pre-slot run");
+            Assert.IsTrue(json.Contains("\"target\""), "Expected the post-slot run");
+        }
+
+        [Test]
+        public void GrammarJson_OptionalLiteralDoesNotJoinItsNeighbours()
+        {
+            var parser = CreateParser();
+
+            string json = parser.GenerateGrammarJson();
+
+            // "launch ?a {?quantity} ..." — "a" may be omitted, so it must not be
+            // welded onto "launch"; both stay separately legal.
+            Assert.IsFalse(
+                json.Contains("\"launch a\""),
+                "Optional literal must not be welded into a phrase"
+            );
+            Assert.IsTrue(json.Contains("\"launch\""), "'launch' should be a single-word entry");
+            Assert.IsTrue(json.Contains("\"a\""), "'a' should be a single-word entry");
+        }
+
         // --- NumberSequence helpers ---
 
         static VoxrSlotDefinition[] MakeNumericSlots()

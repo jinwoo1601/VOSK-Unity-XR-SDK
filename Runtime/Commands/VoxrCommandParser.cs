@@ -699,53 +699,59 @@ namespace VoXR.Commands
             VoxrCommandDefinition[] commands, string[] additionalWords = null)
         {
             var uniqueWords = new HashSet<string>(StringComparer.Ordinal);
+            var run = new List<string>();
 
-            // Collect words from pattern literals (including optional literals stripped of ?)
+            // Collect contiguous literal runs from patterns. A run is emitted as one
+            // multi-word grammar entry so the decoder pays a single language-model
+            // transition for the whole sequence instead of one per word — that bias is
+            // what re-imposes word order and resists in-grammar substitutions
+            // ("switch to navigation" over "switch two navigation").
+            // A slot or an optional literal ends the run: neither is guaranteed to be
+            // spoken, so the words either side of it are not reliably contiguous.
             foreach (var command in commands)
             {
                 foreach (var pattern in command.Patterns)
                 {
+                    run.Clear();
+
                     foreach (string element in pattern)
                     {
                         if (ExtractSlotName(element) != null)
+                        {
+                            AddPhrase(uniqueWords, run);
+                            run.Clear();
                             continue;
+                        }
 
-                        string word = element;
                         if (IsOptionalLiteral(element))
-                            word = element.Substring(1);
+                        {
+                            AddPhrase(uniqueWords, run);
+                            run.Clear();
+                            AddSurfaceForm(uniqueWords, element.Substring(1));
+                            continue;
+                        }
 
-                        foreach (string w in word.Split(' '))
+                        foreach (string w in element.Split(' '))
                         {
                             if (w.Length > 0)
-                                uniqueWords.Add(w);
+                                run.Add(w);
                         }
                     }
+
+                    AddPhrase(uniqueWords, run);
                 }
             }
 
-            // Collect words from slot values
+            // Collect slot values and alias keys as whole surface forms
             foreach (var slot in slots)
             {
                 foreach (string value in slot.Values)
-                {
-                    foreach (string word in value.Split(' '))
-                    {
-                        if (word.Length > 0)
-                            uniqueWords.Add(word);
-                    }
-                }
+                    AddSurfaceForm(uniqueWords, value);
 
-                // Collect words from alias keys
                 if (slot.Aliases != null)
                 {
                     foreach (var key in slot.Aliases.Keys)
-                    {
-                        foreach (string word in key.Split(' '))
-                        {
-                            if (word.Length > 0)
-                                uniqueWords.Add(word);
-                        }
-                    }
+                        AddSurfaceForm(uniqueWords, key);
                 }
             }
 
@@ -788,6 +794,38 @@ namespace VoXR.Commands
             sb.Append(']');
 
             return sb.ToString();
+        }
+
+        // Adds a word sequence as one phrase entry, plus every word individually.
+        // The single words are kept deliberately: an utterance the VAD splits
+        // mid-phrase still has to decode as fragments, and a phrase-only grammar
+        // could not represent them. Keeping both makes the sequence constraint a
+        // bias rather than a hard rule — the phrase entry is the cheaper path.
+        static void AddPhrase(HashSet<string> entries, List<string> words)
+        {
+            if (words.Count == 0)
+                return;
+
+            if (words.Count > 1)
+                entries.Add(string.Join(" ", words));
+
+            foreach (string word in words)
+                entries.Add(word);
+        }
+
+        // Adds a whitespace-separated surface form (slot value, alias key, optional
+        // literal) as a phrase entry plus its individual words.
+        static void AddSurfaceForm(HashSet<string> entries, string surfaceForm)
+        {
+            var words = new List<string>();
+
+            foreach (string word in surfaceForm.Split(' '))
+            {
+                if (word.Length > 0)
+                    words.Add(word);
+            }
+
+            AddPhrase(entries, words);
         }
 
         struct MatchResult

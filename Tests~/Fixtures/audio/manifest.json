@@ -64,10 +64,10 @@
             "category": "homophone",
             "phrase": "switch to navigation",
             "peak": 0.2,
-            "expectedIntent": "",
+            "expectedIntent": "mode_navigation",
             "expectedSlots": [],
-            "expectedTranscript": "",
-            "description": "Homophone trap (negative baseline): Vosk currently hears 'switch two navigation' (to->two) and no command matches. Pinned as current behavior — if recognition or the parser improves, this fires and the baseline must be consciously updated. Positive counterpart: switch_to_weapons.wav."
+            "expectedTranscript": "switch to navigation",
+            "description": "Homophone trap (positive since #45): Vosk used to hear 'switch two navigation' (to->two) and no command matched. Phrase-chunked grammar emission put 'switch to navigation' in the grammar as one entry, which the decoder now prefers over three single-word entries, so the substitution no longer wins. Re-baselined consciously from the negative pin this entry used to carry. Positive counterpart: switch_to_weapons.wav."
         },
         {
             "file": "audio/tts/navigation_mode.wav",
