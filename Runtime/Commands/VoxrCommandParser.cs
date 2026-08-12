@@ -836,6 +836,12 @@ namespace VoXR.Commands
             public int LiteralCount;
             public int SlotCount;
 
+            // Whether any REQUIRED slot in the pattern matched nothing — the command is
+            // therefore missing an argument. Drives the eager gate's completeness condition
+            // (issue #66); ParseInternal ignores it, because a partial match is still a
+            // legitimate parse result there (it becomes a pending command).
+            public bool MissedRequiredSlot;
+
             // Where the match stopped, including any [unk] skipped ahead of a trailing
             // element that matched nothing. Drives searchStart and the eager whole-buffer gate.
             public int EndIdx;
@@ -906,6 +912,7 @@ namespace VoXR.Commands
             float denominator = 0f;
             int literalCount = 0;
             int slotCount = 0;
+            bool missedRequiredSlot = false;
             // Where the last element that actually matched something left off. EndIdx alone
             // overstates the span: the [unk] skip below runs before every element, including
             // one that then matches nothing, so a trailing unmatched optional leaves EndIdx
@@ -953,6 +960,7 @@ namespace VoXR.Commands
                     {
                         rawScore += RequiredSlotMissPenalty;
                         denominator += MatchScore;
+                        missedRequiredSlot = true;
                     }
                     // Unmatched optional slot: contributes nothing to score or denominator.
                 }
@@ -997,6 +1005,7 @@ namespace VoXR.Commands
                 Denominator = denominator,
                 LiteralCount = literalCount,
                 SlotCount = slotCount,
+                MissedRequiredSlot = missedRequiredSlot,
                 EndIdx = tokenIdx,
                 ConsumedEndIdx = consumedEndIdx,
             };
@@ -1298,6 +1307,7 @@ namespace VoXR.Commands
             int bestStartIdx = int.MaxValue;
             int bestEndIdx = 0;
             int bestConsumedEndIdx = 0;
+            bool bestMissedRequiredSlot = false;
 
             for (int ci = 0; ci < _commands.Length; ci++)
             {
@@ -1329,12 +1339,29 @@ namespace VoXR.Commands
                             bestStartIdx = startIdx;
                             bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                             bestEndIdx = matchResult.EndIdx;
+                            bestMissedRequiredSlot = matchResult.MissedRequiredSlot;
                         }
                     }
                 }
             }
 
             if (bestCommandIdx < 0 || bestScore < minScore)
+                return EagerCommitVerdict.None;
+
+            // Completeness: every required SLOT must actually have matched (issue #66).
+            // Nothing else here asserts that. The score arithmetic only sinks such candidates
+            // below minScore by coincidence — at five elements one missed slot lands on
+            // exactly 0.60, which clears the default gate — and the end-of-buffer condition
+            // below cannot catch it either, because a miss consumes no tokens and so never
+            // advances EndIdx. The buffer therefore looks fully spanned while the command is
+            // still missing an argument, and committing fires it right before the words that
+            // would have filled the slot arrive.
+            //
+            // Required LITERALS are deliberately exempt: "launch all missiles hotel one"
+            // against ["launch", "{?quantity}", "{weapon}", "target", "{target}"] drops the
+            // "target" function word but still fills every slot, so the command is fully
+            // determined and must not be blocked from committing.
+            if (bestMissedRequiredSlot)
                 return EagerCommitVerdict.None;
 
             // The match must span the whole buffer from the first recognised token: anything
