@@ -45,8 +45,22 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 - Check that grammar mode is active (`freeSpeechMode = false`).
 - Lower `minScore` and `minConfidence` temporarily to see if matches are being filtered by thresholds.
 - Use `OnUnrecognisedSpeech` to log raw transcripts and compare against your patterns.
-- Open the [Command Debug Window](editor-testing.md) to see the full match breakdown: which patterns were tried, what score each received, and why they were accepted or rejected.
+- Open the [Command Debug Window](editor-testing.md) to see the match breakdown: for each command the parser extracted, the pattern that **won** selection, its score and confidence against the thresholds, and why it was accepted or rejected. Losing candidates are not shown -- a pattern's absence means it lost selection, not that it was never tried.
 - For a pattern across a whole playtest rather than one utterance, read the [session debug log](editor-testing.md#session-debug-log) written to `Library/VoxrDebugLogs/` when Play Mode ends -- it records every match attempt of the session, so repeated near-threshold rejections are easy to spot.
+- To interpret the numbers in either view -- what produced a given `score`, why that pattern won, which gate stopped it -- see [Matching and Scoring](scoring.md), whose [worked examples](scoring.md#7-worked-examples) trace three common outcomes end to end.
+
+### A command fires but a slot value is missing
+
+The utterance had the slot value in it, the command fired, and `GetSlot` returns `""`. This is almost always a **bare sibling pattern out-scoring the slot-filled one** after a required function word was dropped: the bare pattern still matches perfectly at `1.0`, so it wins, and the recognised slot value is discarded with nothing to signal it.
+
+- Mark the droppable literal optional (`"?by"` rather than `"by"`) -- the parser already warns about this at construction, naming the literal and the slot at risk.
+- Full explanation, both costs of the swap, and the score arithmetic: [Never leave a required function word between a bare pattern and its slot](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) and [worked example B](scoring.md#b-a-dropped-function-word-sinks-a-short-pattern).
+
+### A command scores ~0.50 and is rejected
+
+A score near `0.50` on a **three-element** pattern whose slots *did* extract is the signature of exactly one dropped required literal, not a garbled utterance -- a missed required literal costs a penalty *and* still occupies the denominator, which a short pattern cannot absorb. The same drop on a seven-element pattern scores `0.79` and passes.
+
+Lowering `minScore` is the wrong fix (it lets genuinely partial matches through everywhere else). Make the droppable word optional instead. See [Short patterns are disproportionately fragile](scoring.md#short-patterns-are-disproportionately-fragile).
 
 ### Commands match but with wrong slot values
 
@@ -59,7 +73,7 @@ This typically occurs when VOSK mishears a word due to phonetic similarity. For 
 
 ### Confidence shows -1.00
 
-A confidence value of `-1.00` means **"no word data available"**, not "zero confidence." This occurs when the matched span of the transcript contains only `[unk]` tokens or VOSK did not provide per-word confidence data. Commands with `-1` confidence bypass the `minConfidence` threshold and are accepted or rejected on pattern-match score alone.
+A confidence value of `-1.00` means **"no word data available"**, not "zero confidence." It occurs when VOSK provided no per-word confidence for the matched span -- most often because the utterance carried none at all (injected text), and occasionally because a buffered utterance matched on a segment that carried none. Commands with `-1` confidence bypass the `minConfidence` threshold and are accepted or rejected on pattern-match score alone. See [Matching and Scoring](scoring.md#minconfidence-default-04).
 
 If you display confidence in a debug UI, treat `-1.00` as "n/a" rather than as a numeric value.
 
@@ -98,6 +112,7 @@ In grammar mode, VOSK must produce an in-vocabulary word for any audio input -- 
 ## Further Resources
 
 - [Known Limitations](../KNOWN_LIMITATIONS.md) -- Full list of known constraints with repro steps, root causes, and workarounds
+- [Matching and Scoring](scoring.md) -- The model behind `score`, `aggregateConfidence`, and every `rejectReason`
 - [Push-to-Talk and Error Handling](push-to-talk.md) -- Error codes and the push-to-talk pattern
 - [Editor Testing](editor-testing.md) -- Debug tools for diagnosing issues
 - [Native Bridge](native-bridge.md) -- Building from source if you need to modify the native layer

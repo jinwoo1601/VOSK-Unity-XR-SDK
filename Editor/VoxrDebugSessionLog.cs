@@ -29,14 +29,29 @@ namespace VoXR.Editor
 
         const string Readme =
             "Auto-exported VoXR command recognition diagnostics for one Unity Play Mode session. "
-            + "Each entry is one utterance; each attempt within it is one command pattern evaluated "
-            + "against that utterance. An attempt fired when accepted=true, otherwise rejectReason "
-            + "says why it did not. score is compared against minScore and aggregateConfidence "
-            + "against minConfidence; a confidence of -1 means no per-word confidence data was "
-            + "available for that utterance, in which case the words array is empty too (as with "
-            + "injected text). Slot startWord/endWord are half-open [startWord, endWord) indices "
-            + "into the whitespace-split inputText, not into the words array; they stay valid "
-            + "even when words is empty.";
+            + "Each entry is one utterance. On the ordinary parse path each attempt within it is "
+            + "one extraction round, reporting the command pattern that won selection that round "
+            + "— losing candidates are not recorded, so a pattern's absence means it lost "
+            + "selection, not that it was never tried. Some pipeline events instead publish a "
+            + "single synthetic attempt with an empty pattern: rejectReason 'no match' (nothing "
+            + "was extracted; intent is empty and aggregateConfidence is 0, not -1), a "
+            + "confirm/cancel or follow-up slot-fill resolution of a pending command, and a "
+            + "pending timeout (whose inputText is the original command's transcript, not new "
+            + "speech). An attempt fired when accepted=true, otherwise rejectReason says why it "
+            + "did not. score is compared against minScore and aggregateConfidence against "
+            + "minConfidence. aggregateConfidence is the MINIMUM per-word confidence over the "
+            + "matched span, never an average; -1 means no per-word confidence was available for "
+            + "that span, which usually means the utterance carried no word data at all (as with "
+            + "injected text, where words is empty) but can also occur with words populated when "
+            + "the matched span came from a segment that carried none. Slot startWord/endWord "
+            + "are half-open [startWord, endWord) indices into the whitespace-split inputText, "
+            + "not into the words array; they stay valid even when words is empty. Note the "
+            + "numbers embedded in rejectReason text are formatted with the Editor's current "
+            + "culture, so the decimal separator may be ',' — match on the surrounding words, "
+            + "not the whole literal. The scoring model behind these numbers — the score "
+            + "formula, the skipped-word penalty, selection order, the two gates, and worked "
+            + "examples — is documented in Documentation~/scoring.md in the com.jinwoo1601.voxr "
+            + "package.";
 
         const string TestRunKey = "VoXR.DebugSessionLog.TestRunActive";
 

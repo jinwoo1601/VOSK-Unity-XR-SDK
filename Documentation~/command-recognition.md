@@ -127,6 +127,8 @@ The one limit: a pattern carrying more than six optional elements is compared un
 
 ## Scored Matching
 
+> This section is the working summary. For the full model — the per-element score table, the selection and tie-break order, the eager-flush verdict rules, and worked examples traced through to their session-log entries — see [Matching and Scoring](scoring.md).
+
 Every match produces a normalised **score** (0.0--1.0) that indicates how well the transcript covers the pattern. The parser uses a sliding start to tolerate preamble, hesitations, and false starts -- the score reflects the quality of the best-positioned match, discounted by how much of the utterance the start had to skip (see [Skipped-word penalty](#skipped-word-penalty)).
 
 Two independent thresholds control what gets through:
@@ -138,7 +140,7 @@ commandRecogniser.minConfidence = 0.4f;   // Reject low VOSK word confidence
 
 **Score** (`VoxrCommand.Score`) is computed by the parser based on how well the transcript satisfies the pattern, normalised against a *dynamic* denominator. Required tokens always count toward that denominator; optional tokens (`?word` literals and `{?slot}` slots) count only when they are actually spoken. An omitted optional therefore drops out of both sides of the ratio rather than diluting it, so a perfect match scores 1.0 whether or not its optional tokens were uttered — taking advantage of optionality is never penalized. A missed *required* token still pulls the score down.
 
-**Confidence** (`VoxrCommand.Confidence`) is the minimum per-word VOSK acoustic confidence across matched tokens. This reflects how certain VOSK was about the words it heard. A value of `-1` means no word-level data was available (e.g. the transcript contained only `[unk]` tokens), which bypasses the `minConfidence` check entirely -- the command is accepted or rejected on score alone.
+**Confidence** (`VoxrCommand.Confidence`) is the minimum per-word VOSK acoustic confidence across matched tokens. This reflects how certain VOSK was about the words it heard. A value of `-1` means no word-level data was available *for the matched span* (usually injected text, which carries none), which bypasses the `minConfidence` check entirely -- the command is accepted or rejected on score alone. See [the two gates](scoring.md#minconfidence-default-04) for the second, less obvious way `-1` arises and for how a repeated word resolves.
 
 ### Skipped-word penalty
 
@@ -422,7 +424,10 @@ Call `CancelPendingCommand()` to cancel the pending command from code (e.g. on a
 When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in two situations:
 
 1. **No pattern match** -- the parser could not match any command pattern against the transcript.
-2. **All matches rejected** -- patterns matched but every candidate was rejected by `minScore`, `minConfidence`, or `commandCooldown` debounce.
+2. **Every match fell under `minScore`** -- patterns matched, but no candidate scored high enough to fire.
+3. **A match was diverted to pending** -- a partial match or a `requiresConfirmation` command entered the pending state; `OnCommandPending` fires as well.
+
+It does **not** fire when a candidate was rejected by `minConfidence` or suppressed by `commandCooldown` debounce -- those two are dropped silently, on the reasoning that the user did say a valid command, just not confidently or not soon enough after the last one. See [the gates](scoring.md#what-onunrecognisedspeech-actually-means) for the full table.
 
 The `string` parameter is the full buffered transcript (after utterance merging), exactly as VOSK transcribed it.
 
@@ -463,7 +468,9 @@ commandRecogniser.OnUnrecognisedSpeech += text =>
 
 ### Relationship to other events
 
-`OnUnrecognisedSpeech` and `OnCommandRecognised`/`OnCommandsRecognised` are mutually exclusive per utterance. A given buffered transcript either produces commands (and fires the command events) or produces none (and fires `OnUnrecognisedSpeech`). It never fires both for the same transcript.
+`OnUnrecognisedSpeech` and `OnCommandRecognised`/`OnCommandsRecognised` are mutually exclusive per utterance: a transcript that produces at least one accepted command never also fires `OnUnrecognisedSpeech`.
+
+The converse does not hold. A transcript that produces *no* accepted command is silent when a candidate was filtered by `minConfidence` or debounce, so "no command fired" and "`OnUnrecognisedSpeech` fired" are not the same condition.
 
 ---
 
@@ -510,6 +517,7 @@ Use grammar mode (the default) for all command-driven features. Only enable free
 
 ## See Also
 
+- [Matching and Scoring](scoring.md) -- The score formula, penalties, selection order, gates, and eager-flush verdicts in full
 - [Command Sets](command-sets.md) -- Group commands into switchable named sets for mode-specific grammars
 - [Number Parser](api/number-parser.md) -- Convert a `NumberSequence` slot's spoken words into an integer
 - [Inspector Authoring](inspector-authoring.md) -- Define commands and slots with ScriptableObject assets instead of code
