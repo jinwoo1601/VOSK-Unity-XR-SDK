@@ -18,7 +18,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Grammar-constrained VOSK parsing for high-accuracy command match
 - Intent and slot extraction with scored matching (0.0--1.0 confidence)
 - Optional slots, multi-word slot values, slot value aliases
-- `NumberSequence` slot type for spoken digit commands (e.g. "heading two seven zero" -> 270)
+- `NumberSequence` slot type for spoken digit commands ("heading two seven zero" fills the slot with `"two seven zero"`; `VoxrNumberParser` converts it to `270`)
 - Named command sets with runtime switching for mode-specific grammars
 - Utterance buffer merges split speech across VOSK VAD boundaries
 - Sequential command extraction (multiple commands per utterance)

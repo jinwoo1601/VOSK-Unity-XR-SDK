@@ -47,8 +47,10 @@ A parsed command with intent and extracted slots.
 
 | Method | Description |
 |--------|-------------|
-| `GetSlot(string name)` | Returns the value of a named slot, or empty string if not matched. Logs a warning if the slot name was not registered. |
+| `GetSlot(string name)` | Returns the value of a named slot, or empty string if not matched. Logs a warning if the slot name was not registered. The value is always the words as spoken — for a `NumberSequence` slot that means `"two seven zero"`, not `"270"` (see below). |
 | `HasSlot(string name)` | Returns true if the named slot was matched in this command. |
+
+> **NumberSequence slots return spoken words, not digits.** `int.TryParse(cmd.GetSlot("heading"))` fails on every utterance and yields `0` without throwing. Convert with [`VoxrNumberParser`](number-parser.md) — `ParseDigitSequence` for digit-by-digit values, `ParseCardinal` for cardinal phrases. The canonical fallback snippet is in [Command Recognition → NumberSequence Slots](../command-recognition.md#numbersequence-slots).
 
 ## VoxrSlotMatch
 
@@ -59,7 +61,7 @@ A single slot extraction result.
 | Field | Type | Description |
 |-------|------|-------------|
 | `Name` | `string` | Slot name (e.g. `"weapon"`) |
-| `Value` | `string` | Matched value (e.g. `"missiles"`) |
+| `Value` | `string` | Matched value, as spoken (e.g. `"missiles"`). For a `NumberSequence` slot this is the number words (`"two seven zero"`), not a numeric string — convert with [`VoxrNumberParser`](number-parser.md). |
 
 ## VoxrCommandResult
 
@@ -89,4 +91,5 @@ Determines what happens when a pending command's timeout expires.
 - [VoxrSpeechRecogniser](speech-recogniser.md) -- produces `VoxrResult` via `OnResult`
 - [VoxrCommandRecogniser](command-recogniser.md) -- produces `VoxrCommand` via `OnCommandRecognised`
 - [Command Definitions](command-definitions.md) -- defining patterns and slots
+- [Number Parser](number-parser.md) -- converting `NumberSequence` slot values returned by `GetSlot`
 - [Command Recognition](../command-recognition.md) -- how matching works

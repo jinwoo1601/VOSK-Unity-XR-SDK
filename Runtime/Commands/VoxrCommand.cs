@@ -12,6 +12,11 @@ namespace VoXR.Commands
     {
         public readonly string Name;
 
+        /// <summary>
+        /// The matched value, exactly as spoken. For a <see cref="VoxrSlotType.NumberSequence"/>
+        /// slot this is the number words ("two seven zero"), never a numeric string ("270") --
+        /// convert with <see cref="VoxrNumberParser"/>.
+        /// </summary>
         public readonly string Value;
 
         public VoxrSlotMatch(string name, string value)
@@ -51,6 +56,19 @@ namespace VoXR.Commands
             _registeredSlotNames = registeredSlotNames;
         }
 
+        /// <summary>
+        /// Returns the value of a named slot, or an empty string if the slot was not matched.
+        /// </summary>
+        /// <remarks>
+        /// The value is the words as spoken. For a <see cref="VoxrSlotType.NumberSequence"/> slot
+        /// that means the number words -- "orient heading two seven zero" yields
+        /// <c>"two seven zero"</c>, not <c>"270"</c>, so <c>int.TryParse</c> on the result always
+        /// fails silently. Convert with <see cref="VoxrNumberParser.ParseDigitSequence"/> for
+        /// digit-by-digit utterances or <see cref="VoxrNumberParser.ParseCardinal"/> for cardinal
+        /// phrases ("two hundred"); both throw <see cref="FormatException"/> on words they do not
+        /// accept, so the canonical pattern is to try the digit path and fall back to the cardinal
+        /// one. See the Command Recognition guide, "NumberSequence Slots", for the full snippet.
+        /// </remarks>
         public string GetSlot(string name)
         {
             int idx = FindSlotIndex(name);
@@ -81,6 +99,10 @@ namespace VoXR.Commands
             return string.Empty;
         }
 
+        /// <summary>
+        /// Returns true if the named slot was matched in this command. Presence only -- see
+        /// <see cref="GetSlot"/> for the value and the shape it takes.
+        /// </summary>
         public bool HasSlot(string name) => FindSlotIndex(name) >= 0;
 
         int FindSlotIndex(string name)

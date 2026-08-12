@@ -63,9 +63,10 @@ var quantity = new VoxrSlotDefinition("quantity",
     new[] { "one", "two", "three", "all" },
     new Dictionary<string, string> { { "a", "one" } });
 
-// NumberSequence slot for digit words
+// NumberSequence slot for number words
 var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
-// Matches: "two seven zero" -> 270, "one eight" -> 18
+// Matches: "two seven zero" -> heading="two seven zero", "one eight" -> heading="one eight"
+// The slot value is the spoken words; convert to an int with VoxrNumberParser.
 ```
 
 ## VoxrSlotType
@@ -75,7 +76,7 @@ var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords
 | Value | Description |
 |-------|-------------|
 | `Enumerated` | Matches against a fixed set of allowed values and aliases |
-| `NumberSequence` | Greedily consumes consecutive digit-word tokens ("zero" through "nine") |
+| `NumberSequence` | Greedily consumes consecutive number-word tokens from `VoxrNumberParser.DigitVocabulary` (zero–nineteen, the tens, plus "hundred" and "thousand"). The matched value is those words as spoken, not a number — convert with [`VoxrNumberParser`](number-parser.md). |
 
 ## VoxrCommandSet
 

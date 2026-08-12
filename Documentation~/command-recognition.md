@@ -228,29 +228,52 @@ The two features are complementary. Use command sets for coarse mode switching a
 
 ## NumberSequence Slots
 
-Parse spoken digit words into concatenated integers for headings, frequencies, grid coordinates, and similar numeric commands:
+Capture spoken number words for headings, frequencies, grid coordinates, and similar numeric commands:
 
 ```csharp
 var heading = VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3);
 
-// "heading two seven zero" -> heading="270"
-// "heading one eight"      -> heading="18"
+// "heading two seven zero" -> heading="two seven zero"
+// "heading one eight"      -> heading="one eight"
 ```
 
 The parser greedily consumes consecutive number words within the configured `minWords`/`maxWords` range. The accepted set is the full `VoxrNumberParser.DigitVocabulary` — zero through nineteen, the tens (twenty, thirty, …, ninety), plus `hundred` and `thousand`. The full vocabulary is merged into the grammar JSON automatically.
 
-Use `VoxrNumberParser.ParseDigitSequence()` when you author commands as digit-by-digit utterances ("two seven zero" → `270`); use `VoxrNumberParser.ParseCardinal()` when you want the slot to read as a cardinal number ("two hundred" → `200`). `ParseDigitSequence` rejects anything outside `zero`–`nine`, so design your commands accordingly:
+> **The slot value is the spoken words, not a number.** `cmd.GetSlot("heading")` returns `"two seven zero"`, never `"270"`. `int.TryParse` on it fails on every utterance and returns `0` — silently, since `TryParse` does not throw — which reads as a command that simply never works. Convert the value yourself with [`VoxrNumberParser`](api/number-parser.md).
+
+### Converting the value
+
+`VoxrNumberParser.ParseDigitSequence()` handles digit-by-digit utterances ("two seven zero" → `270`) and rejects anything outside `zero`–`nine`. `VoxrNumberParser.ParseCardinal()` handles cardinal phrases ("two hundred" → `200`) and accepts the whole vocabulary. Both throw `FormatException` rather than returning a sentinel, so the canonical pattern is to try the digit path first and fall back to the cardinal one:
 
 ```csharp
+using System;
+using VoXR.Commands;
+
+// Returns false when the slot is absent or the words parse as neither form.
+static bool TryParseNumberSlot(VoxrCommand cmd, string slotName, out int value)
+{
+    value = 0;
+    string words = cmd.GetSlot(slotName);   // e.g. "two seven zero" — words, not digits
+    if (string.IsNullOrEmpty(words))
+        return false;
+
+    try { value = VoxrNumberParser.ParseDigitSequence(words); return true; }
+    catch (FormatException) { }             // contains "ten"+ or a cardinal — try the other path
+
+    try { value = VoxrNumberParser.ParseCardinal(words); return true; }
+    catch (FormatException) { return false; }
+}
+
 commandRecogniser.OnCommandRecognised += cmd =>
 {
-    if (cmd.Intent == "set_heading")
-    {
-        int heading = VoxrNumberParser.ParseDigitSequence(cmd.GetSlot("heading"));
+    if (cmd.Intent == "set_heading" && TryParseNumberSlot(cmd, "heading", out int heading))
         Debug.Log($"Heading: {heading}");
-    }
 };
 ```
+
+The order is load-bearing, because the two parsers read the same words differently: `"two seven zero"` is `270` on the digit path but `9` on the cardinal one, so trying the digit path first is what lets digit dictation win. And a phrase only the cardinal path accepts gets its reading whatever the speaker meant — `"two seventy"` throws on the digit path, then parses as `72`, not the `270` most speakers intend by it.
+
+So the fallback resolves *which parser* to use, not what the speaker meant. Pick one convention per slot: where a slot is always dictated digit-by-digit, call `ParseDigitSequence` alone and treat the `FormatException` as a misrecognition.
 
 ---
 
@@ -488,6 +511,7 @@ Use grammar mode (the default) for all command-driven features. Only enable free
 ## See Also
 
 - [Command Sets](command-sets.md) -- Group commands into switchable named sets for mode-specific grammars
+- [Number Parser](api/number-parser.md) -- Convert a `NumberSequence` slot's spoken words into an integer
 - [Inspector Authoring](inspector-authoring.md) -- Define commands and slots with ScriptableObject assets instead of code
 - [Editor Testing](editor-testing.md) -- Test commands with the debug window, session debug log, text injection, and batch runner
 - [Known Limitations](../KNOWN_LIMITATIONS.md) -- VOSK model quirks, homophones, and recognition edge cases
