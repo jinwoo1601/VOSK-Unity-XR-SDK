@@ -9,8 +9,8 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `speechRecogniser` | `VoxrSpeechRecogniser` | -- | Reference to the speech recogniser component |
-| `minConfidence` | `float` | `0.4` | Minimum per-word confidence to accept a command. Commands with confidence below this are rejected. `-1` (no data) bypasses this check. |
-| `minScore` | `float` | `0.6` | Minimum pattern match score (0.0--1.0) to accept a command |
+| `minConfidence` | `float` | `0.4` | Minimum per-word confidence to accept a command. This is the *minimum* over the matched span, not the average, so one weak word vetoes the command. Commands with confidence below this are rejected. `-1` (no data) bypasses this check. See [the two gates](../scoring.md#5-the-two-gates). |
+| `minScore` | `float` | `0.6` | Minimum pattern match score (0.0--1.0) to accept a command. See [the score formula](../scoring.md#1-the-score-formula) for what produces that number and [the two gates](../scoring.md#5-the-two-gates) for tuning it against `minConfidence`. |
 | `skippedWordPenalty` | `float` | `1.0` | How much each in-grammar word the sliding start skips before a match counts against the score. At `1.0` the score becomes the fraction of the utterance the pattern covers. `0` disables it. See [Skipped-word penalty](../command-recognition.md#skipped-word-penalty). |
 | `bufferWindow` | `float` | `0.5` | Seconds to buffer consecutive VOSK results before parsing. Merges speech split by mid-command pauses. `0.5` matches typical PC latency; raise it on Quest 3 (see [troubleshooting](../troubleshooting.md#commands-split-across-two-results)). |
 | `eagerFlushOnCompleteMatch` | `bool` | `false` | Fire a complete command immediately when the buffered speech can't be extended or completed by more words, instead of waiting out `bufferWindow`. Commands that are a prefix of a longer one, or whose trailing slot could still grow, keep waiting. See [Eager flush](../command-recognition.md#eager-flush-low-latency-complete-commands). |
@@ -64,6 +64,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 ## See Also
 
 - [Command Recognition](../command-recognition.md) -- patterns, slots, matching concepts, dynamic slot filtering, and pending commands
+- [Matching and Scoring](../scoring.md) -- the score formula, selection order, and what each threshold actually gates
 - [Command Sets](../command-sets.md) -- mode-specific grammar switching
 - [Inspector Authoring](../inspector-authoring.md) -- zero-code setup via ScriptableObjects
 - [Push-to-Talk](../push-to-talk.md) -- buffer flush on release

@@ -29,14 +29,18 @@ namespace VoXR.Editor
 
         const string Readme =
             "Auto-exported VoXR command recognition diagnostics for one Unity Play Mode session. "
-            + "Each entry is one utterance; each attempt within it is one command pattern evaluated "
-            + "against that utterance. An attempt fired when accepted=true, otherwise rejectReason "
+            + "Each entry is one utterance; each attempt within it is one extraction round, "
+            + "reporting the command pattern that won selection that round — losing candidates "
+            + "are not recorded. An attempt fired when accepted=true, otherwise rejectReason "
             + "says why it did not. score is compared against minScore and aggregateConfidence "
             + "against minConfidence; a confidence of -1 means no per-word confidence data was "
             + "available for that utterance, in which case the words array is empty too (as with "
             + "injected text). Slot startWord/endWord are half-open [startWord, endWord) indices "
             + "into the whitespace-split inputText, not into the words array; they stay valid "
-            + "even when words is empty.";
+            + "even when words is empty. The scoring model behind these numbers — the score "
+            + "formula, the skipped-word penalty, selection order, the two gates, and worked "
+            + "examples — is documented in Documentation~/scoring.md in the com.jinwoo1601.voxr "
+            + "package.";
 
         const string TestRunKey = "VoXR.DebugSessionLog.TestRunActive";
 

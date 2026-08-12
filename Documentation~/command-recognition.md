@@ -127,6 +127,8 @@ The one limit: a pattern carrying more than six optional elements is compared un
 
 ## Scored Matching
 
+> This section is the working summary. For the full model — the per-element score table, the selection and tie-break order, the eager-flush verdict rules, and worked examples traced through to their session-log entries — see [Matching and Scoring](scoring.md).
+
 Every match produces a normalised **score** (0.0--1.0) that indicates how well the transcript covers the pattern. The parser uses a sliding start to tolerate preamble, hesitations, and false starts -- the score reflects the quality of the best-positioned match, discounted by how much of the utterance the start had to skip (see [Skipped-word penalty](#skipped-word-penalty)).
 
 Two independent thresholds control what gets through:
@@ -510,6 +512,7 @@ Use grammar mode (the default) for all command-driven features. Only enable free
 
 ## See Also
 
+- [Matching and Scoring](scoring.md) -- The score formula, penalties, selection order, gates, and eager-flush verdicts in full
 - [Command Sets](command-sets.md) -- Group commands into switchable named sets for mode-specific grammars
 - [Number Parser](api/number-parser.md) -- Convert a `NumberSequence` slot's spoken words into an integer
 - [Inspector Authoring](inspector-authoring.md) -- Define commands and slots with ScriptableObject assets instead of code
