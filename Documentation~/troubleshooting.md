@@ -45,9 +45,9 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 - Check that grammar mode is active (`freeSpeechMode = false`).
 - Lower `minScore` and `minConfidence` temporarily to see if matches are being filtered by thresholds.
 - Use `OnUnrecognisedSpeech` to log raw transcripts and compare against your patterns.
-- Open the [Command Debug Window](editor-testing.md) to see the full match breakdown: which patterns were tried, what score each received, and why they were accepted or rejected.
+- Open the [Command Debug Window](editor-testing.md) to see the match breakdown: for each command the parser extracted, the pattern that **won** selection, its score and confidence against the thresholds, and why it was accepted or rejected. Losing candidates are not shown -- a pattern's absence means it lost selection, not that it was never tried.
 - For a pattern across a whole playtest rather than one utterance, read the [session debug log](editor-testing.md#session-debug-log) written to `Library/VoxrDebugLogs/` when Play Mode ends -- it records every match attempt of the session, so repeated near-threshold rejections are easy to spot.
-- To interpret the numbers in either view -- what produced a given `score`, why that pattern won, which gate stopped it -- see [Matching and Scoring](scoring.md), whose [worked examples](scoring.md#7-worked-examples) trace three common rejections end to end.
+- To interpret the numbers in either view -- what produced a given `score`, why that pattern won, which gate stopped it -- see [Matching and Scoring](scoring.md), whose [worked examples](scoring.md#7-worked-examples) trace three common outcomes end to end.
 
 ### A command fires but a slot value is missing
 
@@ -73,7 +73,7 @@ This typically occurs when VOSK mishears a word due to phonetic similarity. For 
 
 ### Confidence shows -1.00
 
-A confidence value of `-1.00` means **"no word data available"**, not "zero confidence." This occurs when the matched span of the transcript contains only `[unk]` tokens or VOSK did not provide per-word confidence data. Commands with `-1` confidence bypass the `minConfidence` threshold and are accepted or rejected on pattern-match score alone.
+A confidence value of `-1.00` means **"no word data available"**, not "zero confidence." It occurs when VOSK provided no per-word confidence for the matched span -- most often because the utterance carried none at all (injected text), and occasionally because a buffered utterance matched on a segment that carried none. Commands with `-1` confidence bypass the `minConfidence` threshold and are accepted or rejected on pattern-match score alone. See [Matching and Scoring](scoring.md#minconfidence-default-04).
 
 If you display confidence in a debug UI, treat `-1.00` as "n/a" rather than as a numeric value.
 

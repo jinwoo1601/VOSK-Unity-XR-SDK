@@ -19,7 +19,7 @@ Open **Window > VoXR > Command Debug** during Play Mode to inspect the full comm
 
 - **Active command sets** -- which sets are currently loaded in the parser.
 - **Pending command** -- when a command is in pending state, shows the intent, reason (partial match or awaiting confirmation), filled slots, unfilled slots, and elapsed time since entering pending state.
-- **Last match breakdown** -- for each command extracted from the utterance: intent, score, confidence, threshold pass/fail, and reject reason (if any). Accepted commands are highlighted in green.
+- **Last match breakdown** -- for each command extracted from the utterance, the pattern that won selection: intent, score, confidence, threshold pass/fail, and reject reason (if any). Losing candidates are not shown. Accepted commands are highlighted in green.
 - **Slot details** -- matched slot word positions (start/end indices) with per-slot confidence.
 - **Match history** -- scrolling list of the last 20 match results with timestamps.
 
@@ -59,7 +59,7 @@ The whole session, not just the window's 20-entry history. Each entry is one utt
 - `activeSets` -- the command sets active at that moment.
 - `inputText` -- the transcript that was parsed.
 - `words` -- each recognised word with its confidence and start/end times. Empty when no per-word data was available, as with injected text.
-- `attempts` -- one entry per extraction round: the pattern that **won** selection that round, with `intent`, `pattern`, `score` vs `minScore`, `aggregateConfidence` vs `minConfidence`, extracted `slots`, `accepted`, and `rejectReason` when it did not fire. Losing candidates are not recorded, so a pattern's absence means it lost selection, not that it was never tried. [Matching and Scoring](scoring.md#reading-a-session-log) maps each field to the rule that produced it.
+- `attempts` -- one entry per decision the recogniser logged. On the ordinary parse path that is one per extraction round: the pattern that **won** selection that round, with `intent`, `pattern`, `score` vs `minScore`, `aggregateConfidence` vs `minConfidence`, extracted `slots`, `accepted`, and `rejectReason` when it did not fire. Losing candidates are not recorded, so a pattern's absence means it lost selection, not that it was never tried. A handful of pipeline events (`no match`, confirm/cancel, follow-up slot-fill, pending timeout) publish a single synthetic attempt with an empty `pattern` instead. [Matching and Scoring](scoring.md#reading-a-session-log) maps each field to the rule that produced it and tabulates those events.
 
 Each slot carries `startWord` and `endWord` -- a half-open `[startWord, endWord)` range of **token indices into the whitespace-split `inputText`**, not into the `words` array. So a slot filled by a single token spans `[n, n+1)`, and the range stays meaningful even when `words` is empty.
 

@@ -15,7 +15,7 @@ Everything here describes `VoxrCommandParser`, which is deterministic: the same 
 | **Token** | One whitespace-separated word of the transcript. `[unk]` is VOSK's token for audio it could not resolve to a grammar word. |
 | **Element** | One entry of a pattern array: a required literal (`"target"`), an optional literal (`"?by"`), a required slot (`"{weapon}"`), or an optional slot (`"{?quantity}"`). |
 | **Candidate** | One (command, pattern, start token) triple that the parser scored. Every pattern of every active command is tried at every non-`[unk]` start position. |
-| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners appear in the session log. |
+| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners are logged as a scored attempt — losing candidates are recorded nowhere. |
 
 ---
 
@@ -143,15 +143,22 @@ Minimum, not average — this is the property that surprises people. One weak wo
 ```
 "orient heading two seven zero"
   orient  0.94
-  heading 0.88
-  two     0.39   <-- aggregateConfidence = 0.39
+  heading 0.39   <-- the minimum, so aggregateConfidence = 0.39
+  two     0.50
   seven   0.91
   zero    0.97
 ```
 
-That command scores a clean `1.00` and is still rejected at the default `0.4`.
+That command scores a clean `1.00` and is still rejected at the default `0.4` — and note the culprit is not the word you would suspect. "two" came in at its usual ≈0.50, comfortably above the gate; the veto came from a word nobody was watching.
 
-**`-1` means "no data", not "zero confidence".** When VOSK supplied no per-word data — injected text, or a span that is entirely `[unk]` — confidence is `-1` and the `minConfidence` check is **bypassed entirely**: the command is accepted or rejected on score alone. Treat `-1` as *n/a* in any debug UI.
+**Repeated words resolve by text, not by position.** The per-word table is built once per utterance, keyed by word *text*, keeping each distinct word's **first** occurrence. Every token in the span is then looked up by text. So if a word appears more than once in the utterance, every occurrence is scored at the first one's confidence — even when that first occurrence lies *outside* the matched span. Two consequences worth knowing:
+
+- A weak repeat inside the span can be masked by a strong earlier one ("orient heading two **two** zero" reports the first "two"'s confidence for both).
+- A weak word *before* the match can drag the reported confidence down, though it is not part of the command.
+
+This matters most for `NumberSequence` slots, which are the commands most likely to repeat a word.
+
+**`-1` means "no data", not "zero confidence".** It means no per-word confidence was available *for the matched span*. Usually that is because the utterance carried no word data at all — injected text, where the `words` array is empty too. It can also happen with `words` populated, when the matched span came from a segment that carried none: the utterance buffer appends text unconditionally but words only when a result supplies them, so a buffer merging a spoken result with an injected one can match on the half that has no word data. Either way the `minConfidence` check is **bypassed entirely** and the command is accepted or rejected on score alone. Treat `-1` as *n/a* in any debug UI — never as a low value.
 
 ### Tuning them jointly
 
@@ -171,7 +178,21 @@ A command that clears both gates can still not fire. In order:
 
 And below `minScore`, `allowPartialMatch` diverts to pending rather than rejecting: `entered pending (partial: unfilled [...])`.
 
-`OnUnrecognisedSpeech` fires only when nothing matched at all — not when a match was filtered by confidence or debounce.
+> The numbers inside a `rejectReason` are formatted with the **Editor's current culture**, so on a comma-decimal locale the field reads `score 0,50 < minScore 0,60`. If you grep a session log, match on the surrounding words rather than the whole literal. The numeric `score` / `aggregateConfidence` *fields* are unaffected — JSON numbers are written invariantly.
+
+### What `OnUnrecognisedSpeech` actually means
+
+It does **not** mean "nothing matched". It fires whenever an utterance produced no accepted command, *except* when some candidate was dropped by `minConfidence` or by debounce — those two are the only filters that suppress it:
+
+| Outcome | `OnUnrecognisedSpeech` |
+|---------|------------------------|
+| No pattern matched at all | fires |
+| Every candidate fell under `minScore` | **fires** |
+| A candidate was diverted to pending (partial match or `requiresConfirmation`) | **fires**, alongside `OnCommandPending` |
+| A candidate was rejected by `minConfidence` | silent |
+| A candidate was suppressed by debounce | silent |
+
+So the event is not a reliable "I heard nothing" signal: the score-rejection rows of §7 raise it too. If you show the player feedback on it, expect it after a half-heard command as well as after noise.
 
 ---
 
@@ -269,10 +290,10 @@ If instead the intent has *only* the slot-filled pattern, there is no bare sibli
 
 Grammar: `set_heading` = `["orient", "heading", "{heading}"]`, `heading` a 3-word `NumberSequence`.
 
-Utterance: **"orient heading two seven zero"**, with per-word confidences `0.94 / 0.88 / 0.39 / 0.91 / 0.97`.
+Utterance: **"orient heading two seven zero"**, with per-word confidences `0.94 / 0.39 / 0.50 / 0.91 / 0.97`.
 
 1. **Score.** Every element matches: `3 / 3` = `1.00`. Nothing skipped.
-2. **Confidence.** The minimum over the matched span — `0.39`, from "two".
+2. **Confidence.** The minimum over the matched span — `0.39`, from the literal "heading".
 3. **Gates.** Score passes. `0.39 < 0.40` fails.
 
 ```json
@@ -281,16 +302,29 @@ Utterance: **"orient heading two seven zero"**, with per-word confidences `0.94 
   "aggregateConfidence": 0.39, "minConfidence": 0.4,
   "accepted": false, "rejectReason": "confidence 0.39 < minConfidence 0.40",
   "slots": [ { "name": "heading", "value": "two seven zero",
-               "startWord": 2, "endWord": 5, "confidence": 0.39 } ] }
+               "startWord": 2, "endWord": 5, "confidence": 0.5 } ] }
 ```
 
-**Reading that entry:** a perfect score with a sub-threshold confidence is never a pattern problem. Check the `words` array for the culprit — here "two", whose ≈0.50 ceiling on the small English model is a [known limitation](../KNOWN_LIMITATIONS.md). This is the case `minConfidence` was tuned to `0.4` for; lowering it further trades against noise-triggered false matches.
+Note the slot's own `confidence` (`0.5`, the minimum over tokens 2–4) is *higher* than the attempt's `aggregateConfidence` (`0.39`, the minimum over the whole matched span 0–4). Per-slot confidences are computed over each slot's span alone, so comparing the two localises the weak word immediately: the slots are clean, therefore the culprit is a literal.
+
+**Reading that entry:** a perfect score with a sub-threshold confidence is never a pattern problem. Check the `words` array for the culprit, and do not assume it is the obvious candidate — the digits are fine here, and "two" is sitting at the ≈0.50 ceiling that is a [known limitation](../KNOWN_LIMITATIONS.md) but still clears the gate. It is the ordinary literal "heading" that vetoed the command, because the gate takes the *minimum*.
+
+That ≈0.50 floor on "two" is also why `minConfidence` defaults to `0.4` rather than higher: at `0.5` every `NumberSequence` command containing "two" would be rejected outright. Lowering it below `0.4` trades against noise-triggered false matches.
 
 ---
 
 ## Reading a session log
 
-Each log entry is one **utterance**. Its `attempts` array holds one entry per *extraction round* — the winner of that round, accepted or rejected. Losing candidates are never logged, so a pattern's absence means it lost selection, not that it was never tried.
+Each log entry is one **utterance**. Its `attempts` array holds one entry per *decision the recogniser logged* for that utterance. On the ordinary parse path that is one entry per extraction round — the winner of that round, accepted or rejected. Losing candidates are never logged, so a pattern's absence means it lost selection, not that it was never tried.
+
+Four paths short-circuit before the parse and publish a **single synthetic attempt** instead. All of them leave `pattern` empty, so an empty `pattern` is how you tell them apart:
+
+| `rejectReason` | What happened |
+|----------------|---------------|
+| `no match` | The parser extracted nothing. `intent` is empty too, and `aggregateConfidence` is `0` — *not* the `-1` sentinel, which only ever comes from a real matched span. |
+| `cancelled via vocabulary` | Follow-up speech cancelled a pending command. The confirm case is the same entry with `accepted: true` and an empty `rejectReason`. |
+| *(empty, `accepted: true`)* | Follow-up speech filled a pending command's missing slot. |
+| `timeout — cancelled` | A pending command timed out and was discarded. `inputText` is the *original* command's transcript, and `words` is empty — this entry is not an utterance at all. Under `FireAsIs` the same entry carries `accepted: true` and an empty `rejectReason`. |
 
 | Field | What it is | Section |
 |-------|-----------|---------|
@@ -300,10 +334,10 @@ Each log entry is one **utterance**. Its `attempts` array holds one entry per *e
 | `attempts[].score` | Final score, **after** the skipped-word penalty | §1, §2 |
 | `attempts[].minScore` | The gate it was compared against | §5 |
 | `attempts[].aggregateConfidence` | Minimum per-word confidence over the matched span; `-1` = no data | §5 |
-| `attempts[].rejectReason` | Empty when accepted; otherwise which filter stopped it | §5 |
+| `attempts[].rejectReason` | Empty when accepted; otherwise what stopped it — a gate, a post-gate filter, or one of the pipeline events below | §5 |
 | `attempts[].slots[].startWord/endWord` | Half-open token range into the whitespace-split `inputText` | — |
 
-Three diagnoses cover most rejections:
+Three diagnoses cover most of what sends you to the log — two rejections and one command that fired but did the wrong thing:
 
 | Symptom | Diagnosis |
 |---------|-----------|
