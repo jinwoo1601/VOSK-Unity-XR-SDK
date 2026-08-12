@@ -7,6 +7,7 @@
 #if UNITY_EDITOR_WIN
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEngine;
@@ -169,6 +170,40 @@ namespace VoXR.Tests.Runtime
                 _second.IsInitialised,
                 "A destroyed owner must release its claim so the next recogniser can "
                     + $"initialise. Errors: [{string.Join("; ", _secondErrors)}]"
+            );
+        }
+
+        [UnityTest]
+        public IEnumerator FailedInitialise_ReleasesClaimForNextRecogniser()
+        {
+            _owner.ReleaseNativeResources();
+            _ownerErrors.Clear();
+
+            // A leaf name the model cache has never seen. ExtractModelAsync keys its
+            // cache on Path.GetFileName, so a bogus path that kept the real leaf name
+            // would succeed off the existing extraction instead of failing.
+            typeof(VoxrSpeechRecogniser)
+                .GetField("modelRelativePath", BindingFlags.Instance | BindingFlags.NonPublic)
+                .SetValue(_second, "voxr-no-such-model-issue57");
+
+            var failed = _second.InitialiseAsync();
+            while (!failed.IsCompleted)
+                yield return null;
+
+            Assert.IsFalse(_second.IsInitialised, "A failed initialise must not report success.");
+            Assert.IsNotEmpty(_secondErrors, "A failed initialise must surface an error.");
+
+            // The decisive assertion: the claim is taken before the awaits, so if the
+            // finally did not release it on failure it would be stranded on a
+            // component holding nothing — bricking the bridge for the whole process.
+            var recovered = _owner.InitialiseAsync();
+            while (!recovered.IsCompleted)
+                yield return null;
+
+            Assert.IsTrue(
+                _owner.IsInitialised,
+                "A failed initialise must not hold the bridge claim hostage. "
+                    + $"Errors: [{string.Join("; ", _ownerErrors)}]"
             );
         }
 

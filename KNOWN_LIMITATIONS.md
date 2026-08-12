@@ -260,8 +260,14 @@ deliberate trade-offs rather than oversights.
 - **Workaround**: Keep one recogniser for the lifetime of the process — a
   persistent GameObject (`DontDestroyOnLoad`) that per-scene code holds a reference
   to, rather than one recogniser per scene. Where a handover is genuinely needed,
-  destroy or `ReleaseNativeResources()` the outgoing recogniser first; the claim is
-  released at that point and the incoming one initialises normally.
+  call `ReleaseNativeResources()` on the outgoing recogniser first: that frees the
+  claim **synchronously**, so the incoming one initialises in the same frame.
+  Destroying it also frees the claim, but only via `OnDestroy` — which Unity defers
+  to the end of the frame, so `Destroy(outgoing); incoming.Initialise();` in one
+  frame is rejected with an error, as is an `UnloadSceneAsync` that overlaps the
+  incoming scene's `Start()`. Under the default push-to-talk wiring the next press
+  retries and succeeds (losing only the pre-warm); in `Continuous` listening mode
+  nothing retries, so the explicit `ReleaseNativeResources()` handover matters there.
 - **Note**: Refcounting the bridge, or giving the ABI a per-instance handle so two
   recognisers could genuinely coexist, remain open as native-side work. What ships
   today makes the constraint explicit and loud instead of silently corrupting state.

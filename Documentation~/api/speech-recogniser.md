@@ -21,9 +21,17 @@ in the scene, but until the owner lets go it is **inert** towards the bridge:
 - `StopRecognition()` and `ReleaseNativeResources()` are quiet no-ops, so its `OnDestroy`
   cannot free the owner's recognizer.
 
-A single recogniser is unaffected — this only engages once a second one exists. In an
-additive-scene setup, destroy or `ReleaseNativeResources()` the outgoing recogniser before
-initialising the incoming one.
+A single recogniser is unaffected — this only engages once a second one exists.
+
+**Handing the bridge over:** call `ReleaseNativeResources()` on the outgoing recogniser
+before initialising the incoming one. That frees the claim **synchronously**, so the
+incoming recogniser can initialise in the same frame. `Object.Destroy()` also frees it —
+via `OnDestroy` — but Unity defers destruction to the end of the frame, so a
+`Destroy(outgoing); incoming.Initialise();` pair in one frame is rejected. The same applies
+to `UnloadSceneAsync`, which completes over several frames while an incoming scene's
+`Start()` may already be calling `Initialise()`. Under the default push-to-talk wiring the
+next press retries and succeeds, at the cost of the pre-warm; in `Continuous` listening
+mode there is no such retry, so prefer the explicit `ReleaseNativeResources()` handover.
 
 ## Inspector Fields
 

@@ -88,9 +88,14 @@ namespace VoXR
         {
             get
             {
-                // Another component owning the bridge means this one initialised
-                // nothing, whatever the process-global bridge reports (#57).
-                if (BridgeOwnedByOther)
+                // Instance-backed, which is what issue #57 asked for: the native
+                // getter answers for the *process*, so without this a component
+                // that initialised nothing still reported true — and then
+                // InitialiseAsync's `if (IsInitialised) return;` handed it the
+                // owner's configuration. Keyed on ownership rather than on
+                // "someone else owns it" so the answer stays honest even when the
+                // bridge is initialised with no live claimant.
+                if (!OwnsBridge)
                     return false;
 #if UNITY_EDITOR_WIN
                 return _editorBackend != null && _editorBackend.IsInitialised;
@@ -124,8 +129,8 @@ namespace VoXR
             get
             {
                 // vosk_bridge_is_running() reports the process, not this
-                // instance; a non-owner is never the one running (#57).
-                if (BridgeOwnedByOther)
+                // instance; only the owner can be the one running (#57).
+                if (!OwnsBridge)
                     return false;
 #if UNITY_EDITOR_WIN
                 return _editorBackend != null && _editorBackend.IsRunning;
@@ -179,6 +184,15 @@ namespace VoXR
                 if (modelPath == null)
                     return;
 
+                // The claim was taken before the await above, and an async
+                // continuation outlives the component that started it — a destroy
+                // or an explicit ReleaseNativeResources during model extraction
+                // hands the claim away while this method is still in flight.
+                // Initialising anyway would leave the bridge initialised with no
+                // owner, the one state in which every guard here is inert (#57).
+                if (!OwnsBridge)
+                    return;
+
 #if UNITY_EDITOR_WIN
                 _editorBackend = new EditorMicBackend();
                 bool editorOk = await _editorBackend.InitialiseAsync(
@@ -187,7 +201,8 @@ namespace VoXR
                     micGainTargetDb,
                     FireError
                 );
-                if (editorOk)
+                // Re-checked again: the backend's own load awaits too.
+                if (editorOk && OwnsBridge)
                 {
                     claimHeld = true;
                     IsModelReady = true;
@@ -195,6 +210,11 @@ namespace VoXR
                 }
                 else
                 {
+                    // A backend that came up after the claim was handed away owns
+                    // a vosk model, a recognizer and a mic handle that only
+                    // Release() frees, and nothing else will ever reach it.
+                    if (editorOk)
+                        _editorBackend?.Release();
                     _editorBackend = null;
                 }
                 return;
@@ -232,23 +252,18 @@ namespace VoXR
 
         public void ReleaseNativeResources()
         {
-            // Never tear down a bridge this component does not own: the ABI has no
-            // handle, so vosk_bridge_destroy() would free the owner's recognizer
-            // and model out from under it — including from this component's own
-            // OnDestroy, which is the cross-instance teardown of #57. Clearing the
-            // instance flags is still correct; there is nothing else of ours held.
-            if (BridgeOwnedByOther)
-            {
-                _isRecognising = false;
-                IsModelReady = false;
-                return;
-            }
-
 #if UNITY_EDITOR_WIN
+            // Instance-owned, so it is released whether or not this component owns
+            // the claim: skipping it for a non-owner would strand the vosk model,
+            // recognizer and mic handle that only Release() frees.
             _editorBackend?.Release();
             _editorBackend = null;
 #else
-            if (_bridgeAvailable)
+            // The process-global half is the opposite: vosk_bridge_destroy() takes
+            // no handle, so calling it while another component owns the bridge
+            // frees *its* recognizer and model — the cross-instance teardown of
+            // #57, reached from this component's own OnDestroy.
+            if (_bridgeAvailable && !BridgeOwnedByOther)
             {
                 try
                 {
@@ -262,9 +277,8 @@ namespace VoXR
 #endif
             _isRecognising = false;
             IsModelReady = false;
-            // Reaching here means no live component other than this one holds the
-            // claim, so the bridge is free for the next component to initialise.
-            s_bridgeOwner = null;
+            if (OwnsBridge)
+                s_bridgeOwner = null;
         }
 
         public void StartRecognition() => StartRecognitionCore();
@@ -620,7 +634,9 @@ namespace VoXR
                 + "one active recogniser per process — the bridge is file-scope native "
                 + "state with no per-instance handle, so a second instance would inherit "
                 + "the first's model path, sample rate and gain, and free its recognizer "
-                + "on destroy. Release or destroy the existing recogniser first.";
+                + "on destroy. Call ReleaseNativeResources() on the existing recogniser "
+                + "first — that frees the claim synchronously, whereas Object.Destroy "
+                + "only frees it at the end of the frame.";
             Debug.LogError(message, this);
             FireError(VoxrBridgeErrorCode.AlreadyInitialised, message);
             return true;
