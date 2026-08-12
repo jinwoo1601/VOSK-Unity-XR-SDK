@@ -41,6 +41,25 @@ namespace VoXR
         public event Action<VoxrBridgeErrorCode, string> OnError;
         public event Action OnModelReady;
 
+        // Process-global bridge ownership (issue #57). The native bridge is
+        // file-scope C++ state with no handle anywhere in its ABI
+        // (NativeBridge~/src/vosk_bridge.cpp), so a process has exactly one
+        // bridge however many components reference it. Ownership is claimed by
+        // whichever component initialises it and released when that component
+        // releases or is destroyed; any other instance stays inert towards the
+        // bridge instead of silently sharing it — which used to mean inheriting
+        // the owner's model path, sample rate and gain, and freeing the owner's
+        // recognizer from its own OnDestroy.
+        static VoxrSpeechRecogniser s_bridgeOwner;
+
+        bool OwnsBridge => ReferenceEquals(s_bridgeOwner, this);
+
+        // Unity's == null overload is deliberate: a destroyed owner compares
+        // equal to null here, so its claim lapses even if its OnDestroy never
+        // ran (a subclass can hide the base's private OnDestroy) and even when
+        // the static survives a play-mode exit with domain reload disabled.
+        bool BridgeOwnedByOther => s_bridgeOwner != null && !OwnsBridge;
+
         bool _bridgeAvailable = true;
         bool _initialising;
         bool _isRecognising;
@@ -69,6 +88,10 @@ namespace VoXR
         {
             get
             {
+                // Another component owning the bridge means this one initialised
+                // nothing, whatever the process-global bridge reports (#57).
+                if (BridgeOwnedByOther)
+                    return false;
 #if UNITY_EDITOR_WIN
                 return _editorBackend != null && _editorBackend.IsInitialised;
 #else
@@ -100,6 +123,10 @@ namespace VoXR
         {
             get
             {
+                // vosk_bridge_is_running() reports the process, not this
+                // instance; a non-owner is never the one running (#57).
+                if (BridgeOwnedByOther)
+                    return false;
 #if UNITY_EDITOR_WIN
                 return _editorBackend != null && _editorBackend.IsRunning;
 #else
@@ -131,6 +158,16 @@ namespace VoXR
                 return;
             if (IsInitialised)
                 return;
+            if (RejectIfBridgeOwnedByOther(nameof(InitialiseAsync)))
+                return;
+
+            // Claim synchronously, before the first await. Unity runs this on the
+            // main thread, so a check-and-set with no await between the two halves
+            // cannot interleave with a second component's InitialiseAsync —
+            // claiming after the model-extraction await would let both instances
+            // past the check above (#57).
+            s_bridgeOwner = this;
+            bool claimHeld = false;
 
             _initialising = true;
             try
@@ -152,6 +189,7 @@ namespace VoXR
                 );
                 if (editorOk)
                 {
+                    claimHeld = true;
                     IsModelReady = true;
                     OnModelReady?.Invoke();
                 }
@@ -166,6 +204,7 @@ namespace VoXR
 
                 if (result == 0)
                 {
+                    claimHeld = true;
                     IsModelReady = true;
                     OnModelReady?.Invoke();
                 }
@@ -182,11 +221,29 @@ namespace VoXR
             finally
             {
                 _initialising = false;
+                // A failed attempt must not hold the bridge hostage — release the
+                // claim so a sibling component can still initialise. Guarded on
+                // OwnsBridge because ReleaseNativeResources may have run during
+                // one of the awaits above and already cleared it (#57).
+                if (!claimHeld && OwnsBridge)
+                    s_bridgeOwner = null;
             }
         }
 
         public void ReleaseNativeResources()
         {
+            // Never tear down a bridge this component does not own: the ABI has no
+            // handle, so vosk_bridge_destroy() would free the owner's recognizer
+            // and model out from under it — including from this component's own
+            // OnDestroy, which is the cross-instance teardown of #57. Clearing the
+            // instance flags is still correct; there is nothing else of ours held.
+            if (BridgeOwnedByOther)
+            {
+                _isRecognising = false;
+                IsModelReady = false;
+                return;
+            }
+
 #if UNITY_EDITOR_WIN
             _editorBackend?.Release();
             _editorBackend = null;
@@ -205,6 +262,9 @@ namespace VoXR
 #endif
             _isRecognising = false;
             IsModelReady = false;
+            // Reaching here means no live component other than this one holds the
+            // claim, so the bridge is free for the next component to initialise.
+            s_bridgeOwner = null;
         }
 
         public void StartRecognition() => StartRecognitionCore();
@@ -298,6 +358,12 @@ namespace VoXR
         internal virtual void StopRecognitionCore()
         {
             _isRecognising = false;
+            // Quiet no-op for a non-owner: vosk_bridge_stop() would halt the
+            // owner's recognition. The loud report already happened when this
+            // component tried to initialise (#57), and stop is called often
+            // enough (every push-to-talk release) that repeating it would spam.
+            if (BridgeOwnedByOther)
+                return;
 #if UNITY_EDITOR_WIN
             if (_editorBackend != null)
             {
@@ -335,6 +401,8 @@ namespace VoXR
 
         public void ResetRecogniser()
         {
+            if (RejectIfBridgeOwnedByOther(nameof(ResetRecogniser)))
+                return;
 #if UNITY_EDITOR_WIN
             _editorBackend?.Reset();
 #else
@@ -354,6 +422,8 @@ namespace VoXR
 
         public void SetGrammar(string grammarJson)
         {
+            if (RejectIfBridgeOwnedByOther(nameof(SetGrammar)))
+                return;
 #if UNITY_EDITOR_WIN
             _editorBackend?.SetGrammar(grammarJson, FireError);
 #else
@@ -533,6 +603,27 @@ namespace VoXR
                 ? $"{context}: {code.ToDescription()}"
                 : $"{context}: {detail}";
             FireError(code, message);
+        }
+
+        // Reports true — and fails loudly — when another live component owns the
+        // process-global bridge, so this one must not drive it (#57). Debug.LogError
+        // as well as OnError because the silent-sharing this replaces was invisible
+        // to a developer who had not subscribed to OnError.
+        bool RejectIfBridgeOwnedByOther(string context)
+        {
+            if (!BridgeOwnedByOther)
+                return false;
+
+            string message =
+                $"{context}: another VoxrSpeechRecogniser (on GameObject "
+                + $"'{s_bridgeOwner.name}') already owns the native bridge. VoXR supports "
+                + "one active recogniser per process — the bridge is file-scope native "
+                + "state with no per-instance handle, so a second instance would inherit "
+                + "the first's model path, sample rate and gain, and free its recognizer "
+                + "on destroy. Release or destroy the existing recogniser first.";
+            Debug.LogError(message, this);
+            FireError(VoxrBridgeErrorCode.AlreadyInitialised, message);
+            return true;
         }
 
         void MarkBridgeUnavailable()

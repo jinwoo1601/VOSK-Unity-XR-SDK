@@ -240,6 +240,32 @@ model you use.
 Limitations that come from how the SDK is structured. Most of these are
 deliberate trade-offs rather than oversights.
 
+### Only one `VoxrSpeechRecogniser` can be initialised per process
+
+- **Repro**: Put two `VoxrSpeechRecogniser` components in a scene (two GameObjects,
+  or two additively-loaded scenes each carrying one) and call `InitialiseAsync()`
+  on both. The second logs an error, reports `IsInitialised == false`, and never
+  loads its own model.
+- **Root cause**: The native bridge is file-scope C++ state — `g_model`,
+  `g_recognizer`, `g_initialised` in `NativeBridge~/src/vosk_bridge.cpp` — and its
+  C ABI carries no handle, so there is exactly one bridge per process. Nothing on
+  the managed side can make two components genuinely independent without changing
+  that ABI.
+- **What this used to do**: Before the enforcement landed (#57) the sharing was
+  silent. The second component's `InitialiseAsync()` early-returned on the *first*
+  one's `IsInitialised` and quietly discarded its own model path, sample rate, and
+  AGC target; then either component's `OnDestroy` called the unconditional
+  `vosk_bridge_destroy()` and freed the survivor's recognizer and model, which on
+  ordinary additive scene unload left the survivor calling into freed memory.
+- **Workaround**: Keep one recogniser for the lifetime of the process — a
+  persistent GameObject (`DontDestroyOnLoad`) that per-scene code holds a reference
+  to, rather than one recogniser per scene. Where a handover is genuinely needed,
+  destroy or `ReleaseNativeResources()` the outgoing recogniser first; the claim is
+  released at that point and the incoming one initialises normally.
+- **Note**: Refcounting the bridge, or giving the ABI a per-instance handle so two
+  recognisers could genuinely coexist, remain open as native-side work. What ships
+  today makes the constraint explicit and loud instead of silently corrupting state.
+
 ### Active set switching has a brief audio gap
 
 - **Repro**: Trigger a `SetActiveSets()` call (e.g. via a `mode_*` command),
