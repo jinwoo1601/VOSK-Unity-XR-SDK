@@ -219,9 +219,11 @@ public class CommandDemo : MonoBehaviour
     }
 
     // Try the digit-by-digit reading first ("two seven zero" -> 270), then the cardinal
-    // one ("two hundred" -> 200). Both parsers throw rather than return a sentinel, so the
-    // fallback is expressed with try/catch. Returns false when the slot is absent or the
-    // words parse as neither form.
+    // one ("two hundred" -> 200). Both parsers throw on words they do not accept rather
+    // than returning a sentinel, so the fallback is expressed with try/catch. The empty
+    // check is separate and load-bearing: an unmatched slot yields "", which both parsers
+    // map to 0 instead of throwing. Returns false when the slot is absent or the words
+    // parse as neither form.
     static bool TryParseNumberSlot(VoxrCommand cmd, string slotName, out int value)
     {
         value = 0;

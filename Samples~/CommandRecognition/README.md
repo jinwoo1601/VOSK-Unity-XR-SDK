@@ -109,3 +109,4 @@ All injection methods are main-thread only.
 - [Command Sets](../../Documentation~/command-sets.md) -- named sets, runtime mode switching
 - [Editor Testing](../../Documentation~/editor-testing.md) -- debug window, live mic, text injection, batch runner
 - [CommandRecogniser API](../../Documentation~/api/command-recogniser.md) -- full event and method reference
+- [Number Parser](../../Documentation~/api/number-parser.md) -- converting a `NumberSequence` slot's spoken words into an integer

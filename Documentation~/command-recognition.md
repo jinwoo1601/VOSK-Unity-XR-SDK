@@ -243,7 +243,7 @@ The parser greedily consumes consecutive number words within the configured `min
 
 ### Converting the value
 
-`VoxrNumberParser.ParseDigitSequence()` handles digit-by-digit utterances ("two seven zero" → `270`) and rejects anything outside `zero`–`nine`. `VoxrNumberParser.ParseCardinal()` handles cardinal phrases ("two hundred" → `200`) and accepts the whole vocabulary. Both throw `FormatException` rather than returning a sentinel, so the canonical pattern is to try the digit path first and fall back to the cardinal one:
+`VoxrNumberParser.ParseDigitSequence()` handles digit-by-digit utterances ("two seven zero" → `270`) and rejects anything outside `zero`–`nine`. `VoxrNumberParser.ParseCardinal()` handles cardinal phrases ("two hundred" → `200`) and accepts the whole vocabulary. Both throw `FormatException` on words they do not accept, rather than returning a sentinel you could branch on, so the canonical pattern is to try the digit path first and fall back to the cardinal one. Guard for the empty string separately: an unmatched slot makes `GetSlot` return `""`, and both parsers map that to `0` rather than throwing — without the guard an absent slot silently becomes heading zero.
 
 ```csharp
 using System;

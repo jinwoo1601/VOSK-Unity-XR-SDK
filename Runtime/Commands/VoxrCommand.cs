@@ -13,9 +13,11 @@ namespace VoXR.Commands
         public readonly string Name;
 
         /// <summary>
-        /// The matched value, exactly as spoken. For a <see cref="VoxrSlotType.NumberSequence"/>
-        /// slot this is the number words ("two seven zero"), never a numeric string ("270") --
-        /// convert with <see cref="VoxrNumberParser"/>.
+        /// The matched value. For a <see cref="VoxrSlotType.NumberSequence"/> slot this is the
+        /// number words as spoken ("two seven zero"), never a numeric string ("270") -- convert
+        /// with <see cref="VoxrNumberParser"/>. For an <see cref="VoxrSlotType.Enumerated"/> slot
+        /// it is the canonical value, so a spoken alias arrives already resolved ("jackals"
+        /// yields "jackal").
         /// </summary>
         public readonly string Value;
 
@@ -60,14 +62,17 @@ namespace VoXR.Commands
         /// Returns the value of a named slot, or an empty string if the slot was not matched.
         /// </summary>
         /// <remarks>
-        /// The value is the words as spoken. For a <see cref="VoxrSlotType.NumberSequence"/> slot
-        /// that means the number words -- "orient heading two seven zero" yields
-        /// <c>"two seven zero"</c>, not <c>"270"</c>, so <c>int.TryParse</c> on the result always
-        /// fails silently. Convert with <see cref="VoxrNumberParser.ParseDigitSequence"/> for
-        /// digit-by-digit utterances or <see cref="VoxrNumberParser.ParseCardinal"/> for cardinal
-        /// phrases ("two hundred"); both throw <see cref="FormatException"/> on words they do not
-        /// accept, so the canonical pattern is to try the digit path and fall back to the cardinal
-        /// one. See the Command Recognition guide, "NumberSequence Slots", for the full snippet.
+        /// The value's shape depends on the slot type. For a
+        /// <see cref="VoxrSlotType.NumberSequence"/> slot it is the number words as spoken --
+        /// "orient heading two seven zero" yields <c>"two seven zero"</c>, not <c>"270"</c>, so
+        /// <c>int.TryParse</c> on the result always fails silently. Convert with
+        /// <see cref="VoxrNumberParser.ParseDigitSequence"/> for digit-by-digit utterances or
+        /// <see cref="VoxrNumberParser.ParseCardinal"/> for cardinal phrases ("two hundred"); both
+        /// throw <see cref="FormatException"/> on words they do not accept (null or empty returns
+        /// <c>0</c>), so the canonical pattern is to try the digit path and fall back to the
+        /// cardinal one. See the Command Recognition guide, "NumberSequence Slots", for the full
+        /// snippet. For an <see cref="VoxrSlotType.Enumerated"/> slot the value is the canonical
+        /// value, with any spoken alias already resolved.
         /// </remarks>
         public string GetSlot(string name)
         {

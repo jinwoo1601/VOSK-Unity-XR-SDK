@@ -46,11 +46,11 @@ Declares a named slot with allowed values or number-sequence behaviour.
 | Field | Type | Description |
 |-------|------|-------------|
 | `Name` | `string` | Slot name referenced in patterns as `{name}` or `{?name}` |
-| `Type` | `VoxrSlotType` | `Enumerated` (fixed values) or `NumberSequence` (digit words) |
+| `Type` | `VoxrSlotType` | `Enumerated` (fixed values) or `NumberSequence` (number words) |
 | `Values` | `string[]` | Allowed values (Enumerated only) |
 | `Aliases` | `Dictionary<string, string>` | Maps variant words to canonical values |
-| `MinWords` | `int` | Minimum digit words to consume (NumberSequence only) |
-| `MaxWords` | `int` | Maximum digit words to consume (NumberSequence only) |
+| `MinWords` | `int` | Minimum number words to consume (NumberSequence only). Counts words from `DigitVocabulary`, not digits — `"seventeen"` is one word. |
+| `MaxWords` | `int` | Maximum number words to consume (NumberSequence only). Counts words from `DigitVocabulary`, not digits — `"seventeen"` is one word. |
 
 ### Factory Methods
 
