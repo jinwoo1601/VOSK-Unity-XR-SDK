@@ -1372,6 +1372,7 @@ namespace VoXR.Tests.Runtime
                 parser,
                 "the shape is a warning, not an error — construction still succeeds"
             );
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -1394,6 +1395,7 @@ namespace VoXR.Tests.Runtime
                 result.Command.HasSlot("burn_level"),
                 "the spoken burn level is discarded with nothing to signal it"
             );
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -1471,6 +1473,7 @@ namespace VoXR.Tests.Runtime
             );
 
             Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
         }
 
         // Mirrors the shipped set_heading grammar (DemoGrammar / CommandDemo /
@@ -1572,6 +1575,7 @@ namespace VoXR.Tests.Runtime
             );
 
             Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -1600,6 +1604,7 @@ namespace VoXR.Tests.Runtime
                 "the bare intent wins and the spoken burn level is stranded"
             );
             Assert.IsFalse(result.Command.HasSlot("burn_level"));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -1637,6 +1642,7 @@ namespace VoXR.Tests.Runtime
                 "the bare form wins at 1.0 and the target is stranded"
             );
             Assert.IsFalse(result.Command.HasSlot("target"));
+            LogAssert.NoUnexpectedReceived();
         }
     }
 }

@@ -72,6 +72,7 @@ namespace VoXR.Tests.Runtime
             LogAssert.Expect(LogType.Warning, new Regex("InjectText called before parser is ready"));
 
             Assert.DoesNotThrow(() => _recogniser.InjectText("anything"));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [TestCase(null)]
@@ -668,7 +669,17 @@ namespace VoXR.Tests.Runtime
 
         void ConfigureForUnanalysableGrammar(float prefixHold)
         {
-            // Construction is where the over-limit pattern is reported now.
+            // Construction is where the over-limit pattern is reported now. Two warnings land
+            // here, not one: the prefix-hold grammar this builds on is itself a droppable-
+            // required-literal shape ("status" is a bare form of "status report {target}"),
+            // which is the very thing the hold exists to exercise, so the #42 check fires too.
+            // Expectations are matched in queue order against the logs in emission order, and
+            // the ctor runs the #42 scan before the optional-expansion one — so this pair must
+            // stay in this order.
+            LogAssert.Expect(
+                LogType.Warning,
+                new Regex(@"""status"" \(intent 'status'\) is a bare form of")
+            );
             LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
 
             _recogniser.Configure(PrefixHoldSlots(), UnanalysableCommands());
@@ -697,6 +708,7 @@ namespace VoXR.Tests.Runtime
                 "nothing commits early on a grammar the eligibility analysis never vetted"
             );
             Assert.AreEqual(0.6f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -708,6 +720,7 @@ namespace VoXR.Tests.Runtime
             _recogniser.InjectText("cease fire");
 
             Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -720,6 +733,7 @@ namespace VoXR.Tests.Runtime
             _recogniser.InjectText("cease");
 
             Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
+            LogAssert.NoUnexpectedReceived();
         }
     }
 }

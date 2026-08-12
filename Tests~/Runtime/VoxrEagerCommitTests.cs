@@ -345,6 +345,7 @@ namespace VoXR.Tests.Runtime
             Assert.IsFalse(overLimit, "the over-limit pattern is disabled");
             Assert.IsFalse(normal,
                 "a normal command in the same set is also disabled (whole-parser, never partial)");
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -364,6 +365,7 @@ namespace VoXR.Tests.Runtime
             );
 
             Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -495,6 +497,7 @@ namespace VoXR.Tests.Runtime
                 parser.TryEagerCommit(Tok("cease fire"), null, 0.6f, 0.4f),
                 "an un-analysable grammar holds — it never commits early"
             );
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -519,6 +522,7 @@ namespace VoXR.Tests.Runtime
                 parser.TryEagerCommit(Tok("banana"), null, 0.6f, 0.4f),
                 "speech matching nothing must not arm the shortened hold"
             );
+            LogAssert.NoUnexpectedReceived();
         }
 
         // ---------- Tie-break parity with ParseInternal (Review MF-5) ----------
@@ -826,6 +830,7 @@ namespace VoXR.Tests.Runtime
                 parser.TryEagerCommit(Tok("launch all missiles target"), null, 0.6f, 0.4f),
                 "an incomplete command must not reach the degrade's hold either"
             );
+            LogAssert.NoUnexpectedReceived();
         }
     }
 }

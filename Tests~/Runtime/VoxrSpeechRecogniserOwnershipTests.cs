@@ -99,6 +99,7 @@ namespace VoXR.Tests.Runtime
                 _ownerErrors,
                 $"Owner must see no error: [{string.Join("; ", _ownerErrors)}]"
             );
+            LogAssert.NoUnexpectedReceived();
         }
 
         [UnityTest]
@@ -138,6 +139,7 @@ namespace VoXR.Tests.Runtime
                 $"Expected exactly one rejection: [{string.Join("; ", _secondErrors)}]"
             );
             Assert.IsTrue(_owner.IsInitialised, "Owner must still hold the bridge.");
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -153,6 +155,7 @@ namespace VoXR.Tests.Runtime
                 $"Expected exactly one rejection: [{string.Join("; ", _secondErrors)}]"
             );
             Assert.IsTrue(_owner.IsInitialised, "Owner must still hold the bridge.");
+            LogAssert.NoUnexpectedReceived();
         }
 
         [UnityTest]
