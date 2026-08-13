@@ -1734,7 +1734,8 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void MissedLiteral_LongPattern_CostIsProportional()
         {
-            // The cost stays length-proportional — halved, not abolished (design fork F1).
+            // The cost stays length-proportional — reduced by a third, not abolished
+            // (1.5/N to 1/N; design fork F1).
             // Seven elements with "target" dropped: (1 + 1 + 0 + 1 + 1 + 1 + 1) / 7 = 0.857,
             // up from 5.5 / 7 = 0.786. The same single drop that a 3-element pattern feels as
             // 0.333 costs this one 0.143.
@@ -1799,17 +1800,23 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 "hard burn",
                 result.Command.GetSlot("burn_level"),
-                "firing on the boundary is only right because every argument is present"
+                "landing on the boundary is only acceptable because every argument is present "
+                    + "— the recogniser-level counterpart is what shows it then fires"
             );
             LogAssert.NoUnexpectedReceived();
         }
 
         // --- Admission: more evidence for than against (issue #65, DR-7) ---
         //
-        // Zeroing the miss penalty removed a filter that penalty was enforcing by accident:
-        // a candidate missing more than it matched used to be dragged to <= 0 and discarded.
-        // DR-7 states that as a rule instead. These three pin the harms the review cycle
-        // reproduced when it was briefly absent — none is hypothetical, and all three were
+        // Zeroing the miss penalty removed a filter the penalty was enforcing by accident —
+        // though a weaker one than DR-7: at -0.5 the score sank to <= 0 only once misses
+        // reached TWICE the matches, where DR-7 refuses at more misses than matches. The band
+        // between is refused deliberately; there the old model was incoherent, since ADDING
+        // debris to an utterance could raise a real command's score and flip it to firing.
+        //
+        // The first three tests pin the harms the review cycle reproduced when DR-7 was
+        // briefly absent, the fourth pins its optional-element clause, and the last is a
+        // §5.1 consequence rather than an admission one. None is hypothetical: every one was
         // measured against the real parser at both revisions before being written.
 
         [Test]
@@ -1909,6 +1916,70 @@ namespace VoXR.Tests.Runtime
                 parser.Parse("close in").Length,
                 "a fragment missing more than it matched is not a candidate at all"
             );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Admission_OptionalElementsCountTowardNeitherSide()
+        {
+            // DR-7's second clause, which the three harm tests above cannot reach because
+            // their fixtures are optional-free. Both halves are pinned here, and they fail in
+            // opposite directions, so neither can be satisfied by accident.
+            //
+            // A matched optional is NOT evidence FOR. "alpha one two" fills both optional
+            // slots and matches one required literal against two missed, so DR-7 refuses it —
+            // even though the score would be (1 + 1 + 1 + 0 + 0) / 5 = 0.60, exactly the
+            // default gate. This is the rule's sharpest edge: it can refuse a candidate the
+            // score would have admitted. It needs more than 2.0 of matched-optional credit to
+            // bite, which no pattern in this package carries, but the behaviour is deliberate
+            // and belongs on the record rather than discovered later.
+            var matchedOptionals = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("q1", new[] { "one", "two" }),
+                    new VoxrSlotDefinition("q2", new[] { "one", "two" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "alpha_cmd",
+                        new[] { new[] { "alpha", "{?q1}", "{?q2}", "bravo", "charlie" } }
+                    ),
+                }
+            );
+
+            Assert.AreEqual(
+                0,
+                matchedOptionals.Parse("alpha one two").Length,
+                "filling optionals is not evidence that the required elements were spoken"
+            );
+
+            // An omitted optional is NOT evidence AGAINST. "launch missiles" matches "launch"
+            // and {weapon} and misses "target" and {target} — two against two, which DR-7
+            // admits — and the unspoken {?quantity} must not tip that to three. The score is
+            // (1 + 1 + 0 - 1) / 4 = 0.25, the optional leaving both sides of the ratio.
+            var omittedOptional = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("quantity", new[] { "all", "one" }),
+                    new VoxrSlotDefinition("weapon", new[] { "missiles" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
+                        }
+                    ),
+                }
+            );
+
+            var result = ParseOne(omittedOptional, "launch missiles");
+            Assert.AreEqual(0.25f, result.Command.Score, 0.001f);
+            Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             LogAssert.NoUnexpectedReceived();
         }
 

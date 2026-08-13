@@ -1059,6 +1059,31 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void TryEagerCommit_AdmissionRefusesASparseCandidate_ReturnsNone()
+        {
+            // DR-7 is a refusal reason at this gate too — TryEagerCommit and ParseInternal
+            // share IsBetterCandidate, so the admission rule applies before any of the
+            // conditions this method documents. Nothing else covers that inheritance.
+            //
+            // "launch mark" against a five-literal pattern matches 2 and misses 3, so DR-7
+            // refuses it. Every other condition would have let it through: both misses are
+            // medial ("mark" matches last, so no unmatched tail), there are no slots to miss,
+            // and the match reaches the end of the buffer. minScore is lowered to 0.4 because
+            // the score is exactly (1 + 0 + 0 + 0 + 1) / 5 = 0.40 — at the default the score
+            // gate would refuse it and the test would pass without the rule.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("launch_weapon", P("launch", "missiles", "target", "hotel", "mark")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("launch mark"), null, 0.4f, 0.4f),
+                "a candidate too sparse to be admitted must not commit early either"
+            );
+        }
+
+        [Test]
         public void TryEagerCommit_WidenedSlotMissHole_StaysClosed()
         {
             // F10, and the reason issue #66 was a hard prerequisite of this change. §5.4

@@ -84,6 +84,8 @@ namespace VoXR.Tests.Editor
             ConfigureSync();
             // "launch missiles" partially matches the 5-element pattern: "target" is missed
             // and {target} is an unfilled required slot, giving (1 + 1 + 0 - 1) / 4 = 0.25.
+            // The denominator is 4, not 5, because the unspoken {?quantity} is optional and
+            // leaves both sides of the ratio.
             // Default minScore is 0.6, so it stays rejected — the slot miss is what sinks it,
             // and issue #65 §5.1 left RequiredSlotMissPenalty alone.
             _recogniser.InjectText("launch missiles");

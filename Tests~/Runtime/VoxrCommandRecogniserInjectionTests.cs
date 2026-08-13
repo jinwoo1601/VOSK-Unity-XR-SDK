@@ -833,7 +833,7 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void MissedLiteral_TwoElementPattern_DoesNotFire()
         {
-            // The other half of §5.1, and the reason the miss cost was halved rather than
+            // The other half of §5.1, and the reason the miss cost was reduced rather than
             // removed: "cease fire" heard as "fire" is genuinely ambiguous, scores
             // (0 + 1) / 2 = 0.5, and must stay under the gate.
             ConfigureWithSyncDefaults();

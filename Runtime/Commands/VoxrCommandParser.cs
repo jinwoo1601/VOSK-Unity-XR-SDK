@@ -52,8 +52,16 @@ namespace VoXR.Commands
         // command and firing it on half its evidence would be a worse failure than silence.
         //
         // RequiredSlotMissPenalty stays at -1.0: a missing required SLOT means the command's
-        // argument is absent, which is materially different from a dropped function word and
-        // is already routed to the pending/partial path.
+        // argument is absent, which is materially different from a dropped function word.
+        //
+        // That -1.0 is the ONLY thing holding such a candidate down. Nothing routes it
+        // anywhere on the strength of the missing slot: the partial/pending branch is reached
+        // by scoring BELOW minScore, and only for a command that opted into allowPartialMatch
+        // (off by default). Once a slot-missing candidate clears the gate it simply fires with
+        // the argument absent — already true on main at five elements, and this change lifts
+        // one further band (eight elements, one dropped literal alongside the missed slot)
+        // over it. TryEagerCommit refuses that shape (issue #66); the ordinary flush path has
+        // no such condition.
         const float RequiredLiteralMissPenalty = 0f;
 
         // Weight added to the score denominator per in-grammar word the sliding start skips
@@ -886,9 +894,17 @@ namespace VoXR.Commands
             // filler, which is what makes it the honest span for tie-breaking.
             public int ConsumedEndIdx;
 
-            // Required elements matched and missed (issue #65, DR-7). Optional elements are
-            // excluded from both, exactly as they are excluded from the denominator: choosing
-            // to omit an optional is not evidence against the candidate.
+            // Required elements matched and missed (issue #65, DR-7). Optional elements count
+            // toward neither side, which is NOT the denominator's rule: an omitted optional
+            // leaves both sides of the ratio, but a MATCHED one credits both (+0.5 for a
+            // literal, +1.0 for a slot). So this is a second, deliberately different ledger.
+            //
+            // Omitting an optional is not evidence against a candidate — that half is
+            // uncontroversial. Matching one is not counted as evidence FOR it either, because
+            // an optional the author marked skippable says nothing about whether the speaker
+            // said the command the REQUIRED elements identify. The consequence is that DR-7
+            // can refuse a candidate whose score would have passed; that needs more than 2.0
+            // of matched-optional credit to bite, which no pattern in this package carries.
             public int MatchedRequired;
             public int MissedRequired;
         }
@@ -924,10 +940,18 @@ namespace VoXR.Commands
 
             // Admission: more evidence FOR the candidate than against it (issue #65, DR-7).
             //
-            // Until §5.1 this was enforced by accident. RequiredLiteralMissPenalty was -0.5,
-            // so a candidate missing more than it matched was dragged to or below zero and the
-            // filter above discarded it. Zeroing that penalty removed the enforcement without
-            // replacing it, and the effect was NOT confined to extra low-scoring tail results:
+            // Until §5.1 something like this was enforced by accident, though NOT this rule.
+            // RequiredLiteralMissPenalty was -0.5, so the filter above discarded a candidate
+            // once its misses reached TWICE its matches; this refuses at more misses than
+            // matches, which is strictly stronger. The band between the two — two matched
+            // against three missed, say — was admitted before and is refused now. That is
+            // deliberate: in that band the old model was not merely lenient but incoherent,
+            // since a fragment surviving there consumes the tokens ahead of a real command
+            // and hands it a clean score, so ADDING debris to an utterance could raise the
+            // command's score and flip it from rejected to fired.
+            //
+            // Zeroing the penalty removed even that accidental enforcement, and the effect was
+            // NOT confined to extra low-scoring tail results:
             // the start-index key below outranks score, so a newly-admitted fragment can win
             // round 1 outright. It then consumes tokens, which moves the origin ParseInternal
             // charges skipped words from (issue #31) and takes a slot in the fixed result
@@ -1443,6 +1467,12 @@ namespace VoXR.Commands
             if (bestCommandIdx < 0 || bestScore < minScore)
                 return EagerCommitVerdict.None;
 
+            // Note one condition that is NOT listed below because it has already run: the
+            // admission rule in IsBetterCandidate (issue #65, DR-7) refuses any candidate
+            // whose missed required elements outnumber its matched ones, so nothing that
+            // sparse ever reaches these checks or the score gate above. The eager scan
+            // inherits it by sharing the comparator with ParseInternal.
+            //
             // Completeness: every required SLOT must actually have matched (issue #66).
             // Nothing else here asserts that. The score arithmetic only sinks such candidates
             // below minScore by coincidence — at five elements one missed slot lands on
