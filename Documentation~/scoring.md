@@ -30,7 +30,7 @@ score = rawScore / denominator          (0 when denominator is 0)
 | Element | Outcome | Raw score | Denominator |
 |---------|---------|-----------|-------------|
 | Required literal (`"target"`) | matched | +1.0 | +1.0 |
-| Required literal | **missed** | **−0.5** | +1.0 |
+| Required literal | **missed** | **0** | +1.0 |
 | Required slot (`"{weapon}"`) | matched | +1.0 | +1.0 |
 | Required slot | **missed** | **−1.0** | +1.0 |
 | Optional literal (`"?by"`) | matched | +0.5 | +0.5 |
@@ -41,23 +41,37 @@ score = rawScore / denominator          (0 when denominator is 0)
 Three properties follow, and each one matters when you read a score:
 
 - **The denominator is dynamic.** Required elements always count toward it; optional elements count only when they were actually spoken. An omitted optional drops out of *both* sides of the ratio rather than diluting it, so taking advantage of optionality is never penalised and a perfect match is always exactly `1.0`.
-- **A miss is charged twice** — it withholds the credit *and* subtracts a penalty, while still occupying the denominator. That is what makes a single dropped word expensive.
+- **A missed required literal is charged once.** It withholds its credit but keeps its place in the denominator, so one dropped function word costs `1/N` of the ceiling on an `N`-element pattern. It used to be charged *twice* — the withheld credit plus a `−0.5` penalty, i.e. `1.5/N` — which is what made short patterns so fragile. A missed required **slot** is still charged twice, and deliberately: an absent argument is not a dropped function word.
 - **A matched optional literal is worth half a required one.** Making a literal optional therefore changes the arithmetic of every *imperfect* match of that pattern, not just the ones that drop the word. See [the cost of `?by`](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot).
 
-A candidate whose score is `0` or negative is discarded and never competes.
+A candidate whose score is `0` or negative is discarded and never competes. So is one that **missed more of its required elements than it matched**, whatever it scored — see [admission](#admission-what-counts-as-a-candidate-at-all).
+
+### Admission: what counts as a candidate at all
+
+Before any of the ordering below, a candidate must clear two filters:
+
+1. Its score must be **above `0`**.
+2. Its **matched required elements must be at least as many as its missed ones**. Optional elements count toward neither side — omitting one is not evidence against a pattern, and matching one is not evidence that the required elements were spoken.
+
+The second is a count, not a threshold: there is nothing to configure, and it is unrelated to `minScore`. It exists because a pattern that missed most of what it requires is not a weak reading of the utterance, it is a different command — and admitting one has knock-on effects, since a candidate that wins a round consumes tokens and changes what later rounds see.
+
+The visible consequence is that a very sparse partial match now produces *no* result at all rather than a low-scoring one. If you are debugging a command that reports nothing whatsoever, check whether the pattern matched at least half its required elements before assuming a score problem.
 
 ### Short patterns are disproportionately fragile
 
-The penalty is a fixed size but the denominator is not, so the same dropped word costs a short pattern far more than a long one:
+A miss costs a fixed `1.0` of credit but the denominator is not fixed, so the same dropped word still costs a short pattern more than a long one — just no longer enough to sink it:
 
 | Pattern | Utterance | Raw / denominator | Score | At `minScore = 0.6` |
 |---------|-----------|-------------------|-------|---------------------|
-| `decelerate by {burn_level}` (3 elements) | "decelerate hard burn" | `(1 − 0.5 + 1) / 3` = `1.5 / 3` | **0.50** | rejected |
-| `launch {weapon} target {target} on my mark` (7 elements) | "launch missiles hotel one on my mark" | `(6 × 1 − 0.5) / 7` = `5.5 / 7` | **0.79** | accepted |
+| `decelerate by {burn_level}` (3 elements) | "decelerate hard burn" | `(1 + 0 + 1) / 3` = `2 / 3` | **0.67** | accepted |
+| `launch {weapon} target {target} on my mark` (7 elements) | "launch missiles hotel one on my mark" | `(6 × 1 + 0) / 7` = `6 / 7` | **0.86** | accepted |
+| `cease fire` (2 elements) | "fire" | `(0 + 1) / 2` = `1 / 2` | **0.50** | rejected |
 
-Both utterances dropped exactly one required literal, and in both the slots were recognised and extracted. Only the short one falls under the gate. This is the single most common cause of a puzzling `score 0.50 < minScore 0.60` line in a session log: it is not a garbled utterance, it is one missing function word on a three-element pattern.
+Both of the first two dropped exactly one required literal, and in both the slots were recognised and extracted. Both now clear the gate — a single dropped function word no longer silences a pattern of three or more elements.
 
-The lesson for authoring is not "raise `minScore`" but "do not make a short pattern depend on a short unstressed word" — see [the function-word hazard](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot), which the parser also warns about at construction.
+**Two elements is the floor.** `cease fire` heard as "fire" is half the evidence, and half the evidence is genuinely ambiguous — with a `fire` command registered it is a different command entirely — so the cost stays proportional to length rather than being abolished.
+
+The authoring lesson is unchanged and still worth following: do not make a short pattern depend on a short unstressed word — see [the function-word hazard](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot), which the parser warns about at construction. What has changed is that ignoring it now costs accuracy rather than silence.
 
 ---
 
@@ -89,7 +103,7 @@ Set it to `0` to restore the pre-1.4.0 behaviour where skipped words cost nothin
 
 ## 3. Selection: which candidate wins
 
-Every candidate with a positive score competes. They are ordered by these keys, in this order:
+Every candidate that clears [admission](#admission-what-counts-as-a-candidate-at-all) competes. They are ordered by these keys, in this order:
 
 1. **Earliest start token wins.** A candidate that begins earlier beats one that begins later *regardless of score* — a leading match is never displaced by a better-scoring one further along.
 2. **Then highest score** (before the skipped-word penalty).
@@ -115,7 +129,7 @@ One utterance can yield several commands. After a winner is chosen, the search r
   -> launch_weapon(weapon=missiles, target=hotel one)  score 1.00
 ```
 
-Extraction stops when no candidate scores above `0`, when a match would consume no tokens, or when the result buffer (one slot per active command) is full.
+Extraction stops when no candidate is [admitted](#admission-what-counts-as-a-candidate-at-all) — which means either nothing scored above `0` or nothing matched at least as many required elements as it missed — when a match would consume no tokens, or when the result buffer (one slot per active command) is full.
 
 Two consequences for pattern authoring:
 
@@ -212,7 +226,7 @@ A verdict above `None` requires **all** of:
 2. The match starts at the first **recognised** token. A leading `[unk]` run is skipped for free — nothing arriving later extends an utterance leftward, so out-of-grammar preamble ("Helm, ...") does not block a commit. A leading word VOSK *did* resolve does block it, because the flush would then charge it under §2 and could score below `minScore`.
 3. The match reaches the **end** of the buffer. Anything left over — recognised or `[unk]` — is treated as an in-progress tail.
 4. Every **required slot** in the winning pattern actually matched. Condition 3 does not imply this: a missed slot consumes no *recognised* token, so it never moves the end of the match past anything the pattern matched — and where it does carry the end over a trailing `[unk]` run, that only makes condition 3 pass more readily. Either way a pattern can appear to span the buffer while still missing an argument. Required *literals* are exempt from **this** condition — a dropped function word still leaves every argument present — but see condition 5.
-5. **No required element sits after the last element that actually matched.** Condition 3 cannot express this either, and for the same reason: a miss consumes nothing, so a pattern whose *trailing* elements were never spoken ends up looking exactly like one that genuinely finished at the buffer end. A **medial** miss is fine and still commits — "launch all missiles hotel one" drops the "target" literal but fills every slot and still lands its last element on the buffer's final token, so nothing arriving next was owed to it. A **terminal** one is not: with `["switch", "to", "weapons"]` and `["switch", "to", "navigation"]` registered, the buffer "switch to" matches both at `(1 + 1 − 0.5) / 3` = `0.50`, and the winner is decided by registration order — so committing there fires the *wrong* command, not merely an early one.
+5. **No required element sits after the last element that actually matched.** Condition 3 cannot express this either, and for the same reason: a miss consumes nothing, so a pattern whose *trailing* elements were never spoken ends up looking exactly like one that genuinely finished at the buffer end. A **medial** miss is fine and still commits — "launch all missiles hotel one" drops the "target" literal but fills every slot and still lands its last element on the buffer's final token, so nothing arriving next was owed to it. A **terminal** one is not: with `["switch", "to", "weapons"]` and `["switch", "to", "navigation"]` registered, the buffer "switch to" matches both at `(1 + 1 + 0) / 3` = `0.67`, and the winner is decided by registration order — so committing there fires the *wrong* command, not merely an early one.
 6. Confidence ≥ `minConfidence`, or `-1`.
 
 `Commit` additionally requires the winning pattern to be *terminal*: its last element cannot grow (not a trailing optional, not a variable-width `NumberSequence`, not an enumerated slot with a value that is a word-prefix of another value), and no concrete form of it is a prefix of any concrete form of another pattern.
@@ -241,7 +255,7 @@ Grammar: `launch_weapon` = `["launch", "{weapon}", "target", "{target}"]`, with 
 
 Utterance: **"launch missiles target hotel one"** — 5 tokens.
 
-1. **Candidates.** The pattern is tried at every start token. Start 0 matches all four elements: `4 / 4` = `1.00`. Start 1 misses the `launch` literal but still matches the other three: `2.5 / 4` = `0.63`. Start 2 misses both `launch` and `{weapon}`: `0.5 / 4` = `0.13`.
+1. **Candidates.** The pattern is tried at every start token. Start 0 matches all four elements: `4 / 4` = `1.00`. Start 1 misses the `launch` literal but still matches the other three: `3 / 4` = `0.75`. Start 2 misses both `launch` and `{weapon}` — two matched against two missed, so it is still admitted, at `(0 − 1 + 1 + 1) / 4` = `0.25`.
 2. **Selection.** Start 0 is earliest — it wins on key 1 alone.
 3. **Skipped-word penalty.** The winner starts at the search origin, so nothing is skipped. Score stays `1.00`.
 4. **Confidence.** The minimum per-word confidence over tokens 0–4.
@@ -260,8 +274,8 @@ Grammar: `decelerate` = `["decelerate"]` **and** `["decelerate", "by", "{burn_le
 
 Utterance: **"decelerate hard burn"** — the speaker said the burn level; VOSK dropped "by".
 
-1. **Candidates.** The bare pattern at start 0: `1 / 1` = `1.00`. The slot-filled pattern at start 0: `by` is missed (−0.5, denominator +1) while `decelerate` and `{burn_level}` match, giving `1.5 / 3` = `0.50`.
-2. **Selection.** Both start at token 0, so key 1 ties and key 2 decides: `1.00` beats `0.50`. **The bare pattern wins.**
+1. **Candidates.** The bare pattern at start 0: `1 / 1` = `1.00`. The slot-filled pattern at start 0: `by` is missed (no credit, denominator +1) while `decelerate` and `{burn_level}` match, giving `2 / 3` = `0.67`.
+2. **Selection.** Both start at token 0, so key 1 ties and key 2 decides: `1.00` beats `0.67`. **The bare pattern wins.**
 3. **Result.** `decelerate` fires with **no slots**. The `hard burn` the speaker actually said is discarded, and nothing in the log says a slot was lost — the accepted entry simply has an empty `slots` array.
 
 ```json
@@ -269,7 +283,7 @@ Utterance: **"decelerate hard burn"** — the speaker said the burn level; VOSK 
   "score": 1.0, "accepted": true, "slots": [] }
 ```
 
-No threshold reaches this: the bare pattern scores a clean `1.00`, which nothing normalised to `1.00` can beat. The fix is `"?by"`, which makes the slot-filled form score `2 / 2` = `1.00` too and win on consumed span (key 3). Then:
+No threshold reaches this: the bare pattern scores a clean `1.00`, which nothing normalised to `1.00` can beat. Raising the drop's score from `0.50` to `0.67` does not help either — this hazard is about *selection*, not the gate. The fix is `"?by"`, which makes the slot-filled form score `2 / 2` = `1.00` too and win on consumed span (key 3). Then:
 
 ```json
 { "intent": "decelerate", "pattern": "decelerate ?by {burn_level}",
@@ -277,16 +291,15 @@ No threshold reaches this: the bare pattern scores a clean `1.00`, which nothing
   "slots": [ { "name": "burn_level", "value": "hard burn", "startWord": 1, "endWord": 3 } ] }
 ```
 
-If instead the intent has *only* the slot-filled pattern, there is no bare sibling to win — the `0.50` candidate is the winner, and is then rejected by the gate:
+If instead the intent has *only* the slot-filled pattern, there is no bare sibling to win — the `0.67` candidate is the winner, and now **clears** the gate:
 
 ```json
 { "intent": "decelerate", "pattern": "decelerate by {burn_level}",
-  "score": 0.5, "minScore": 0.6, "accepted": false,
-  "rejectReason": "score 0.50 < minScore 0.60",
+  "score": 0.67, "minScore": 0.6, "accepted": true,
   "slots": [ { "name": "burn_level", "value": "hard burn", "startWord": 1, "endWord": 3 } ] }
 ```
 
-**Reading that entry:** a `0.50` on a three-element pattern whose slots *did* extract is the signature of exactly one missing required literal. Compare `score` against the pattern's element count before reaching for `minScore`.
+**Reading that entry:** a `0.67` on a three-element pattern whose slots *did* extract is the signature of exactly one missing required literal — `(N−1)/N`. Compare `score` against the pattern's element count before reaching for `minScore`.
 
 ### C. One weak word vetoes a perfect match
 
@@ -343,7 +356,9 @@ Three diagnoses cover most of what sends you to the log — two rejections and o
 
 | Symptom | Diagnosis |
 |---------|-----------|
-| `score` ≈ 0.5 on a short pattern, slots extracted | One dropped required literal (§1). Make the function word optional. |
+| `score` ≈ 0.67 on a three-element pattern, slots extracted | One dropped required literal (§1) — now above the gate, so it fires. |
+| `score` ≈ 0.5 on a **two**-element pattern | One dropped required literal, and two elements is the floor: half the evidence stays rejected (§1). |
+| no result at all for a pattern that clearly part-matched | The candidate missed more required elements than it matched and was refused [admission](#admission-what-counts-as-a-candidate-at-all) (§3). |
 | `score` = 1.0 but `aggregateConfidence` below the gate | One acoustically weak word (§5). Check `words`; consider a slot alias. |
 | Accepted with an empty `slots` array where you expected a value | A bare sibling pattern out-scored the slot-filled one (§7 B). |
 

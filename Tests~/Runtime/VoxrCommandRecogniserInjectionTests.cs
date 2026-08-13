@@ -415,7 +415,7 @@ namespace VoXR.Tests.Runtime
         {
             // Issue #70 at the level where its harm actually shows. Two commands share a
             // three-word prefix and diverge only on the last word, so the buffer "set auto
-            // pilot" matches both at (1 + 1 + 1 - 0.5) / 4 = 0.625 — over the default
+            // pilot" matches both at (1 + 1 + 1 + 0) / 4 = 0.75 — over the default
             // minScore, with the match reaching the buffer end because a missed word consumes
             // no tokens. Before the tail condition this eager-fired autopilot_on on
             // registration order alone, while the speaker was still saying "off": not an early
@@ -786,6 +786,101 @@ namespace VoXR.Tests.Runtime
 
             Assert.AreEqual(2.0f, _recogniser.TestEffectiveBufferWindow, 1e-4f);
             LogAssert.NoUnexpectedReceived();
+        }
+
+        // -------- Required-literal miss cost (issue #65 §5.1) --------
+        //
+        // The parser-level tests pin the arithmetic; these pin the claim the requirements
+        // actually make, which is about behaviour. Parse applies no threshold of its own —
+        // minScore lives here — so "scores 0.667" and "the command fires" are two different
+        // statements, and only this level can make the second one.
+
+        [Test]
+        public void MissedLiteral_ThreeElementPattern_NowFires()
+        {
+            // Symptom 1, end to end. "time to target" heard as "time target" scores
+            // (1 + 0 + 1) / 3 = 0.667 and clears the default minScore of 0.6. Before the miss
+            // cost changed this was 0.5 and the user got silence.
+            _recogniser.Configure(
+                new VoxrSlotDefinition[0],
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "time_to_target",
+                        new[] { new[] { "time", "to", "target" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+
+            VoxrCommand? received = null;
+            int unrecognisedCount = 0;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+            _recogniser.OnUnrecognisedSpeech += _ => unrecognisedCount++;
+
+            _recogniser.InjectText("time target");
+
+            Assert.IsTrue(
+                received.HasValue,
+                "a single dropped function word must not silence a three-element command"
+            );
+            Assert.AreEqual("time_to_target", received.Value.Intent);
+            Assert.AreEqual(2f / 3f, received.Value.Score, 0.001f);
+            Assert.AreEqual(0, unrecognisedCount);
+        }
+
+        [Test]
+        public void MissedLiteral_TwoElementPattern_DoesNotFire()
+        {
+            // The other half of §5.1, and the reason the miss cost was reduced rather than
+            // removed: "cease fire" heard as "fire" is genuinely ambiguous, scores
+            // (0 + 1) / 2 = 0.5, and must stay under the gate.
+            ConfigureWithSyncDefaults();
+
+            int recognisedCount = 0;
+            string unrecognised = null;
+            _recogniser.OnCommandRecognised += _ => recognisedCount++;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+
+            _recogniser.InjectText("fire");
+
+            Assert.AreEqual(0, recognisedCount, "half the evidence must not fire a command");
+            Assert.AreEqual("fire", unrecognised);
+        }
+
+        [Test]
+        public void MissedLiteral_BoundaryCase_ExactlySixTenths_Fires()
+        {
+            // G1 ruling 2, at the level that can actually test it. Two drops on a five-element
+            // pattern score (1 + 0 + 0 + 1 + 1) / 5 = 0.60 — the gate value itself. The gate is
+            // >=, so this fires; the parser-level test can only assert the number, not that the
+            // comparison admits it.
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_burn",
+                        new[] { new[] { "set", "burn", "to", "{burn_level}", "now" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set hard burn now");
+
+            Assert.IsTrue(received.HasValue, "a score of exactly minScore must pass the >= gate");
+            Assert.AreEqual(3f / 5f, received.Value.Score, 0.001f);
+            Assert.AreEqual(
+                "hard burn",
+                received.Value.GetSlot("burn_level"),
+                "firing on the boundary is only right because every argument is present"
+            );
         }
     }
 }

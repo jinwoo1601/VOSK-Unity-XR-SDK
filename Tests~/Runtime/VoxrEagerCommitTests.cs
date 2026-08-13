@@ -798,7 +798,7 @@ namespace VoXR.Tests.Runtime
         public void TryEagerCommit_MissedRequiredLiteral_AllSlotsFilled_StillCommits()
         {
             // The "target" literal is dropped but every slot is filled, so the command is
-            // fully determined — score (1 + 1 + 1 - 0.5 + 1) / 5 = 0.70. Neither completeness
+            // fully determined — score (1 + 1 + 1 + 0 + 1) / 5 = 0.80. Neither completeness
             // condition may catch this: the slot condition is scoped to slots, and the miss
             // is MEDIAL, so {target} matches afterwards and the tail condition (issue #70)
             // clears too.
@@ -875,13 +875,17 @@ namespace VoXR.Tests.Runtime
             // "switch to" is two words into "switch to navigation". The trailing literal
             // matched nothing, and a miss consumes no token — so EndIdx still reaches the end
             // of the buffer and the whole-buffer condition cannot catch it, exactly as a
-            // missed slot evades it (issue #66). Both patterns score (1 + 1 - 0.5) / 3 = 0.50
+            // missed slot evades it (issue #66). Both patterns score (1 + 1 + 0) / 3 = 0.667
             // and tie, so registration order would decide: the speaker says "navigation" and
             // mode_weapons fires. The wrong command, not merely an early one.
             //
-            // minScore is lowered to 0.4 deliberately. At the 0.6 default this particular
-            // buffer is caught by the score gate today, which would make the test green
-            // without the fix; below the gate only the tail condition stands in the way.
+            // minScore is lowered to 0.4 for a reason that has since expired. When this test
+            // was written the buffer scored 0.50 and the 0.6 default caught it by arithmetic,
+            // which would have made the test green without the fix; dropping below the gate
+            // left only the tail condition in the way. Issue #65 §5.1 then raised it to 0.667
+            // — over the default — so the tail condition is now load-bearing at any threshold
+            // and the sibling test below pins exactly that. The 0.4 is kept because it still
+            // isolates the condition under test rather than sharing the work with the gate.
             Assert.AreEqual(
                 EagerCommitVerdict.None,
                 ModeSwitchParser().TryEagerCommit(Tok("switch to"), null, 0.4f, 0.4f),
@@ -893,8 +897,10 @@ namespace VoXR.Tests.Runtime
         public void TryEagerCommit_UnmatchedTerminalLiteral_LiveAtDefaultThreshold()
         {
             // The same hole at the DEFAULT minScore, so this is not a low-threshold curiosity.
-            // Four required literals with the last unspoken score (1 + 1 + 1 - 0.5) / 4 =
-            // 0.625, over the 0.6 default, with every other eager condition satisfied.
+            // Four required literals with the last unspoken score (1 + 1 + 1 + 0) / 4 = 0.75,
+            // over the 0.6 default, with every other eager condition satisfied. This was
+            // 0.625 before issue #65 §5.1 zeroed the miss penalty — already over the gate
+            // then, which is why #70 was a live bug rather than a consequence of §5.1.
             var parser = new VoxrCommandParser(
                 Slots(),
                 Commands(
@@ -906,7 +912,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 EagerCommitVerdict.None,
                 parser.TryEagerCommit(Tok("set auto pilot"), null, 0.6f, 0.4f),
-                "0.625 clears minScore, so only the tail condition can refuse this"
+                "0.75 clears minScore, so only the tail condition can refuse this"
             );
         }
 
@@ -916,7 +922,7 @@ namespace VoXR.Tests.Runtime
             // Trailing filler makes the whole-buffer condition pass even harder: the [unk] skip
             // runs before EVERY element, including the one that then matches nothing, so EndIdx
             // reaches 4 == tokens.Length while ConsumedEndIdx stays at 3. The score is unchanged
-            // at 0.625, so neither the score gate nor the whole-buffer check can refuse this —
+            // at 0.75, so neither the score gate nor the whole-buffer check can refuse this —
             // only the tail condition can. This is the shape a final result carrying breath or
             // filler presents while the last word is still to come.
             var parser = new VoxrCommandParser(
@@ -1006,6 +1012,134 @@ namespace VoXR.Tests.Runtime
                 "an incomplete command must not reach the degrade's hold either"
             );
             LogAssert.NoUnexpectedReceived();
+        }
+
+        // ---------- Required-literal miss cost (issue #65 §5.1) ----------
+        //
+        // Zeroing RequiredLiteralMissPenalty raises the scores the eager scan selects on, so
+        // more buffers clear its gate. That is intended (F9), but it puts weight on the two
+        // completeness conditions that the score arithmetic used to carry by coincidence.
+        // These two tests bound it from both sides: one buffer that SHOULD newly commit, and
+        // one that must not, at exactly the score the design predicted it would rise to.
+
+        [Test]
+        public void TryEagerCommit_MedialMissNewlyClearingTheGate_CommitsAndAgreesWithParse()
+        {
+            // The case §5.1 exists for, at the eager gate. "time to target" heard as "time
+            // target" rises from (1 - 0.5 + 1) / 3 = 0.50 to (1 + 0 + 1) / 3 = 0.667 and now
+            // clears the default minScore.
+            //
+            // The miss is MEDIAL by construction, which is what makes committing correct here:
+            // "target" matches afterwards, so the tail counter resets and the pattern ends on
+            // the buffer's last token owing nothing. A TRAILING drop at the same score is the
+            // issue #70 case and is refused above — that one would prove nothing about this
+            // change, since the tail condition catches it whatever the score.
+            //
+            // F9's invariant is the second half: a verdict must name the command the flush
+            // will actually fire, so the same buffer is put through Parse as well.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("time_to_target", P("time", "to", "target")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("time target"), null, 0.6f, 0.4f),
+                "a medial drop leaves nothing owing, so the raised score should commit"
+            );
+
+            var flushed = parser.Parse("time target");
+            Assert.AreEqual(
+                1,
+                flushed.Length,
+                "the verdict must name exactly what the flush fires"
+            );
+            Assert.AreEqual("time_to_target", flushed[0].Command.Intent);
+            Assert.AreEqual(2f / 3f, flushed[0].Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void TryEagerCommit_AdmissionRefusesASparseCandidate_ReturnsNone()
+        {
+            // DR-7 is a refusal reason at this gate too — TryEagerCommit and ParseInternal
+            // share IsBetterCandidate, so the admission rule applies before any of the
+            // conditions this method documents. Nothing else covers that inheritance.
+            //
+            // "launch mark" against a five-literal pattern matches 2 and misses 3, so DR-7
+            // refuses it. Every other condition would have let it through: both misses are
+            // medial ("mark" matches last, so no unmatched tail), there are no slots to miss,
+            // and the match reaches the end of the buffer. minScore is lowered to 0.4 because
+            // the score is exactly (1 + 0 + 0 + 0 + 1) / 5 = 0.40 — at the default the score
+            // gate would refuse it and the test would pass without the rule.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("launch_weapon", P("launch", "missiles", "target", "hotel", "mark")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("launch mark"), null, 0.4f, 0.4f),
+                "a candidate too sparse to be admitted must not commit early either"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_WidenedSlotMissHole_StaysClosed()
+        {
+            // F10, and the reason issue #66 was a hard prerequisite of this change. §5.4
+            // computed the exact shape that §5.1 newly lifts over the gate: eight elements,
+            // one missed required SLOT alongside one dropped required literal, scoring
+            // (1 - 1 + 1 + 0 + 1 + 1 + 1 + 1) / 8 = 0.625 where it scored 4.5 / 8 = 0.5625
+            // before. The score gate used to refuse this on its own; now only the completeness
+            // condition does.
+            //
+            // Both misses are medial and "mark" matches on the last token, so the issue #70
+            // tail condition clears and cannot be what refuses this — the slot condition is
+            // load-bearing here and nothing else is. The Parse assertion pins the raised score
+            // so the refusal is demonstrably happening ABOVE the gate rather than because the
+            // candidate never reached it.
+            var parser = new VoxrCommandParser(
+                LaunchSlots(),
+                Commands(
+                    Cmd(
+                        "launch_weapon",
+                        P(
+                            "launch",
+                            "{quantity}",
+                            "{weapon}",
+                            "target",
+                            "{target}",
+                            "on",
+                            "my",
+                            "mark"
+                        )
+                    )
+                )
+            );
+
+            var parsed = parser.Parse("launch missiles hotel one on my mark");
+            Assert.AreEqual(1, parsed.Length);
+            Assert.AreEqual(
+                5f / 8f,
+                parsed[0].Command.Score,
+                0.001f,
+                "the widened hole is real — this candidate now clears the 0.6 default"
+            );
+            Assert.IsFalse(
+                parsed[0].Command.HasSlot("quantity"),
+                "the required quantity slot is what went missing"
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(
+                    Tok("launch missiles hotel one on my mark"),
+                    null,
+                    0.6f,
+                    0.4f
+                ),
+                "a command missing a required argument must never commit early, however it scores"
+            );
         }
     }
 }

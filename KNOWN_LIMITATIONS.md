@@ -386,7 +386,8 @@ deliberate trade-offs rather than oversights.
   the command runs at its default level, with nothing reporting that a burn level
   was heard and thrown away. Observed in-headset.
 - **Root cause**: Inherent to comparing siblings by score. The slot-filled pattern
-  is charged `RequiredLiteralMissPenalty` for the missing "by" (1.5/3 = 0.5) while
+  loses the missing "by"'s credit while still counting it in the denominator
+  (2/3 = 0.67) while
   the bare pattern matches perfectly (1/1 = 1.0), so the bare pattern wins on score
   and sequential extraction finds nothing to do with the stranded "hard burn". No
   threshold or penalty tuning reaches this case: a score normalised to 1.0 is the
@@ -409,9 +410,36 @@ deliberate trade-offs rather than oversights.
   under `minScore`; and an optional literal no longer anchors the element after it,
   so a following slot can claim adjacent tokens the literal never introduced (with
   `orient heading {heading} ?mark {?elevation}`, a stray fourth digit is absorbed as
-  `elevation` and wins on span, where the required form scored 0.7 and dropped it).
+  `elevation` and wins on span, where the required form scored 0.8 and dropped it).
   Prefer the swap where the trailing slot's vocabulary is distinct from its
   neighbours'; be careful where it is a `NumberSequence`.
+
+### Sibling patterns that differ only in their last word fire the first-registered one
+
+- **Symptom**: Two commands share every element but the last — `switch to weapons`
+  and `switch to navigation`, or `set auto pilot on` and `... off`. The speaker says
+  one of them, VOSK drops the final discriminating word, and the *other* command
+  fires. Not an early fire: the wrong command, with nothing in the log flagging it
+  as ambiguous.
+- **Repro**: Register both `["switch", "to", "weapons"]` and
+  `["switch", "to", "navigation"]`, then feed the transcript "switch to". Both
+  patterns score `(1 + 1 + 0) / 3` = 0.67, which clears the default `minScore`.
+- **Root cause**: The surviving evidence fits both siblings *equally*, so they tie
+  on score, on consumed span and on literal count, and selection falls through to
+  its final key — registration order. The word that would have decided is exactly
+  the one that went missing, so no scorer can recover the intent; the parser is
+  guessing, and it guesses consistently rather than randomly. This is the ordinary
+  flush path: the eager-flush gate refuses this shape (it will not commit a pattern
+  whose trailing required element never matched), but a *final* transcript that ends
+  there is not in progress and no tail rule applies.
+- **Workaround**: Prefer sibling patterns that diverge earlier than their last
+  element (`weapons mode` / `navigation mode` rather than `switch to weapons` /
+  `switch to navigation`), or give the more destructive of the pair
+  `requiresConfirmation`. Where both phrasings must exist, register the safer one
+  first — registration order is the tie-break, and it is deterministic.
+- **Note**: This shape predates the current miss cost. At four or more elements it
+  already cleared the gate; reducing the miss cost extends it down to three-element
+  patterns, which is where two-word-prefix grammars live.
 
 ### Confidence of `-1.00` means "no data", not "zero confidence"
 

@@ -1457,8 +1457,10 @@ namespace VoXR.Tests.Runtime
         public void OptionalSlotAfterTheLiteral_AlsoWarns()
         {
             // The stranded value need not be required to be lost. For this grammar, "orient
-            // mark one five" with "mark" dropped scores (1 - 0.5 + 1) / 3 = 0.5 against the
+            // mark one five" with "mark" dropped scores (1 + 0 + 1) / 3 = 0.667 against the
             // bare pattern's 1.0, so the elevation goes the same way the burn level does.
+            // Issue #65 §5.1 raised that 0.5 to 0.667 and it changes nothing here: the hazard
+            // is that nothing normalized to 1.0 can be beaten, which is symptom 2's territory.
             LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"mark\""));
 
             var parser = new VoxrCommandParser(
@@ -1511,7 +1513,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("one five", spoken.Command.GetSlot("elevation"));
 
             // The point of the change: with "mark" gone the elevation survives. Under the
-            // required form this scored 3.5/5 = 0.7, lost to the bare pattern's 1.0, and the
+            // required form this scored 4/5 = 0.8, lost to the bare pattern's 1.0, and the
             // elevation was discarded.
             var elided = ParseOne(parser, "orient heading two seven zero one five");
             Assert.AreEqual(1, elided.Command.MatchedPatternIndex);
@@ -1535,7 +1537,7 @@ namespace VoXR.Tests.Runtime
             // literal…"): an optional literal no longer anchors the slot behind it, so a
             // spurious fourth digit past the maxed-out heading is absorbed as an elevation
             // nobody marked, and wins on span at 4/4 = 1.0. The required form scored
-            // 3.5/5 = 0.7 here and correctly dropped the stray token. Pinned so the tradeoff
+            // 4/5 = 0.8 here and correctly dropped the stray token. Pinned so the tradeoff
             // is a known, tested consequence rather than a surprise.
             var parser = HeadingParser();
 
@@ -1642,6 +1644,395 @@ namespace VoXR.Tests.Runtime
                 "the bare form wins at 1.0 and the target is stranded"
             );
             Assert.IsFalse(result.Command.HasSlot("target"));
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // --- Required-literal miss cost (issue #65 §5.1) ---
+        //
+        // A missed required literal withholds its credit but is no longer ALSO charged a
+        // penalty, so one drop costs 1/N of the 1.0 ceiling instead of 1.5/N. These tests
+        // are one row each of the design's §5.1 table, and every expected value is written
+        // as its arithmetic so the reader can check it without running anything.
+        //
+        // The shared MakeCommands() grammar cannot express these cases — its patterns are 1,
+        // 2, 5 and 6 elements, none with a droppable required literal — so this region builds
+        // its own fixtures. None of them registers a bare sibling of the pattern under test:
+        // with one present the bare form wins selection at 1.0 and the drop never gets scored,
+        // which is symptom 2 and explicitly NOT what this feature fixes.
+
+        static VoxrCommandParser MissedLiteralParser() =>
+            new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "time_to_target",
+                        new[] { new[] { "time", "to", "target" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "decelerate_by",
+                        new[] { new[] { "decelerate", "by", "{burn_level}" } }
+                    ),
+                    new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+                }
+            );
+
+        [Test]
+        public void MissedLiteral_ThreeElementPattern_ClearsThreshold()
+        {
+            // The in-headset case from the #42 cycle: "time to target" heard as "time target".
+            // "time" and "target" match, "to" is dropped and counts toward the denominator
+            // only: (1 + 0 + 1) / 3 = 0.667, over the default minScore of 0.6. It scored
+            // (1 - 0.5 + 1) / 3 = 0.5 before and did not fire at all.
+            var parser = MissedLiteralParser();
+
+            var result = ParseOne(parser, "time target");
+
+            Assert.AreEqual("time_to_target", result.Command.Intent);
+            Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
+            Assert.GreaterOrEqual(
+                result.Command.Score,
+                0.6f,
+                "the whole point is that it now clears the default minScore"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_SlotStillExtracted()
+        {
+            // The drop must not cost the argument as well as the score. "decelerate by
+            // {burn_level}" heard as "decelerate hard burn": (1 + 0 + 1) / 3 = 0.667 with
+            // burn_level still filled, where it scored (1 - 0.5 + 1) / 3 = 0.5 before.
+            var parser = MissedLiteralParser();
+
+            var result = ParseOne(parser, "decelerate hard burn");
+
+            Assert.AreEqual("decelerate_by", result.Command.Intent);
+            Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
+            Assert.AreEqual("hard burn", result.Command.GetSlot("burn_level"));
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_TwoElementPattern_StillRejected()
+        {
+            // Deliberately preserved, not an oversight: "cease fire" heard as "fire" scores
+            // (0 + 1) / 2 = 0.5 — half its evidence — and stays under the gate. It was 0.25.
+            // Parse itself applies no threshold, so the command IS returned here; the
+            // recogniser-level counterpart proves it does not fire.
+            var parser = MissedLiteralParser();
+
+            var result = ParseOne(parser, "fire");
+
+            Assert.AreEqual("cease_fire", result.Command.Intent);
+            Assert.AreEqual(0.5f, result.Command.Score, 0.001f);
+            Assert.Less(result.Command.Score, 0.6f, "half the evidence must not clear minScore");
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_LongPattern_CostIsProportional()
+        {
+            // The cost stays length-proportional — reduced by a third, not abolished
+            // (1.5/N to 1/N; design fork F1).
+            // Seven elements with "target" dropped: (1 + 1 + 0 + 1 + 1 + 1 + 1) / 7 = 0.857,
+            // up from 5.5 / 7 = 0.786. The same single drop that a 3-element pattern feels as
+            // 0.333 costs this one 0.143.
+            var parser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one", "alpha three" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[]
+                            {
+                                "launch",
+                                "{weapon}",
+                                "target",
+                                "{target}",
+                                "on",
+                                "my",
+                                "mark",
+                            },
+                        }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "launch missiles hotel one on my mark");
+
+            Assert.AreEqual(6f / 7f, result.Command.Score, 0.001f);
+            Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
+            Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_BoundaryCase_ExactlySixTenths()
+        {
+            // The accepted consequence, ratified at G1: two drops on a five-element pattern
+            // land on (1 + 0 + 0 + 1 + 1) / 5 = 0.60 exactly — the gate value itself — where
+            // they scored (1 - 0.5 - 0.5 + 1 + 1) / 5 = 0.40 before. The gate stays >=, so
+            // this fires. 3f/5f is bit-identical to the 0.6f the gate holds, so this is a real
+            // equality and not a tolerance artifact; the recogniser-level counterpart is what
+            // proves the gate actually admits it.
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_burn",
+                        new[] { new[] { "set", "burn", "to", "{burn_level}", "now" } }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "set hard burn now");
+
+            Assert.AreEqual(3f / 5f, result.Command.Score, 0.001f);
+            Assert.AreEqual(
+                "hard burn",
+                result.Command.GetSlot("burn_level"),
+                "landing on the boundary is only acceptable because every argument is present "
+                    + "— the recogniser-level counterpart is what shows it then fires"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // --- Admission: more evidence for than against (issue #65, DR-7) ---
+        //
+        // Zeroing the miss penalty removed a filter the penalty was enforcing by accident —
+        // though a weaker one than DR-7: at -0.5 the score sank to <= 0 only once misses
+        // reached TWICE the matches, where DR-7 refuses at more misses than matches. The band
+        // between is refused deliberately; there the old model was incoherent, since ADDING
+        // debris to an utterance could raise a real command's score and flip it to firing.
+        //
+        // The first three tests pin the harms the review cycle reproduced when DR-7 was
+        // briefly absent, the fourth pins its optional-element clause, and the last is a
+        // §5.1 consequence rather than an admission one. None is hypothetical: every one was
+        // measured against the real parser at both revisions before being written.
+
+        [Test]
+        public void Admission_FragmentCannotPreEmptRoundOne_SkippedWordChargeSurvives()
+        {
+            // The sharpest harm: a fragment that wins round 1 on EARLIEST START — which
+            // IsBetterCandidate ranks above score — consumes the leading tokens, which moves
+            // the origin issue #31 charges skipped words from. The genuine command then looks
+            // like it started clean and scores a full 1.0.
+            //
+            // "alpha one" is a target value, so `approach target {target}` matches it with
+            // 1 of 3 required elements (2 missed) and no longer sinks below zero on its own.
+            // Under DR-7 it is refused admission, so "alpha one" stays chargeable preamble and
+            // `weapons mode` scores 2 / (2 + 2) = 0.5 — under the gate, exactly as #31 intends.
+            // Without DR-7 this fired mode_weapons at 1.00.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("target", new[] { "alpha one", "hotel one" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "approach_target",
+                        new[] { new[] { "approach", "target", "{target}" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "mode_weapons",
+                        new[] { new[] { "weapons", "mode" } }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "alpha one weapons mode");
+
+            Assert.AreEqual("mode_weapons", result.Command.Intent);
+            Assert.AreEqual(0.5f, result.Command.Score, 0.001f);
+            Assert.Less(
+                result.Command.Score,
+                0.6f,
+                "the skipped-word charge must survive — a fragment absorbing the preamble "
+                    + "would hand this a clean 1.0 and fire a command nobody asked for"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Admission_FragmentCannotEvictARealCommandFromTheResultBuffer()
+        {
+            // The result buffer holds one slot per registered command and extraction stops
+            // silently when it fills, so a fragment that takes a slot costs a real command.
+            // Two commands, two slots: without DR-7 the leading "hard burn" fragment took the
+            // first and `fire` — spoken and perfectly matched — was never stored.
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_burn",
+                        new[] { new[] { "set", "burn", "to", "{burn_level}" } }
+                    ),
+                    new VoxrCommandDefinition("fire", new[] { new[] { "fire" } }),
+                }
+            );
+
+            var results = parser.Parse("hard burn set burn to coast fire");
+
+            Assert.AreEqual(2, results.Length, "both spoken commands must survive extraction");
+            Assert.AreEqual("set_burn", results[0].Command.Intent);
+            Assert.AreEqual("coast", results[0].Command.GetSlot("burn_level"));
+            Assert.AreEqual(
+                "fire",
+                results[1].Command.Intent,
+                "the second command must not be evicted by a leading fragment"
+            );
+            Assert.AreEqual(1f, results[1].Command.Score, 0.001f);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Admission_FragmentDoesNotBecomeAPartialMatchCandidate()
+        {
+            // The recogniser's partial-match branch is gated on Score > 0f, not on minScore,
+            // so anything admitted here can arm a pending slot-fill and cancel one already in
+            // flight. "close in" matches 2 of 5 required elements and misses 3, so DR-7 keeps
+            // it out of the candidate set entirely and the question never arises.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("target", new[] { "alpha one", "hotel one" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "approach_target",
+                        new[] { new[] { "close", "in", "on", "target", "{target}" } }
+                    ),
+                }
+            );
+
+            Assert.AreEqual(
+                0,
+                parser.Parse("close in").Length,
+                "a fragment missing more than it matched is not a candidate at all"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Admission_OptionalElementsCountTowardNeitherSide()
+        {
+            // DR-7's second clause, which the three harm tests above cannot reach because
+            // their fixtures are optional-free. Both halves are pinned here, and they fail in
+            // opposite directions, so neither can be satisfied by accident.
+            //
+            // A matched optional is NOT evidence FOR. "alpha one two" fills both optional
+            // slots and matches one required literal against two missed, so DR-7 refuses it —
+            // even though the score would be (1 + 1 + 1 + 0 + 0) / 5 = 0.60, exactly the
+            // default gate. This is the rule's sharpest edge: it can refuse a candidate the
+            // score would have admitted. It needs more than 2.0 of matched-optional credit to
+            // bite, which no pattern in this package carries, but the behaviour is deliberate
+            // and belongs on the record rather than discovered later.
+            var matchedOptionals = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("q1", new[] { "one", "two" }),
+                    new VoxrSlotDefinition("q2", new[] { "one", "two" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "alpha_cmd",
+                        new[] { new[] { "alpha", "{?q1}", "{?q2}", "bravo", "charlie" } }
+                    ),
+                }
+            );
+
+            Assert.AreEqual(
+                0,
+                matchedOptionals.Parse("alpha one two").Length,
+                "filling optionals is not evidence that the required elements were spoken"
+            );
+
+            // An omitted optional is NOT evidence AGAINST. "launch missiles" matches "launch"
+            // and {weapon} and misses "target" and {target} — two against two, which DR-7
+            // admits — and the unspoken {?quantity} must not tip that to three. The score is
+            // (1 + 1 + 0 - 1) / 4 = 0.25, the optional leaving both sides of the ratio.
+            var omittedOptional = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("quantity", new[] { "all", "one" }),
+                    new VoxrSlotDefinition("weapon", new[] { "missiles" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
+                        }
+                    ),
+                }
+            );
+
+            var result = ParseOne(omittedOptional, "launch missiles");
+            Assert.AreEqual(0.25f, result.Command.Score, 0.001f);
+            Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_DroppedDiscriminator_FiresTheFirstRegisteredSibling()
+        {
+            // The documented price of §5.1, found by the Phase 4 ablation and pinned here so
+            // it is a known tested consequence rather than a surprise.
+            //
+            // Two siblings differing only in their last word — the shipped demo grammar's
+            // shape (DemoGrammar.cs) — and the speaker says "switch to navigation" with
+            // "navigation" dropped. The surviving evidence fits BOTH at (1 + 1 + 0) / 3 =
+            // 0.667, so they tie on score, on consumed span and on literal count, and
+            // registration order settles it: mode_weapons wins. Before §5.1 this scored 0.50,
+            // fell under the default gate, and nothing fired at all.
+            //
+            // So the feature turns silence into a coin flip here. That is not a defect in the
+            // change — the dropped word IS the discriminator, so no scorer can recover the
+            // intent, and §5.1's whole premise is that a 3-element pattern missing one word
+            // should clear the gate. It is the honest edge of that premise.
+            //
+            // Distinct from issue #70, which closed this shape at the EAGER gate: there the
+            // speaker may still be mid-utterance and a tail rule is available. Here the
+            // transcript is final, nothing more is coming, and no tail rule applies.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "mode_weapons",
+                        new[] { new[] { "switch", "to", "weapons" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "mode_navigation",
+                        new[] { new[] { "switch", "to", "navigation" } }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "switch to");
+
+            Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
+            Assert.GreaterOrEqual(
+                result.Command.Score,
+                0.6f,
+                "this is the point: it now clears the default gate, where it did not before"
+            );
+            Assert.AreEqual(
+                "mode_weapons",
+                result.Command.Intent,
+                "the tie falls to registration order, so the FIRST sibling wins regardless of "
+                    + "which one the speaker meant"
+            );
             LogAssert.NoUnexpectedReceived();
         }
     }

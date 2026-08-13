@@ -674,6 +674,61 @@ namespace VoXR.Tests.Runtime
                 "Should match pattern index 0");
         }
 
+        // -------- Admission and the partial path (issue #65, DR-7) --------
+
+        [Test]
+        public void PartialMatch_SparseFragment_DoesNotArmPending()
+        {
+            // The partial path is gated on `Score > 0f`, not on minScore — so it is the one
+            // consumer keyed directly to the floor issue #65 §5.1 moved candidates across.
+            // Zeroing the miss penalty put fragments over that floor, and each one arriving
+            // here arms a slot-fill prompt and cancels any pending already in flight. DR-7 is
+            // what keeps them out, and nothing else in the suite exercises this path.
+            //
+            // Seven required elements. "set burn now" matches three (set, burn, now) and
+            // misses four (the, level, to, and the {burn_level} slot), so DR-7 refuses it.
+            // Without the rule it scores (1 + 0 + 1 + 0 + 0 - 1 + 1) / 7 = 0.286 — under
+            // minScore, above zero, with an unfilled required slot: precisely the shape that
+            // enters pending.
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_burn",
+                        new[]
+                        {
+                            new[] { "set", "the", "burn", "level", "to", "{burn_level}", "now" },
+                        },
+                        allowPartialMatch: true
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+
+            int pendingCount = 0;
+            string unrecognised = null;
+            _recogniser.OnCommandPending += _ => pendingCount++;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+
+            _recogniser.InjectText("set burn now");
+
+            Assert.AreEqual(0, pendingCount, "a fragment must not arm a slot-fill prompt");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+            Assert.AreEqual("set burn now", unrecognised);
+
+            // Control, so the refusal above cannot be a mis-wired fixture: one more matched
+            // literal and the same missed slot gives four matched against three missed, which
+            // DR-7 admits, at (4 - 1) / 7 = 0.429 — still under minScore, so it enters pending
+            // exactly as the partial path intends.
+            _recogniser.InjectText("set the burn now");
+
+            Assert.AreEqual(1, pendingCount, "a candidate with more evidence than gaps still arms");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+        }
+
         // -------- Helpers --------
 
         void ForceTimeoutNow()
