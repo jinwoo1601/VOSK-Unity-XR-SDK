@@ -107,6 +107,122 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void PartialMatch_AboveGateButIncomplete_EntersPendingInsteadOfFiring()
+        {
+            // Issue #73's routing half. The pending path is entered from BELOW minScore, so a
+            // slot-missing candidate that cleared the gate never reached it — allowPartialMatch
+            // was silently inapplicable to exactly the commands that scored well enough to fire
+            // incomplete. This one scores (1 + 1 + 1 + 1 - 1) / 5 = 0.60, right on the gate.
+            _recogniser.Configure(
+                new[]
+                {
+                    new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                    new VoxrSlotDefinition("quantity", new[] { "all", "one", "two" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
+                        },
+                        allowPartialMatch: true
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+
+            VoxrCommand? pending = null;
+            _recogniser.OnCommandPending += cmd => pending = cmd;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            _recogniser.InjectText("launch all missiles target");
+
+            Assert.IsFalse(
+                recognised.HasValue,
+                "an incomplete command must not fire above the gate"
+            );
+            Assert.IsTrue(
+                pending.HasValue,
+                "it goes to slot-fill, which is where it always belonged"
+            );
+            Assert.AreEqual("missiles", pending.Value.GetSlot("weapon"));
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsTrue(recognised.HasValue, "and the follow-up completes it");
+            Assert.AreEqual("hotel one", recognised.Value.GetSlot("target"));
+        }
+
+        [Test]
+        public void IncompleteNewCommand_DoesNotCancelALivePending()
+        {
+            // The Step 4 half of #73, and the reason the completeness term has to be read twice.
+            // hasCompleteNewCommand cancels any live pending command outright. Once an incomplete
+            // command stops firing, letting it still set that flag would take the user's
+            // half-finished command away and put nothing at all in its place.
+            //
+            // set_burn deliberately does NOT opt into partial matching, so the incomplete second
+            // utterance is rejected rather than entering pending itself — which is what isolates
+            // this to the cancellation and keeps it from passing for the wrong reason.
+            _recogniser.Configure(
+                new[]
+                {
+                    new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                    new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[] { new[] { "launch", "{weapon}", "target", "{target}" } },
+                        allowPartialMatch: true
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_burn",
+                        new[] { new[] { "set", "burn", "to", "{burn_level}", "now" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+
+            _recogniser.InjectText("launch missiles target");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "precondition: a pending command is live");
+
+            int cancelledCount = 0;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandCancelled += _ => cancelledCount++;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            // Scores (1 + 1 + 1 - 1 + 1) / 5 = 0.60 with {burn_level} stranded.
+            _recogniser.InjectText("set burn to now");
+
+            Assert.IsFalse(recognised.HasValue, "the incomplete command must not fire");
+            Assert.AreEqual(
+                0,
+                cancelledCount,
+                "and must not evict a pending command it cannot replace"
+            );
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+
+            VoxrCommand? confirmed = null;
+            _recogniser.OnCommandConfirmed += cmd => confirmed = cmd;
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsTrue(confirmed.HasValue, "the pending command is still there to be completed");
+            Assert.AreEqual("hotel one", confirmed.Value.GetSlot("target"));
+        }
+
+        [Test]
         public void PartialMatch_AllSlotsFilled_FiresNormally()
         {
             ConfigureSync(allowPartial: true);

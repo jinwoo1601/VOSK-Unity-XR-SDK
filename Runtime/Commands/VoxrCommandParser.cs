@@ -54,14 +54,19 @@ namespace VoXR.Commands
         // RequiredSlotMissPenalty stays at -1.0: a missing required SLOT means the command's
         // argument is absent, which is materially different from a dropped function word.
         //
-        // That -1.0 is the ONLY thing holding such a candidate down. Nothing routes it
-        // anywhere on the strength of the missing slot: the partial/pending branch is reached
-        // by scoring BELOW minScore, and only for a command that opted into allowPartialMatch
-        // (off by default). Once a slot-missing candidate clears the gate it simply fires with
-        // the argument absent — already true on main at five elements, and this change lifts
-        // one further band (eight elements, one dropped literal alongside the missed slot)
-        // over it. TryEagerCommit refuses that shape (issue #66); the ordinary flush path has
-        // no such condition.
+        // That -1.0 is no longer the only thing holding such a candidate down. It used to be:
+        // the partial/pending branch is reached by scoring BELOW minScore and only for a command
+        // that opted into allowPartialMatch (off by default), so once a slot-missing candidate
+        // cleared the gate it simply fired with the argument absent — true on main at five
+        // elements, and this change lifted one further band (eight elements, one dropped literal
+        // alongside the missed slot) over it. TryEagerCommit refused that shape (issue #66) but
+        // the ordinary flush path had no such condition, which is issue #73.
+        //
+        // The flush path now tests completeness directly, in the recogniser and independent of
+        // score (VoxrCommandRecogniser.IsIncomplete). So the arithmetic here no longer has to
+        // carry a correctness guarantee it was never able to make: -1.0 stays because a missing
+        // argument IS weaker evidence and should score lower, not because the score is what
+        // stops the command firing.
         const float RequiredLiteralMissPenalty = 0f;
 
         // Weight added to the score denominator per in-grammar word the sliding start skips
@@ -870,8 +875,16 @@ namespace VoXR.Commands
 
             // Whether any REQUIRED slot in the pattern matched nothing — the command is
             // therefore missing an argument. Drives the eager gate's completeness condition
-            // (issue #66); ParseInternal ignores it, because a partial match is still a
-            // legitimate parse result there (it becomes a pending command).
+            // (issue #66).
+            //
+            // ParseInternal still ignores it, but NOT because a slot-missing candidate is
+            // routed anywhere from here — an earlier version of this comment claimed that and
+            // was wrong (issue #73). It ignores it because Parse is the reporting layer and
+            // applies no threshold of its own: dropping such candidates here would also delete
+            // the only input the allowPartialMatch/pending path has, since that path is fed
+            // precisely by slot-missing candidates scoring below minScore. The flush path's
+            // completeness condition therefore lives in the recogniser, which is where the
+            // gate it belongs beside lives.
             public bool MissedRequiredSlot;
 
             // Whether any REQUIRED element sits after the last element that actually
@@ -883,7 +896,14 @@ namespace VoXR.Commands
             // ConsumedEndIdx never reaches, so the whole-buffer check passes more readily
             // still while the pattern is even further from complete. Drives the eager gate's second
             // completeness condition (issue #70); ParseInternal ignores it for the same
-            // reason it ignores MissedRequiredSlot.
+            // reporting-layer reason it ignores MissedRequiredSlot.
+            //
+            // Unlike that one, this flag has no flush-path counterpart, and deliberately so.
+            // At the eager gate a required tail means the speaker may still be mid-utterance,
+            // so refusing costs only latency. On the flush path the transcript is final: the
+            // word is simply gone, and refusing means firing nothing — which is the class the
+            // reduced literal miss cost (issue #65 §5.1) exists to rescue. That case is the
+            // dropped discriminator, recorded in KNOWN_LIMITATIONS.md rather than guarded here.
             public bool HasUnmatchedRequiredTail;
 
             // Where the match stopped, including any [unk] skipped ahead of a trailing
@@ -1308,6 +1328,43 @@ namespace VoXR.Commands
         static bool IsOptionalLiteral(string element)
         {
             return element.Length >= 2 && element[0] == '?' && element[1] != '{';
+        }
+
+        // Whether a parsed command left any REQUIRED slot of its matched pattern unfilled —
+        // i.e. the command's argument is absent (issue #73). Answered from the finished
+        // VoxrCommand rather than from MatchResult.MissedRequiredSlot because the two flush-path
+        // consumers that need it (the recogniser's gate, the batch runner's) only ever see the
+        // former; MatchResult is a parse-loop internal that ParseInternal discards field by
+        // field at :618-627. The two agree by construction: a required slot that matched nothing
+        // is exactly a required slot name the command carries no value for.
+        //
+        // Optional slots are excluded — an omitted optional is not a missing argument, which is
+        // the same line #66 draws at the eager gate.
+        //
+        // Returns false when the pattern index is out of range, matching ComputeUnfilledSlots:
+        // with no pattern to read we cannot tell, and the conservative answer is to leave the
+        // caller's existing behaviour alone rather than refuse a command on a guess.
+        internal static bool HasUnfilledRequiredSlot(VoxrCommand cmd, VoxrCommandDefinition def)
+        {
+            // Patterns is null only on a default(VoxrCommandDefinition) — the struct's zero
+            // value, which a failed lookup yields. Checked first so the length test below cannot
+            // dereference it.
+            if (
+                def.Patterns == null
+                || cmd.MatchedPatternIndex < 0
+                || cmd.MatchedPatternIndex >= def.Patterns.Length
+            )
+                return false;
+
+            var pattern = def.Patterns[cmd.MatchedPatternIndex];
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                string slotName = ExtractSlotName(pattern[i]);
+                if (slotName != null && !IsOptionalSlot(pattern[i]) && !cmd.HasSlot(slotName))
+                    return true;
+            }
+
+            return false;
         }
 
         internal float ScoreFollowUp(string intent, int patternIdx,
