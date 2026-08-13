@@ -415,7 +415,7 @@ namespace VoXR.Tests.Runtime
         {
             // Issue #70 at the level where its harm actually shows. Two commands share a
             // three-word prefix and diverge only on the last word, so the buffer "set auto
-            // pilot" matches both at (1 + 1 + 1 - 0.5) / 4 = 0.625 — over the default
+            // pilot" matches both at (1 + 1 + 1 + 0) / 4 = 0.75 — over the default
             // minScore, with the match reaching the buffer end because a missed word consumes
             // no tokens. Before the tail condition this eager-fired autopilot_on on
             // registration order alone, while the speaker was still saying "off": not an early

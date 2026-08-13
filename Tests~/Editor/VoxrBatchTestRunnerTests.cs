@@ -190,7 +190,9 @@ namespace VoXR.Tests.Editor
         public void Run_BelowMinScore_RejectedCorrectly()
         {
             // "cease xyz" against pattern "cease fire" — one hit, one miss.
-            // Normalized score = (1.0 + -0.5) / 2 = 0.25, which is below default 0.6.
+            // Normalized score = (1.0 + 0) / 2 = 0.50, which is below default 0.6. The miss
+            // withholds its credit but is not also penalized (issue #65 §5.1); at two
+            // elements that is still only half the evidence, so this stays rejected.
             var runner = CreateRunner();
             var result = runner.Run(new VoxrTestCase
             {

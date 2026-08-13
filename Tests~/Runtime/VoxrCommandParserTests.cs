@@ -645,11 +645,31 @@ namespace VoXR.Tests.Runtime
             // elevation has maxWords=2; input has 3 digit words after "mark"
             var parser = CreateNumericParser();
 
-            var result = ParseOne(parser, "orient to heading five mark one two three");
+            var results = parser.Parse("orient to heading five mark one two three");
 
-            Assert.AreEqual("five", result.Command.GetSlot("heading"));
+            Assert.AreEqual("set_heading", results[0].Command.Intent);
+            Assert.AreEqual("five", results[0].Command.GetSlot("heading"));
             // elevation should consume only 2 of the 3 digits
-            Assert.AreEqual("one two", result.Command.GetSlot("elevation"));
+            Assert.AreEqual("one two", results[0].Command.GetSlot("elevation"));
+
+            // ...and this pins where the third digit goes, which the test used to leave
+            // unstated. Capping elevation strands "three" at index 7, and sequential
+            // extraction gets a second round at it: "orient to heading {heading}" misses all
+            // three literals and then matches {heading} against "three", scoring
+            // (0 + 0 + 0 + 1) / 4 = 0.25. Before issue #65 §5.1 the three misses dragged that
+            // to (-1.5 + 1) / 4 = -0.125 and the parse loop's `<= 0f` floor discarded it, so
+            // the digit appeared to vanish. It never did — the floor was an artifact of
+            // negative penalties (Amendment A1 ruling 2), and 0.25 is far below the default
+            // minScore of 0.6, so nothing reaches a user that did not reach one before.
+            Assert.AreEqual(
+                2,
+                results.Length,
+                "the capped-off digit resurfaces as its own candidate"
+            );
+            Assert.AreEqual("set_heading", results[1].Command.Intent);
+            Assert.AreEqual("three", results[1].Command.GetSlot("heading"));
+            Assert.AreEqual(0.25f, results[1].Command.Score, 0.001f);
+            Assert.Less(results[1].Command.Score, 0.6f, "and stays well under the gate");
         }
 
         [Test]
@@ -1457,8 +1477,10 @@ namespace VoXR.Tests.Runtime
         public void OptionalSlotAfterTheLiteral_AlsoWarns()
         {
             // The stranded value need not be required to be lost. For this grammar, "orient
-            // mark one five" with "mark" dropped scores (1 - 0.5 + 1) / 3 = 0.5 against the
+            // mark one five" with "mark" dropped scores (1 + 0 + 1) / 3 = 0.667 against the
             // bare pattern's 1.0, so the elevation goes the same way the burn level does.
+            // Issue #65 §5.1 raised that 0.5 to 0.667 and it changes nothing here: the hazard
+            // is that nothing normalized to 1.0 can be beaten, which is symptom 2's territory.
             LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"mark\""));
 
             var parser = new VoxrCommandParser(
@@ -1511,7 +1533,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("one five", spoken.Command.GetSlot("elevation"));
 
             // The point of the change: with "mark" gone the elevation survives. Under the
-            // required form this scored 3.5/5 = 0.7, lost to the bare pattern's 1.0, and the
+            // required form this scored 4/5 = 0.8, lost to the bare pattern's 1.0, and the
             // elevation was discarded.
             var elided = ParseOne(parser, "orient heading two seven zero one five");
             Assert.AreEqual(1, elided.Command.MatchedPatternIndex);
@@ -1535,7 +1557,7 @@ namespace VoXR.Tests.Runtime
             // literal…"): an optional literal no longer anchors the slot behind it, so a
             // spurious fourth digit past the maxed-out heading is absorbed as an elevation
             // nobody marked, and wins on span at 4/4 = 1.0. The required form scored
-            // 3.5/5 = 0.7 here and correctly dropped the stray token. Pinned so the tradeoff
+            // 4/5 = 0.8 here and correctly dropped the stray token. Pinned so the tradeoff
             // is a known, tested consequence rather than a surprise.
             var parser = HeadingParser();
 
@@ -1597,13 +1619,33 @@ namespace VoXR.Tests.Runtime
                 }
             );
 
-            var result = ParseOne(parser, "decelerate hard burn");
+            var results = parser.Parse("decelerate hard burn");
             Assert.AreEqual(
                 "decelerate",
-                result.Command.Intent,
+                results[0].Command.Intent,
                 "the bare intent wins and the spoken burn level is stranded"
             );
-            Assert.IsFalse(result.Command.HasSlot("burn_level"));
+            Assert.IsFalse(results[0].Command.HasSlot("burn_level"));
+
+            // Round 1 is the hazard and is untouched: bare `decelerate` scores 1.0 against
+            // `decelerate by {burn_level}`'s 2/3 = 0.667, so it still wins and the burn level
+            // is still stranded. Issue #65 §5.1 raised that 0.5 to 0.667 and did NOT close
+            // this — symptom 2 is backlog item 2's job, and THIS assertion is the one that
+            // will change when it lands, in round 1 rather than round 2.
+            //
+            // What §5.1 does change is that the stranded value stops disappearing silently.
+            // Extraction resumes at "hard burn", where `decelerate by {burn_level}` misses two
+            // literals and matches the slot for (0 + 0 + 1) / 3 = 0.333. That was exactly 0.0
+            // before — the two -0.5 penalties cancelled the slot's credit precisely — and the
+            // parse loop's `<= 0f` floor dropped it. Accepted and recorded as Amendment A1
+            // ruling 2: it is a third of the default minScore, so no user sees it, and the
+            // floor was only ever meaningful because penalties drove scores negative.
+            Assert.AreEqual(2, results.Length, "the stranded burn level resurfaces as a candidate");
+            Assert.AreEqual("decelerate_by", results[1].Command.Intent);
+            Assert.AreEqual("hard burn", results[1].Command.GetSlot("burn_level"));
+            Assert.AreEqual(1f / 3f, results[1].Command.Score, 0.001f);
+            Assert.Less(results[1].Command.Score, 0.6f, "and is rejected by the gate");
+
             LogAssert.NoUnexpectedReceived();
         }
 
@@ -1790,6 +1832,59 @@ namespace VoXR.Tests.Runtime
                 "hard burn",
                 result.Command.GetSlot("burn_level"),
                 "firing on the boundary is only right because every argument is present"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_DroppedDiscriminator_FiresTheFirstRegisteredSibling()
+        {
+            // The documented price of §5.1, found by the Phase 4 ablation and pinned here so
+            // it is a known tested consequence rather than a surprise.
+            //
+            // Two siblings differing only in their last word — the shipped demo grammar's
+            // shape (DemoGrammar.cs) — and the speaker says "switch to navigation" with
+            // "navigation" dropped. The surviving evidence fits BOTH at (1 + 1 + 0) / 3 =
+            // 0.667, so they tie on score, on consumed span and on literal count, and
+            // registration order settles it: mode_weapons wins. Before §5.1 this scored 0.50,
+            // fell under the default gate, and nothing fired at all.
+            //
+            // So the feature turns silence into a coin flip here. That is not a defect in the
+            // change — the dropped word IS the discriminator, so no scorer can recover the
+            // intent, and §5.1's whole premise is that a 3-element pattern missing one word
+            // should clear the gate. It is the honest edge of that premise.
+            //
+            // Distinct from issue #70, which closed this shape at the EAGER gate: there the
+            // speaker may still be mid-utterance and a tail rule is available. Here the
+            // transcript is final, nothing more is coming, and no tail rule applies.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "mode_weapons",
+                        new[] { new[] { "switch", "to", "weapons" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "mode_navigation",
+                        new[] { new[] { "switch", "to", "navigation" } }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "switch to");
+
+            Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
+            Assert.GreaterOrEqual(
+                result.Command.Score,
+                0.6f,
+                "this is the point: it now clears the default gate, where it did not before"
+            );
+            Assert.AreEqual(
+                "mode_weapons",
+                result.Command.Intent,
+                "the tie falls to registration order, so the FIRST sibling wins regardless of "
+                    + "which one the speaker meant"
             );
             LogAssert.NoUnexpectedReceived();
         }

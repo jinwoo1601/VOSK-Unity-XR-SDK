@@ -798,7 +798,7 @@ namespace VoXR.Tests.Runtime
         public void TryEagerCommit_MissedRequiredLiteral_AllSlotsFilled_StillCommits()
         {
             // The "target" literal is dropped but every slot is filled, so the command is
-            // fully determined — score (1 + 1 + 1 - 0.5 + 1) / 5 = 0.70. Neither completeness
+            // fully determined — score (1 + 1 + 1 + 0 + 1) / 5 = 0.80. Neither completeness
             // condition may catch this: the slot condition is scoped to slots, and the miss
             // is MEDIAL, so {target} matches afterwards and the tail condition (issue #70)
             // clears too.
@@ -875,13 +875,17 @@ namespace VoXR.Tests.Runtime
             // "switch to" is two words into "switch to navigation". The trailing literal
             // matched nothing, and a miss consumes no token — so EndIdx still reaches the end
             // of the buffer and the whole-buffer condition cannot catch it, exactly as a
-            // missed slot evades it (issue #66). Both patterns score (1 + 1 - 0.5) / 3 = 0.50
+            // missed slot evades it (issue #66). Both patterns score (1 + 1 + 0) / 3 = 0.667
             // and tie, so registration order would decide: the speaker says "navigation" and
             // mode_weapons fires. The wrong command, not merely an early one.
             //
-            // minScore is lowered to 0.4 deliberately. At the 0.6 default this particular
-            // buffer is caught by the score gate today, which would make the test green
-            // without the fix; below the gate only the tail condition stands in the way.
+            // minScore is lowered to 0.4 for a reason that has since expired. When this test
+            // was written the buffer scored 0.50 and the 0.6 default caught it by arithmetic,
+            // which would have made the test green without the fix; dropping below the gate
+            // left only the tail condition in the way. Issue #65 §5.1 then raised it to 0.667
+            // — over the default — so the tail condition is now load-bearing at any threshold
+            // and the sibling test below pins exactly that. The 0.4 is kept because it still
+            // isolates the condition under test rather than sharing the work with the gate.
             Assert.AreEqual(
                 EagerCommitVerdict.None,
                 ModeSwitchParser().TryEagerCommit(Tok("switch to"), null, 0.4f, 0.4f),
@@ -893,8 +897,10 @@ namespace VoXR.Tests.Runtime
         public void TryEagerCommit_UnmatchedTerminalLiteral_LiveAtDefaultThreshold()
         {
             // The same hole at the DEFAULT minScore, so this is not a low-threshold curiosity.
-            // Four required literals with the last unspoken score (1 + 1 + 1 - 0.5) / 4 =
-            // 0.625, over the 0.6 default, with every other eager condition satisfied.
+            // Four required literals with the last unspoken score (1 + 1 + 1 + 0) / 4 = 0.75,
+            // over the 0.6 default, with every other eager condition satisfied. This was
+            // 0.625 before issue #65 §5.1 zeroed the miss penalty — already over the gate
+            // then, which is why #70 was a live bug rather than a consequence of §5.1.
             var parser = new VoxrCommandParser(
                 Slots(),
                 Commands(

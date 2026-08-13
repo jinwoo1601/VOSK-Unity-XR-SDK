@@ -32,7 +32,29 @@ namespace VoXR.Commands
         const float MatchScore = 1.0f;
         const float OptionalLiteralScore = 0.5f;
         const float RequiredSlotMissPenalty = -1.0f;
-        const float RequiredLiteralMissPenalty = -0.5f;
+
+        // Deliberately zero (issue #65 §5.1), and kept as a named constant rather than
+        // deleted so this set still reads as the whole scoring model in one place.
+        //
+        // A missed required literal is already charged once: it takes its place in the
+        // denominator (see the unconditional credit in TryMatchScored's required-literal
+        // branch) while contributing nothing to the numerator. Subtracting a penalty on top
+        // charged it a SECOND time, so one dropped word cost 1.5/N of a ceiling fixed at 1.0
+        // instead of 1/N. Because the cost is a fraction of the pattern's length, that fell
+        // hardest on exactly the short patterns least able to absorb it: "time to target"
+        // heard as "time target" scored 0.50 against a 0.60 gate and did not fire at all,
+        // while a 7-element pattern shrugged off the identical single-word drop at 0.79.
+        // Pattern length, not pattern quality, decided whether a command survived.
+        //
+        // Halved rather than abolished: the cost stays proportional to pattern length, so a
+        // two-element pattern missing half its evidence still scores 1/2 and is still
+        // refused. "cease fire" heard as "fire" is genuinely ambiguous with the `fire`
+        // command and firing it on half its evidence would be a worse failure than silence.
+        //
+        // RequiredSlotMissPenalty stays at -1.0: a missing required SLOT means the command's
+        // argument is absent, which is materially different from a dropped function word and
+        // is already routed to the pending/partial path.
+        const float RequiredLiteralMissPenalty = 0f;
 
         // Weight added to the score denominator per in-grammar word the sliding start skips
         // before a match begins (issue #31). At 1.0 the score becomes the fraction of the
@@ -300,10 +322,12 @@ namespace VoXR.Commands
         // A common pattern-set shape that silently throws away a slot value the speaker did
         // say (issue #42): a bare pattern P and a longer pattern that extends it with one or
         // more required literals followed by a slot. Drop such a literal — short function
-        // words are the most dropped tokens in practice — and the longer pattern is charged
-        // RequiredLiteralMissPenalty while P still matches perfectly, so P wins and the spoken
-        // slot content is discarded with nothing to signal it. No penalty tuning reaches this:
-        // P scores a clean 1.0 and nothing normalized to 1.0 can beat it. Marking the literal
+        // words are the most dropped tokens in practice — and the longer pattern loses that
+        // element's credit while still counting it in its denominator, so it drops below the
+        // perfectly-matching P, which wins and the spoken slot content is discarded with
+        // nothing to signal it. Issue #65 §5.1 halved that loss (a drop now costs 1/N rather
+        // than 1.5/N) but cannot close this, and no penalty tuning can: P scores a clean 1.0
+        // and nothing normalized to 1.0 can beat it. Marking the literal
         // optional does — an omitted optional leaves both sides of the ratio, so the longer
         // pattern reaches 1.0 whether or not the literal was spoken and takes the consumed-span
         // tie-break (issue #41) over the bare form.
@@ -1016,6 +1040,10 @@ namespace VoXR.Commands
                     }
                     else
                     {
+                        // Adds nothing: the constant is zero on purpose (see its declaration).
+                        // The whole cost of the miss is the denominator credit taken above,
+                        // which the element keeps whether or not it matched — so the drop
+                        // withholds 1/N rather than being charged twice for 1.5/N.
                         rawScore += RequiredLiteralMissPenalty;
                         requiredAfterLastMatch++;
                     }

@@ -82,8 +82,10 @@ namespace VoXR.Tests.Editor
         public void ScoreRejection_ReasonFormat()
         {
             ConfigureSync();
-            // "launch missiles" partially matches the 5-element pattern with a low score (~0.08).
-            // Default minScore is 0.6.
+            // "launch missiles" partially matches the 5-element pattern: "target" is missed
+            // and {target} is an unfilled required slot, giving (1 + 1 + 0 - 1) / 4 = 0.25.
+            // Default minScore is 0.6, so it stays rejected — the slot miss is what sinks it,
+            // and issue #65 §5.1 left RequiredSlotMissPenalty alone.
             _recogniser.InjectText("launch missiles");
 
             var diag = _recogniser.LastMatchDiagnostics;
