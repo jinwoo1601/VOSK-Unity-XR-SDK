@@ -110,7 +110,6 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("all", result.Command.GetSlot("quantity"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
-            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -1771,6 +1770,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(6f / 7f, result.Command.Score, 0.001f);
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
