@@ -882,5 +882,62 @@ namespace VoXR.Tests.Runtime
                 "firing on the boundary is only right because every argument is present"
             );
         }
+
+        // -------- Flush-path completeness (issue #73) --------
+        //
+        // TryEagerCommit has refused a command with an unfilled required slot since #66. The
+        // ordinary flush path — the one on by default — had no such condition, so a slot-missing
+        // candidate that cleared minScore fired with its argument simply absent.
+
+        [Test]
+        public void SlotMissing_AboveGate_DoesNotFire()
+        {
+            // #73's repro, and the deliberate counterpart to the boundary test above: both land
+            // on exactly 0.60 and both clear the >= gate, so score cannot be what separates them.
+            // "launch all missiles target" matches launch, {?quantity}, {weapon} and target, then
+            // strands {target}: (1 + 1 + 1 + 1 - 1) / 5 = 0.60. Firing it hands the handler a
+            // launch order with nothing to launch at.
+            ConfigureWithSyncDefaults();
+
+            int recognisedCount = 0;
+            string unrecognised = null;
+            _recogniser.OnCommandRecognised += _ => recognisedCount++;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+
+            _recogniser.InjectText("launch all missiles target");
+
+            Assert.AreEqual(
+                0,
+                recognisedCount,
+                "a command missing a required argument must not fire, whatever it scores"
+            );
+            Assert.AreEqual(
+                "launch all missiles target",
+                unrecognised,
+                "and the utterance is reported unrecognised rather than dropped in silence"
+            );
+        }
+
+        [Test]
+        public void SlotMissing_OptionalSlotOmitted_StillFires()
+        {
+            // The over-correction guard, and the line #66 already draws at the eager gate: an
+            // omitted OPTIONAL slot is not an absent argument. "launch missiles target hotel one"
+            // skips {?quantity} and fills every required slot, so it scores 4/4 and must fire.
+            ConfigureWithSyncDefaults();
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("launch missiles target hotel one");
+
+            Assert.IsTrue(received.HasValue, "an omitted optional slot is not a missing argument");
+            Assert.AreEqual("launch_weapon", received.Value.Intent);
+            Assert.AreEqual("hotel one", received.Value.GetSlot("target"));
+            Assert.IsFalse(
+                received.Value.HasSlot("quantity"),
+                "and it really was omitted — this is not passing for the wrong reason"
+            );
+        }
     }
 }

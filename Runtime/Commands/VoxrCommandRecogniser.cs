@@ -604,13 +604,24 @@ namespace VoXR.Commands
 #endif
 
             // ---- Step 4: Determine if any normal result passes standard thresholds ----
+            //
+            // The completeness term (issue #73) has to be here as well as in Step 7, and this
+            // is the read that is easy to miss. This flag decides two things below: whether a
+            // follow-up slot-fill is preempted by the new utterance (Step 5), and whether a
+            // live pending command is cancelled outright (Step 6). A command missing a required
+            // argument no longer fires in Step 7, so letting it set this flag would cancel the
+            // user's pending command in favour of one that then goes nowhere — losing the
+            // half-finished command to an utterance that produces nothing.
             bool hasCompleteNewCommand = false;
             var resultBuf = _parser.ResultBuffer;
             for (int i = 0; i < resultCount; i++)
             {
                 var cmd = resultBuf[i].Command;
-                if (cmd.Score >= minScore &&
-                    (cmd.Confidence < 0f || cmd.Confidence >= minConfidence))
+                if (
+                    cmd.Score >= minScore
+                    && (cmd.Confidence < 0f || cmd.Confidence >= minConfidence)
+                    && !IsIncomplete(cmd)
+                )
                 {
                     hasCompleteNewCommand = true;
                     break;
@@ -664,8 +675,24 @@ namespace VoXR.Commands
             {
                 var cmd = resultBuf[i].Command;
 
-                // Below score threshold — check AllowPartialMatch before rejecting
-                if (cmd.Score < minScore)
+                // Below score threshold, OR missing a required argument — either way this is
+                // not a command to fire. Check AllowPartialMatch before rejecting.
+                //
+                // The completeness half is issue #73 and is deliberately independent of
+                // minScore: a missing argument is a missing argument at any score. Until now
+                // only the arithmetic held these down, and only by coincidence — a five-element
+                // pattern with one missed required slot lands on exactly 0.60 and cleared the
+                // default gate, firing a command whose argument the handler never receives.
+                // TryEagerCommit has refused this shape since #66; this is the same rule on the
+                // path that is actually on by default.
+                //
+                // Routing rather than refusing outright is what makes the two halves one branch:
+                // a command opted into AllowPartialMatch now reaches the pending/slot-fill path
+                // it was always meant to reach, instead of being fired incomplete for the sole
+                // reason that it scored well. With the flag off (the default) it falls through
+                // to the reject below, and the utterance is reported unrecognised.
+                bool incomplete = IsIncomplete(cmd);
+                if (cmd.Score < minScore || incomplete)
                 {
                     if (cmd.Score > 0f &&
                         _setManager.TryLookupCommand(cmd.Intent, out var partialDef) &&
@@ -689,8 +716,16 @@ namespace VoXR.Commands
                     }
 
 #if UNITY_EDITOR
+                    // Report the condition that actually rejected it. An incomplete command can
+                    // sit well above minScore, so reusing the score wording here would print a
+                    // comparison that is plainly false in the session log and the debug window.
                     attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
-                        $"score {cmd.Score:F2} < minScore {minScore:F2}", false));
+                            cmd.Score < minScore
+                                ? $"score {cmd.Score:F2} < minScore {minScore:F2}"
+                                : "required slot unfilled",
+                            false
+                        )
+                    );
 #endif
                     continue;
                 }
@@ -771,6 +806,20 @@ namespace VoXR.Commands
 
             // Clear stale references
             Array.Clear(_acceptedBuf, 0, acceptedCount);
+        }
+
+        // Whether a parsed command is missing one of its own required arguments (issue #73).
+        // The flush path's completeness condition, and the counterpart to the two TryEagerCommit
+        // already enforces (#66, #70).
+        //
+        // An intent with no definition in the active sets is treated as complete: we cannot read
+        // a pattern we do not have, and inventing a refusal there would silence commands for a
+        // reason unrelated to their arguments. In practice the lookup only fails if the active
+        // set changed between the parse and this loop.
+        bool IsIncomplete(VoxrCommand cmd)
+        {
+            return _setManager.TryLookupCommand(cmd.Intent, out var def)
+                && VoxrCommandParser.HasUnfilledRequiredSlot(cmd, def);
         }
 
         // -------- Pending resolution interpreter --------

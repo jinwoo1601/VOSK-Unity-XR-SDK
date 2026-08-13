@@ -14,6 +14,7 @@ namespace VoXR.Testing
     public class VoxrBatchTestRunner
     {
         readonly VoxrCommandParser _parser;
+        readonly Dictionary<string, VoxrCommandDefinition> _defsByIntent;
         readonly float _minScore;
         readonly float _minConfidence;
 
@@ -25,6 +26,7 @@ namespace VoXR.Testing
             if (commands == null) throw new ArgumentNullException(nameof(commands));
 
             _parser = new VoxrCommandParser(slots, commands, skippedWordPenalty);
+            _defsByIntent = IndexByIntent(commands);
             _minScore = minScore;
             _minConfidence = minConfidence;
         }
@@ -59,8 +61,24 @@ namespace VoXR.Testing
             }
 
             _parser = new VoxrCommandParser(slots, commands, skippedWordPenalty);
+            _defsByIntent = IndexByIntent(commands);
             _minScore = minScore;
             _minConfidence = minConfidence;
+        }
+
+        // Mirrors CommandSetManager.BuildLookup — ordinal, last definition wins on a repeated
+        // intent — so the harness resolves an intent to the same definition the recogniser does.
+        static Dictionary<string, VoxrCommandDefinition> IndexByIntent(
+            VoxrCommandDefinition[] commands
+        )
+        {
+            var byIntent = new Dictionary<string, VoxrCommandDefinition>(
+                commands.Length,
+                StringComparer.Ordinal
+            );
+            for (int i = 0; i < commands.Length; i++)
+                byIntent[commands[i].Intent] = commands[i];
+            return byIntent;
         }
 
         public VoxrBatchResults RunAll(VoxrTestCase[] testCases)
@@ -172,6 +190,18 @@ namespace VoXR.Testing
             if (cmd.Score < _minScore)
             {
                 rejectReason = $"score {cmd.Score:F2} < minScore {_minScore:F2}";
+                return false;
+            }
+            // Completeness (issue #73), kept in step with the recogniser's own gate and for the
+            // same reason it is independent of score there. Without it this harness would report
+            // PASS for an utterance the runtime refuses — certifying a grammar against behaviour
+            // the user will never see, on exactly the case the runtime fix exists to catch.
+            if (
+                _defsByIntent.TryGetValue(cmd.Intent, out var def)
+                && VoxrCommandParser.HasUnfilledRequiredSlot(cmd, def)
+            )
+            {
+                rejectReason = "required slot unfilled";
                 return false;
             }
             if (cmd.Confidence >= 0f && cmd.Confidence < _minConfidence)
