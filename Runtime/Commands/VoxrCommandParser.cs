@@ -845,8 +845,11 @@ namespace VoXR.Commands
             // Whether any REQUIRED element sits after the last element that actually
             // matched — i.e. the pattern ran out of buffer still owing words, rather than
             // ending where the buffer ends. Neither index below can express this: a miss
-            // consumes nothing, so a pattern whose trailing elements were never spoken
-            // leaves both of them at the buffer end. Drives the eager gate's second
+            // consumes nothing, so EndIdx stops exactly where a pattern that genuinely
+            // finished there would stop. Trailing [unk] only makes it harder to see, not
+            // easier — the skip before each element carries EndIdx over filler that
+            // ConsumedEndIdx never reaches, so the whole-buffer check passes more readily
+            // still while the pattern is even further from complete. Drives the eager gate's second
             // completeness condition (issue #70); ParseInternal ignores it for the same
             // reason it ignores MissedRequiredSlot.
             public bool HasUnmatchedRequiredTail;
@@ -976,6 +979,11 @@ namespace VoXR.Commands
                         rawScore += RequiredSlotMissPenalty;
                         denominator += MatchScore;
                         missedRequiredSlot = true;
+                        // Currently dominated: missedRequiredSlot refuses an eager commit one
+                        // guard earlier, so this increment can never be the sole cause of a
+                        // refusal. Kept so the field stays true to its name — "any required
+                        // ELEMENT after the last match" — and so the tail condition does not
+                        // quietly depend on the slot guard's existence or its placement.
                         requiredAfterLastMatch++;
                     }
                     // Unmatched optional slot: contributes nothing to score or denominator.

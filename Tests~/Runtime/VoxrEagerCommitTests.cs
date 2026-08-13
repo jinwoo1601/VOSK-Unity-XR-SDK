@@ -811,6 +811,27 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void TryEagerCommit_MedialUnfilledRequiredSlot_ReturnsNone()
+        {
+            // Both refusal pins above miss a TERMINAL slot, which the issue #70 tail condition
+            // also refuses — so neither of them can tell whether this condition still works.
+            // Here {weapon} misses and then "target", {target} and "now" all match, resetting
+            // the tail counter to 0, so the tail condition clears and only this one is left.
+            // Score (1 - 1 + 1 + 1 + 1) / 5 = exactly 0.60 clears the default gate, and EndIdx
+            // reaches the buffer end, so nothing else refuses it either.
+            var parser = new VoxrCommandParser(
+                LaunchSlots(),
+                Commands(Cmd("launch_weapon", P("launch", "{weapon}", "target", "{target}", "now")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("launch target hotel one now"), null, 0.6f, 0.4f),
+                "a MEDIAL missed required slot must still refuse — the tail condition cannot see it"
+            );
+        }
+
+        [Test]
         public void TryEagerCommit_UnfilledRequiredSlot_UnanalysableGrammar_StillReturnsNone()
         {
             // The completeness condition has to sit ABOVE the issue #44 degrade, not in its
@@ -886,6 +907,30 @@ namespace VoXR.Tests.Runtime
                 EagerCommitVerdict.None,
                 parser.TryEagerCommit(Tok("set auto pilot"), null, 0.6f, 0.4f),
                 "0.625 clears minScore, so only the tail condition can refuse this"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_UnmatchedTerminalLiteral_TrailingUnk_ReturnsNone()
+        {
+            // Trailing filler makes the whole-buffer condition pass even harder: the [unk] skip
+            // runs before EVERY element, including the one that then matches nothing, so EndIdx
+            // reaches 4 == tokens.Length while ConsumedEndIdx stays at 3. The score is unchanged
+            // at 0.625, so neither the score gate nor the whole-buffer check can refuse this —
+            // only the tail condition can. This is the shape a final result carrying breath or
+            // filler presents while the last word is still to come.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("autopilot_on", P("set", "auto", "pilot", "on")),
+                    Cmd("autopilot_off", P("set", "auto", "pilot", "off"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("set auto pilot [unk]"), null, 0.6f, 0.4f),
+                "trailing filler must not carry a pattern still owing its last word past the gate"
             );
         }
 
