@@ -410,6 +410,58 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("hotel one", received.Value.GetSlot("target"));
         }
 
+        [Test]
+        public void EagerFlush_PatternStillOwingItsLastWord_FiresTheRightCommand()
+        {
+            // Issue #70 at the level where its harm actually shows. Two commands share a
+            // three-word prefix and diverge only on the last word, so the buffer "set auto
+            // pilot" matches both at (1 + 1 + 1 - 0.5) / 4 = 0.625 — over the default
+            // minScore, with the match reaching the buffer end because a missed word consumes
+            // no tokens. Before the tail condition this eager-fired autopilot_on on
+            // registration order alone, while the speaker was still saying "off": not an early
+            // fire but the WRONG command, and the real one then never arrived.
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "autopilot_on",
+                    new[] { new[] { "set", "auto", "pilot", "on" } }
+                ),
+                new VoxrCommandDefinition(
+                    "autopilot_off",
+                    new[] { new[] { "set", "auto", "pilot", "off" } }
+                ),
+            };
+
+            _recogniser.Configure(new VoxrSlotDefinition[0], commands);
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int fireCount = 0;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                fireCount++;
+                received = cmd;
+            };
+
+            _recogniser.InjectText("set auto pilot");
+            Assert.AreEqual(
+                0,
+                fireCount,
+                "a pattern still owing its last word must not eager-fire — it would fire the "
+                    + "first-registered sibling, not the command being spoken"
+            );
+
+            _recogniser.InjectText("off");
+            Assert.AreEqual(1, fireCount, "the completed command fires once the last word lands");
+            Assert.AreEqual(
+                "autopilot_off",
+                received.Value.Intent,
+                "and it must be the command the speaker actually said"
+            );
+        }
+
         // -------- Eager flush: confirmation, pending, and number sequences (review fix #7) --------
 
         [Test]
