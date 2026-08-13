@@ -110,6 +110,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
             Assert.AreEqual("all", result.Command.GetSlot("quantity"));
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -645,31 +646,11 @@ namespace VoXR.Tests.Runtime
             // elevation has maxWords=2; input has 3 digit words after "mark"
             var parser = CreateNumericParser();
 
-            var results = parser.Parse("orient to heading five mark one two three");
+            var result = ParseOne(parser, "orient to heading five mark one two three");
 
-            Assert.AreEqual("set_heading", results[0].Command.Intent);
-            Assert.AreEqual("five", results[0].Command.GetSlot("heading"));
+            Assert.AreEqual("five", result.Command.GetSlot("heading"));
             // elevation should consume only 2 of the 3 digits
-            Assert.AreEqual("one two", results[0].Command.GetSlot("elevation"));
-
-            // ...and this pins where the third digit goes, which the test used to leave
-            // unstated. Capping elevation strands "three" at index 7, and sequential
-            // extraction gets a second round at it: "orient to heading {heading}" misses all
-            // three literals and then matches {heading} against "three", scoring
-            // (0 + 0 + 0 + 1) / 4 = 0.25. Before issue #65 §5.1 the three misses dragged that
-            // to (-1.5 + 1) / 4 = -0.125 and the parse loop's `<= 0f` floor discarded it, so
-            // the digit appeared to vanish. It never did — the floor was an artifact of
-            // negative penalties (Amendment A1 ruling 2), and 0.25 is far below the default
-            // minScore of 0.6, so nothing reaches a user that did not reach one before.
-            Assert.AreEqual(
-                2,
-                results.Length,
-                "the capped-off digit resurfaces as its own candidate"
-            );
-            Assert.AreEqual("set_heading", results[1].Command.Intent);
-            Assert.AreEqual("three", results[1].Command.GetSlot("heading"));
-            Assert.AreEqual(0.25f, results[1].Command.Score, 0.001f);
-            Assert.Less(results[1].Command.Score, 0.6f, "and stays well under the gate");
+            Assert.AreEqual("one two", result.Command.GetSlot("elevation"));
         }
 
         [Test]
@@ -1619,33 +1600,13 @@ namespace VoXR.Tests.Runtime
                 }
             );
 
-            var results = parser.Parse("decelerate hard burn");
+            var result = ParseOne(parser, "decelerate hard burn");
             Assert.AreEqual(
                 "decelerate",
-                results[0].Command.Intent,
+                result.Command.Intent,
                 "the bare intent wins and the spoken burn level is stranded"
             );
-            Assert.IsFalse(results[0].Command.HasSlot("burn_level"));
-
-            // Round 1 is the hazard and is untouched: bare `decelerate` scores 1.0 against
-            // `decelerate by {burn_level}`'s 2/3 = 0.667, so it still wins and the burn level
-            // is still stranded. Issue #65 §5.1 raised that 0.5 to 0.667 and did NOT close
-            // this — symptom 2 is backlog item 2's job, and THIS assertion is the one that
-            // will change when it lands, in round 1 rather than round 2.
-            //
-            // What §5.1 does change is that the stranded value stops disappearing silently.
-            // Extraction resumes at "hard burn", where `decelerate by {burn_level}` misses two
-            // literals and matches the slot for (0 + 0 + 1) / 3 = 0.333. That was exactly 0.0
-            // before — the two -0.5 penalties cancelled the slot's credit precisely — and the
-            // parse loop's `<= 0f` floor dropped it. Accepted and recorded as Amendment A1
-            // ruling 2: it is a third of the default minScore, so no user sees it, and the
-            // floor was only ever meaningful because penalties drove scores negative.
-            Assert.AreEqual(2, results.Length, "the stranded burn level resurfaces as a candidate");
-            Assert.AreEqual("decelerate_by", results[1].Command.Intent);
-            Assert.AreEqual("hard burn", results[1].Command.GetSlot("burn_level"));
-            Assert.AreEqual(1f / 3f, results[1].Command.Score, 0.001f);
-            Assert.Less(results[1].Command.Score, 0.6f, "and is rejected by the gate");
-
+            Assert.IsFalse(result.Command.HasSlot("burn_level"));
             LogAssert.NoUnexpectedReceived();
         }
 
@@ -1730,6 +1691,11 @@ namespace VoXR.Tests.Runtime
 
             Assert.AreEqual("time_to_target", result.Command.Intent);
             Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
+            Assert.GreaterOrEqual(
+                result.Command.Score,
+                0.6f,
+                "the whole point is that it now clears the default minScore"
+            );
             LogAssert.NoUnexpectedReceived();
         }
 
@@ -1746,6 +1712,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("decelerate_by", result.Command.Intent);
             Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
             Assert.AreEqual("hard burn", result.Command.GetSlot("burn_level"));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -1762,6 +1729,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("cease_fire", result.Command.Intent);
             Assert.AreEqual(0.5f, result.Command.Score, 0.001f);
             Assert.Less(result.Command.Score, 0.6f, "half the evidence must not clear minScore");
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -1832,6 +1800,114 @@ namespace VoXR.Tests.Runtime
                 "hard burn",
                 result.Command.GetSlot("burn_level"),
                 "firing on the boundary is only right because every argument is present"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // --- Admission: more evidence for than against (issue #65, DR-7) ---
+        //
+        // Zeroing the miss penalty removed a filter that penalty was enforcing by accident:
+        // a candidate missing more than it matched used to be dragged to <= 0 and discarded.
+        // DR-7 states that as a rule instead. These three pin the harms the review cycle
+        // reproduced when it was briefly absent — none is hypothetical, and all three were
+        // measured against the real parser at both revisions before being written.
+
+        [Test]
+        public void Admission_FragmentCannotPreEmptRoundOne_SkippedWordChargeSurvives()
+        {
+            // The sharpest harm: a fragment that wins round 1 on EARLIEST START — which
+            // IsBetterCandidate ranks above score — consumes the leading tokens, which moves
+            // the origin issue #31 charges skipped words from. The genuine command then looks
+            // like it started clean and scores a full 1.0.
+            //
+            // "alpha one" is a target value, so `approach target {target}` matches it with
+            // 1 of 3 required elements (2 missed) and no longer sinks below zero on its own.
+            // Under DR-7 it is refused admission, so "alpha one" stays chargeable preamble and
+            // `weapons mode` scores 2 / (2 + 2) = 0.5 — under the gate, exactly as #31 intends.
+            // Without DR-7 this fired mode_weapons at 1.00.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("target", new[] { "alpha one", "hotel one" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "approach_target",
+                        new[] { new[] { "approach", "target", "{target}" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "mode_weapons",
+                        new[] { new[] { "weapons", "mode" } }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "alpha one weapons mode");
+
+            Assert.AreEqual("mode_weapons", result.Command.Intent);
+            Assert.AreEqual(0.5f, result.Command.Score, 0.001f);
+            Assert.Less(
+                result.Command.Score,
+                0.6f,
+                "the skipped-word charge must survive — a fragment absorbing the preamble "
+                    + "would hand this a clean 1.0 and fire a command nobody asked for"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Admission_FragmentCannotEvictARealCommandFromTheResultBuffer()
+        {
+            // The result buffer holds one slot per registered command and extraction stops
+            // silently when it fills, so a fragment that takes a slot costs a real command.
+            // Two commands, two slots: without DR-7 the leading "hard burn" fragment took the
+            // first and `fire` — spoken and perfectly matched — was never stored.
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_burn",
+                        new[] { new[] { "set", "burn", "to", "{burn_level}" } }
+                    ),
+                    new VoxrCommandDefinition("fire", new[] { new[] { "fire" } }),
+                }
+            );
+
+            var results = parser.Parse("hard burn set burn to coast fire");
+
+            Assert.AreEqual(2, results.Length, "both spoken commands must survive extraction");
+            Assert.AreEqual("set_burn", results[0].Command.Intent);
+            Assert.AreEqual("coast", results[0].Command.GetSlot("burn_level"));
+            Assert.AreEqual(
+                "fire",
+                results[1].Command.Intent,
+                "the second command must not be evicted by a leading fragment"
+            );
+            Assert.AreEqual(1f, results[1].Command.Score, 0.001f);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Admission_FragmentDoesNotBecomeAPartialMatchCandidate()
+        {
+            // The recogniser's partial-match branch is gated on Score > 0f, not on minScore,
+            // so anything admitted here can arm a pending slot-fill and cancel one already in
+            // flight. "close in" matches 2 of 5 required elements and misses 3, so DR-7 keeps
+            // it out of the candidate set entirely and the question never arises.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("target", new[] { "alpha one", "hotel one" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "approach_target",
+                        new[] { new[] { "close", "in", "on", "target", "{target}" } }
+                    ),
+                }
+            );
+
+            Assert.AreEqual(
+                0,
+                parser.Parse("close in").Length,
+                "a fragment missing more than it matched is not a candidate at all"
             );
             LogAssert.NoUnexpectedReceived();
         }

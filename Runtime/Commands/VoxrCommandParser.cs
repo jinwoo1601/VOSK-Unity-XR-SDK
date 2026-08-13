@@ -46,7 +46,7 @@ namespace VoXR.Commands
         // while a 7-element pattern shrugged off the identical single-word drop at 0.79.
         // Pattern length, not pattern quality, decided whether a command survived.
         //
-        // Halved rather than abolished: the cost stays proportional to pattern length, so a
+        // Reduced rather than abolished: the cost stays proportional to pattern length, so a
         // two-element pattern missing half its evidence still scores 1/2 and is still
         // refused. "cease fire" heard as "fire" is genuinely ambiguous with the `fire`
         // command and firing it on half its evidence would be a worse failure than silence.
@@ -325,12 +325,12 @@ namespace VoXR.Commands
         // words are the most dropped tokens in practice — and the longer pattern loses that
         // element's credit while still counting it in its denominator, so it drops below the
         // perfectly-matching P, which wins and the spoken slot content is discarded with
-        // nothing to signal it. Issue #65 §5.1 halved that loss (a drop now costs 1/N rather
+        // nothing to signal it. Issue #65 §5.1 reduced that loss (a drop now costs 1/N rather
         // than 1.5/N) but cannot close this, and no penalty tuning can: P scores a clean 1.0
-        // and nothing normalized to 1.0 can beat it. Marking the literal
-        // optional does — an omitted optional leaves both sides of the ratio, so the longer
-        // pattern reaches 1.0 whether or not the literal was spoken and takes the consumed-span
-        // tie-break (issue #41) over the bare form.
+        // and nothing normalized to 1.0 can beat it. Marking the literal optional does — an
+        // omitted optional leaves both sides of the ratio, so the longer pattern reaches 1.0
+        // whether or not the literal was spoken and takes the consumed-span tie-break
+        // (issue #41) over the bare form.
         //
         // The scan mirrors what ParseInternal actually compares, which is why it is this wide:
         //   - ACROSS COMMANDS, not just within one. Selection runs over every pattern of every
@@ -471,9 +471,9 @@ namespace VoXR.Commands
                     + $"\"{extText}\" (intent '{extIntent}')";
 
             return $"[VoxrCommandParser] {sameIntent}, which extends it with {gap} in front of "
-                + $"slot \"{slot}\". If that literal is dropped, the longer pattern is penalized "
-                + "for the miss while the bare one still matches perfectly — so the bare one wins "
-                + "and the slot value the speaker did say is discarded silently. Make the literal "
+                + $"slot \"{slot}\". If that literal is dropped, the longer pattern loses that "
+                + "element's credit while the bare one still matches perfectly — so the bare one "
+                + "wins and the slot value the speaker did say is discarded silently. Make the literal "
                 + $"optional (\"?{firstRequired}\") so an otherwise-complete match reaches the same "
                 + "score with or without the word and wins on consumed span. That trade is not "
                 + "free: an optional literal also lowers the score of matches that are already "
@@ -885,6 +885,12 @@ namespace VoXR.Commands
             // Where the last actually-matched element left off. Never counts trailing
             // filler, which is what makes it the honest span for tie-breaking.
             public int ConsumedEndIdx;
+
+            // Required elements matched and missed (issue #65, DR-7). Optional elements are
+            // excluded from both, exactly as they are excluded from the denominator: choosing
+            // to omit an optional is not evidence against the candidate.
+            public int MatchedRequired;
+            public int MissedRequired;
         }
 
         // Candidate ordering, shared by ParseInternal and TryEagerCommit so the eager
@@ -914,6 +920,26 @@ namespace VoXR.Commands
         )
         {
             if (candidate.Score <= 0f)
+                return false;
+
+            // Admission: more evidence FOR the candidate than against it (issue #65, DR-7).
+            //
+            // Until §5.1 this was enforced by accident. RequiredLiteralMissPenalty was -0.5,
+            // so a candidate missing more than it matched was dragged to or below zero and the
+            // filter above discarded it. Zeroing that penalty removed the enforcement without
+            // replacing it, and the effect was NOT confined to extra low-scoring tail results:
+            // the start-index key below outranks score, so a newly-admitted fragment can win
+            // round 1 outright. It then consumes tokens, which moves the origin ParseInternal
+            // charges skipped words from (issue #31) and takes a slot in the fixed result
+            // buffer — so "alpha one weapons mode" fired mode_weapons at a full 1.00 where the
+            // skipped-word charge had correctly held it to 0.50, and a genuine command later
+            // in a multi-command utterance could be evicted entirely.
+            //
+            // Stated as a rule rather than left to the arithmetic, this says: a pattern that
+            // missed more of its required elements than it matched is not a candidate. It is
+            // deliberately a COUNT, not a score threshold — no knob, nothing to configure, and
+            // independent of the coverage term that will later enter the score.
+            if (candidate.MissedRequired > candidate.MatchedRequired)
                 return false;
             if (bestScore <= 0f)
                 return true;
@@ -948,6 +974,10 @@ namespace VoXR.Commands
             float denominator = 0f;
             int literalCount = 0;
             int slotCount = 0;
+            // Evidence for and against, counted over REQUIRED elements only (DR-7). These
+            // feed the admission rule in IsBetterCandidate, not the score.
+            int matchedRequired = 0;
+            int missedRequired = 0;
             bool missedRequiredSlot = false;
             // Required elements that have missed since the last one that actually matched.
             // Reset by every match, so a non-zero value at the end means the pattern's TAIL
@@ -996,12 +1026,15 @@ namespace VoXR.Commands
                         consumedEndIdx = tokenIdx;
                         rawScore += MatchScore;
                         denominator += MatchScore;
+                        if (!isOptional)
+                            matchedRequired++;
                         requiredAfterLastMatch = 0;
                     }
                     else if (!isOptional)
                     {
                         rawScore += RequiredSlotMissPenalty;
                         denominator += MatchScore;
+                        missedRequired++;
                         missedRequiredSlot = true;
                         // Currently dominated: missedRequiredSlot refuses an eager commit one
                         // guard earlier, so this increment can never be the sole cause of a
@@ -1034,17 +1067,19 @@ namespace VoXR.Commands
                     {
                         rawScore += MatchScore;
                         literalCount++;
+                        matchedRequired++;
                         tokenIdx++;
                         consumedEndIdx = tokenIdx;
                         requiredAfterLastMatch = 0;
                     }
                     else
                     {
-                        // Adds nothing: the constant is zero on purpose (see its declaration).
-                        // The whole cost of the miss is the denominator credit taken above,
-                        // which the element keeps whether or not it matched — so the drop
-                        // withholds 1/N rather than being charged twice for 1.5/N.
+                        // Adds nothing: the constant is zero on purpose (see its declaration,
+                        // which carries the reasoning). The whole cost of the miss is the
+                        // denominator credit taken above, which this element keeps whether or
+                        // not it matched.
                         rawScore += RequiredLiteralMissPenalty;
+                        missedRequired++;
                         requiredAfterLastMatch++;
                     }
                 }
@@ -1064,6 +1099,8 @@ namespace VoXR.Commands
                 HasUnmatchedRequiredTail = requiredAfterLastMatch > 0,
                 EndIdx = tokenIdx,
                 ConsumedEndIdx = consumedEndIdx,
+                MatchedRequired = matchedRequired,
+                MissedRequired = missedRequired,
             };
         }
 

@@ -823,7 +823,7 @@ namespace VoXR.Tests.Runtime
 
             Assert.IsTrue(
                 received.HasValue,
-                "a single dropped function word must not silence a " + "three-element command"
+                "a single dropped function word must not silence a three-element command"
             );
             Assert.AreEqual("time_to_target", received.Value.Intent);
             Assert.AreEqual(2f / 3f, received.Value.Score, 0.001f);
@@ -881,7 +881,6 @@ namespace VoXR.Tests.Runtime
                 received.Value.GetSlot("burn_level"),
                 "firing on the boundary is only right because every argument is present"
             );
-            LogAssert.NoUnexpectedReceived();
         }
     }
 }

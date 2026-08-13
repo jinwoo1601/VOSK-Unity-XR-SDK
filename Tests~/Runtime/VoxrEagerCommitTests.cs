@@ -912,7 +912,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 EagerCommitVerdict.None,
                 parser.TryEagerCommit(Tok("set auto pilot"), null, 0.6f, 0.4f),
-                "0.625 clears minScore, so only the tail condition can refuse this"
+                "0.75 clears minScore, so only the tail condition can refuse this"
             );
         }
 
@@ -922,7 +922,7 @@ namespace VoXR.Tests.Runtime
             // Trailing filler makes the whole-buffer condition pass even harder: the [unk] skip
             // runs before EVERY element, including the one that then matches nothing, so EndIdx
             // reaches 4 == tokens.Length while ConsumedEndIdx stays at 3. The score is unchanged
-            // at 0.625, so neither the score gate nor the whole-buffer check can refuse this —
+            // at 0.75, so neither the score gate nor the whole-buffer check can refuse this —
             // only the tail condition can. This is the shape a final result carrying breath or
             // filler presents while the last word is still to come.
             var parser = new VoxrCommandParser(
