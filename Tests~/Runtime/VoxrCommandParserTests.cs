@@ -1644,5 +1644,154 @@ namespace VoXR.Tests.Runtime
             Assert.IsFalse(result.Command.HasSlot("target"));
             LogAssert.NoUnexpectedReceived();
         }
+
+        // --- Required-literal miss cost (issue #65 §5.1) ---
+        //
+        // A missed required literal withholds its credit but is no longer ALSO charged a
+        // penalty, so one drop costs 1/N of the 1.0 ceiling instead of 1.5/N. These tests
+        // are one row each of the design's §5.1 table, and every expected value is written
+        // as its arithmetic so the reader can check it without running anything.
+        //
+        // The shared MakeCommands() grammar cannot express these cases — its patterns are 1,
+        // 2, 5 and 6 elements, none with a droppable required literal — so this region builds
+        // its own fixtures. None of them registers a bare sibling of the pattern under test:
+        // with one present the bare form wins selection at 1.0 and the drop never gets scored,
+        // which is symptom 2 and explicitly NOT what this feature fixes.
+
+        static VoxrCommandParser MissedLiteralParser() =>
+            new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "time_to_target",
+                        new[] { new[] { "time", "to", "target" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "decelerate_by",
+                        new[] { new[] { "decelerate", "by", "{burn_level}" } }
+                    ),
+                    new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+                }
+            );
+
+        [Test]
+        public void MissedLiteral_ThreeElementPattern_ClearsThreshold()
+        {
+            // The in-headset case from the #42 cycle: "time to target" heard as "time target".
+            // "time" and "target" match, "to" is dropped and counts toward the denominator
+            // only: (1 + 0 + 1) / 3 = 0.667, over the default minScore of 0.6. It scored
+            // (1 - 0.5 + 1) / 3 = 0.5 before and did not fire at all.
+            var parser = MissedLiteralParser();
+
+            var result = ParseOne(parser, "time target");
+
+            Assert.AreEqual("time_to_target", result.Command.Intent);
+            Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_SlotStillExtracted()
+        {
+            // The drop must not cost the argument as well as the score. "decelerate by
+            // {burn_level}" heard as "decelerate hard burn": (1 + 0 + 1) / 3 = 0.667 with
+            // burn_level still filled, where it scored (1 - 0.5 + 1) / 3 = 0.5 before.
+            var parser = MissedLiteralParser();
+
+            var result = ParseOne(parser, "decelerate hard burn");
+
+            Assert.AreEqual("decelerate_by", result.Command.Intent);
+            Assert.AreEqual(2f / 3f, result.Command.Score, 0.001f);
+            Assert.AreEqual("hard burn", result.Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void MissedLiteral_TwoElementPattern_StillRejected()
+        {
+            // Deliberately preserved, not an oversight: "cease fire" heard as "fire" scores
+            // (0 + 1) / 2 = 0.5 — half its evidence — and stays under the gate. It was 0.25.
+            // Parse itself applies no threshold, so the command IS returned here; the
+            // recogniser-level counterpart proves it does not fire.
+            var parser = MissedLiteralParser();
+
+            var result = ParseOne(parser, "fire");
+
+            Assert.AreEqual("cease_fire", result.Command.Intent);
+            Assert.AreEqual(0.5f, result.Command.Score, 0.001f);
+            Assert.Less(result.Command.Score, 0.6f, "half the evidence must not clear minScore");
+        }
+
+        [Test]
+        public void MissedLiteral_LongPattern_CostIsProportional()
+        {
+            // The cost stays length-proportional — halved, not abolished (design fork F1).
+            // Seven elements with "target" dropped: (1 + 1 + 0 + 1 + 1 + 1 + 1) / 7 = 0.857,
+            // up from 5.5 / 7 = 0.786. The same single drop that a 3-element pattern feels as
+            // 0.333 costs this one 0.143.
+            var parser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one", "alpha three" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[]
+                            {
+                                "launch",
+                                "{weapon}",
+                                "target",
+                                "{target}",
+                                "on",
+                                "my",
+                                "mark",
+                            },
+                        }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "launch missiles hotel one on my mark");
+
+            Assert.AreEqual(6f / 7f, result.Command.Score, 0.001f);
+            Assert.AreEqual("missiles", result.Command.GetSlot("weapon"));
+            Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
+        }
+
+        [Test]
+        public void MissedLiteral_BoundaryCase_ExactlySixTenths()
+        {
+            // The accepted consequence, ratified at G1: two drops on a five-element pattern
+            // land on (1 + 0 + 0 + 1 + 1) / 5 = 0.60 exactly — the gate value itself — where
+            // they scored (1 - 0.5 - 0.5 + 1 + 1) / 5 = 0.40 before. The gate stays >=, so
+            // this fires. 3f/5f is bit-identical to the 0.6f the gate holds, so this is a real
+            // equality and not a tolerance artifact; the recogniser-level counterpart is what
+            // proves the gate actually admits it.
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_burn",
+                        new[] { new[] { "set", "burn", "to", "{burn_level}", "now" } }
+                    ),
+                }
+            );
+
+            var result = ParseOne(parser, "set hard burn now");
+
+            Assert.AreEqual(3f / 5f, result.Command.Score, 0.001f);
+            Assert.AreEqual(
+                "hard burn",
+                result.Command.GetSlot("burn_level"),
+                "firing on the boundary is only right because every argument is present"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
     }
 }

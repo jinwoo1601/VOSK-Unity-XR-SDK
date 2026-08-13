@@ -1007,5 +1007,108 @@ namespace VoXR.Tests.Runtime
             );
             LogAssert.NoUnexpectedReceived();
         }
+
+        // ---------- Required-literal miss cost (issue #65 §5.1) ----------
+        //
+        // Zeroing RequiredLiteralMissPenalty raises the scores the eager scan selects on, so
+        // more buffers clear its gate. That is intended (F9), but it puts weight on the two
+        // completeness conditions that the score arithmetic used to carry by coincidence.
+        // These two tests bound it from both sides: one buffer that SHOULD newly commit, and
+        // one that must not, at exactly the score the design predicted it would rise to.
+
+        [Test]
+        public void TryEagerCommit_MedialMissNewlyClearingTheGate_CommitsAndAgreesWithParse()
+        {
+            // The case §5.1 exists for, at the eager gate. "time to target" heard as "time
+            // target" rises from (1 - 0.5 + 1) / 3 = 0.50 to (1 + 0 + 1) / 3 = 0.667 and now
+            // clears the default minScore.
+            //
+            // The miss is MEDIAL by construction, which is what makes committing correct here:
+            // "target" matches afterwards, so the tail counter resets and the pattern ends on
+            // the buffer's last token owing nothing. A TRAILING drop at the same score is the
+            // issue #70 case and is refused above — that one would prove nothing about this
+            // change, since the tail condition catches it whatever the score.
+            //
+            // F9's invariant is the second half: a verdict must name the command the flush
+            // will actually fire, so the same buffer is put through Parse as well.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("time_to_target", P("time", "to", "target")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("time target"), null, 0.6f, 0.4f),
+                "a medial drop leaves nothing owing, so the raised score should commit"
+            );
+
+            var flushed = parser.Parse("time target");
+            Assert.AreEqual(
+                1,
+                flushed.Length,
+                "the verdict must name exactly what the flush fires"
+            );
+            Assert.AreEqual("time_to_target", flushed[0].Command.Intent);
+            Assert.AreEqual(2f / 3f, flushed[0].Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void TryEagerCommit_WidenedSlotMissHole_StaysClosed()
+        {
+            // F10, and the reason issue #66 was a hard prerequisite of this change. §5.4
+            // computed the exact shape that §5.1 newly lifts over the gate: eight elements,
+            // one missed required SLOT alongside one dropped required literal, scoring
+            // (1 - 1 + 1 + 0 + 1 + 1 + 1 + 1) / 8 = 0.625 where it scored 4.5 / 8 = 0.5625
+            // before. The score gate used to refuse this on its own; now only the completeness
+            // condition does.
+            //
+            // Both misses are medial and "mark" matches on the last token, so the issue #70
+            // tail condition clears and cannot be what refuses this — the slot condition is
+            // load-bearing here and nothing else is. The Parse assertion pins the raised score
+            // so the refusal is demonstrably happening ABOVE the gate rather than because the
+            // candidate never reached it.
+            var parser = new VoxrCommandParser(
+                LaunchSlots(),
+                Commands(
+                    Cmd(
+                        "launch_weapon",
+                        P(
+                            "launch",
+                            "{quantity}",
+                            "{weapon}",
+                            "target",
+                            "{target}",
+                            "on",
+                            "my",
+                            "mark"
+                        )
+                    )
+                )
+            );
+
+            var parsed = parser.Parse("launch missiles hotel one on my mark");
+            Assert.AreEqual(1, parsed.Length);
+            Assert.AreEqual(
+                5f / 8f,
+                parsed[0].Command.Score,
+                0.001f,
+                "the widened hole is real — this candidate now clears the 0.6 default"
+            );
+            Assert.IsFalse(
+                parsed[0].Command.HasSlot("quantity"),
+                "the required quantity slot is what went missing"
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(
+                    Tok("launch missiles hotel one on my mark"),
+                    null,
+                    0.6f,
+                    0.4f
+                ),
+                "a command missing a required argument must never commit early, however it scores"
+            );
+        }
     }
 }
