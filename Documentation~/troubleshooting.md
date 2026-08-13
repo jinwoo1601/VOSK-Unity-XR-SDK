@@ -58,9 +58,17 @@ The utterance had the slot value in it, the command fired, and `GetSlot` returns
 
 ### A command scores ~0.50 and is rejected
 
-A score near `0.50` on a **three-element** pattern whose slots *did* extract is the signature of exactly one dropped required literal, not a garbled utterance -- a missed required literal costs a penalty *and* still occupies the denominator, which a short pattern cannot absorb. The same drop on a seven-element pattern scores `0.79` and passes.
+A score near `0.50` with slots that *did* extract is the signature of exactly one dropped required literal on a **two-element** pattern -- `(0 + 1) / 2`. Two elements is the floor: half the evidence is genuinely ambiguous (`cease fire` heard as "fire" is a different command where `fire` is registered), so it stays rejected by design.
 
-Lowering `minScore` is the wrong fix (it lets genuinely partial matches through everywhere else). Make the droppable word optional instead. See [Short patterns are disproportionately fragile](scoring.md#short-patterns-are-disproportionately-fragile).
+**On three or more elements this no longer happens.** One dropped required literal costs `1/N`, so a three-element pattern scores `2/3` = `0.67` and fires; the same drop on a seven-element pattern scores `6/7` = `0.86`. If you are seeing `~0.50` on a longer pattern, more than one element missed.
+
+Lowering `minScore` is still the wrong fix (it lets genuinely partial matches through everywhere else). For the two-element case, lengthen the pattern or accept the ambiguity. See [Short patterns are disproportionately fragile](scoring.md#short-patterns-are-disproportionately-fragile).
+
+### A command reports nothing at all, though it clearly part-matched
+
+Distinct from a score rejection: there is no scored attempt in the log either, because the candidate never became one. A pattern that **missed more of its required elements than it matched** is refused admission before selection, whatever it would have scored -- so a very sparse partial match produces no result rather than a low-scoring one.
+
+Count the pattern's required elements against how many the transcript actually supplied. Optional elements count toward neither side. See [Admission](scoring.md#admission-what-counts-as-a-candidate-at-all).
 
 ### Commands match but with wrong slot values
 
