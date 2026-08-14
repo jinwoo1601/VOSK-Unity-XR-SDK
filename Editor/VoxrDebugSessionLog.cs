@@ -49,7 +49,8 @@ namespace VoXR.Editor
             + "numbers embedded in rejectReason text are formatted with the Editor's current "
             + "culture, so the decimal separator may be ',' — match on the surrounding words, "
             + "not the whole literal. The scoring model behind these numbers — the score "
-            + "formula, the skipped-word penalty, selection order, the two gates, and worked "
+            + "formula, the coverage weight charged for in-grammar words a match leaves "
+            + "unexplained before AND after it, selection order, the two gates, and worked "
             + "examples — is documented in Documentation~/scoring.md in the com.jinwoo1601.voxr "
             + "package.";
 

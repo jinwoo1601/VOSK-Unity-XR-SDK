@@ -43,9 +43,19 @@ namespace VoXR.Commands
                 + "disable — note that this also restores the behaviour where a spoken "
                 + "argument can be silently dropped in favour of a shorter pattern."
         )]
-        // DR-4: carries the value across the rename, so a scene or prefab that set the old
-        // field keeps its tuning. The field is private, so this covers the whole serialized
-        // surface — there is no public property or constant to forward from.
+        // DR-4: carries the value across the rename for this field's OWN serialized data, so
+        // a scene or asset that set the old name deserializes onto the new one. The field is
+        // private, so there is no public property or constant needing a separate forwarder.
+        //
+        // Scope, deliberately narrow: [FormerlySerializedAs] governs field deserialization.
+        // A prefab-INSTANCE override is stored as a literal propertyPath string in the
+        // instance's m_Modifications and applied against the already-loaded prefab, and the
+        // same is true of .preset assets and of any editor script calling FindProperty with
+        // the old name. Whether Unity remaps those paths through this attribute is not
+        // established here and no automated instrument in this package can settle it — it
+        // needs a real prefab-override round-trip in a host project. Nothing shipped in this
+        // package is affected: no prefab, no preset, no CustomEditor, and no sample scene
+        // serializes this field at all.
         [FormerlySerializedAs("skippedWordPenalty")]
         [SerializeField]
         float coverageWeight = VoxrCommandParser.DefaultCoverageWeight;

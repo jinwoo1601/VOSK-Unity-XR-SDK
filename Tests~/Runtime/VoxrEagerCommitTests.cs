@@ -540,8 +540,17 @@ namespace VoXR.Tests.Runtime
                 Commands(Cmd("cease_fire", P("cease", "fire", "{?mode}")))
             );
 
+            // Both verdicts are named outright rather than compared to each other: an equality
+            // would hold just as well if both regressed to None, which is one of the failures
+            // this is meant to catch. HoldExtendable rather than Commit because the trailing
+            // optional means more speech could still extend the match.
             Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
                 parser.TryEagerCommit(Tok("cease fire"), null, 0.6f, 0.4f),
+                "the gapless buffer holds"
+            );
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
                 parser.TryEagerCommit(Tok("cease fire [unk]"), null, 0.6f, 0.4f),
                 "a trailing [unk] the pattern never consumed must not change the verdict"
             );

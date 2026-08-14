@@ -1,3 +1,9 @@
+// ============================================================================
+// Purpose:  PlayMode tests for the DR-4 skippedWordPenalty -> coverageWeight rename
+// Layer:    Tests.Runtime
+// Owns:     VoxrCoverageWeightRenameTests (public class)
+// Depends:  VoxrCommandRecogniser, VoxrCommandParser
+// ============================================================================
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;

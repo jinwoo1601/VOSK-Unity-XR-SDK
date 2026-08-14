@@ -1519,7 +1519,7 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void SpanTieBreak_LongerSpanBeatsHigherLiteralCount()
+        public void LongerSpanPatternWins_NowOnScoreRatherThanTheSpanKey()
         {
             // Span sits ABOVE literal count, so it also settles equal-score candidates whose
             // literal counts differ — outcomes literal count used to decide on its own,
@@ -1556,7 +1556,7 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void SpanTieBreak_ChoosesBetweenCommands_NotJustPatterns()
+        public void LongerSpanCommandWins_AcrossCommands_NowOnScore()
         {
             // The comparison runs across the whole command list, so a span tie changes which
             // *intent* fires, not merely which pattern index within one command.
@@ -1582,7 +1582,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 "go_place",
                 result.Command.Intent,
-                "the longer-span command wins even though it is declared second"
+                "go_place wins outright on score — go_dir is charged for the \"pole\" it strands"
             );
             Assert.AreEqual("north pole", result.Command.GetSlot("place"));
         }
@@ -2126,6 +2126,7 @@ namespace VoXR.Tests.Runtime
             // field name that was a hidden coupling — a user who zeroed the skipped-word
             // penalty also silently disabled the issue #42 fix without being told. It is the
             // same coupling now, but the field admits to it.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"by\""));
             var parser = new VoxrCommandParser(BurnSlots(), DecelerateCommands("by"), 0f);
 
             var result = ParseOne(parser, "decelerate hard burn");
@@ -2133,6 +2134,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(0, result.Command.MatchedPatternIndex, "the bare form wins again");
             Assert.AreEqual(1.0f, result.Command.Score, 0.001f);
             Assert.IsFalse(result.Command.HasSlot("burn_level"));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -2146,7 +2148,10 @@ namespace VoXR.Tests.Runtime
             //
             // This is why WarnOnDroppableRequiredLiteral survives this feature: its stated
             // rationale ("nothing normalized to 1.0 can beat it") is now false in general, but
-            // the hazard it warns about is real in precisely this residue.
+            // the hazard it warns about is real in precisely this residue — which is also why
+            // the warning below is expected rather than incidental.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("is a bare form of"));
+
             var parser = new VoxrCommandParser(
                 BurnSlots(),
                 new[]
@@ -2165,6 +2170,7 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("decelerate", results[0].Command.Intent);
             Assert.AreEqual(1.0f, results[0].Command.Score, 0.001f);
             Assert.IsFalse(results[0].Command.HasSlot("burn_level"));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -2270,6 +2276,30 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void Coverage_MisPredictedToken_IsChargedEvenWhenItIsAnUnkRunAway()
+        {
+            // The [unk] exemption survives A3. The token the candidate mis-predicted is the
+            // first REAL one at or after its consumed end, not the [unk] sitting there — so
+            // "switch to [unk] target hotel" charges "target" and "hotel" (2), never the
+            // [unk] as well (3).
+            //
+            // Pinned on the SCORE rather than the intent: both candidates tie at 2/(3+2) here
+            // and the winner is decided by registration order, so an intent assertion would
+            // pin the tie-break instead of the exemption. Charging the [unk] would give
+            // 2/(3+3) = 0.333, which this catches.
+            var parser = CreateModeSwitchParser();
+
+            var results = parser.Parse("switch to [unk] target hotel");
+
+            Assert.AreEqual(
+                2f / 5f,
+                results[0].Command.Score,
+                0.001f,
+                "the [unk] is skipped over, not charged alongside the real leftovers"
+            );
+        }
+
+        [Test]
         public void Coverage_MisPredictedTokenCharge_DoesNotBiteACompleteMatch()
         {
             // The exception applies only where a required element actually failed. A pattern
@@ -2293,8 +2323,17 @@ namespace VoXR.Tests.Runtime
             // a sort key do not compete, so no weight can un-reject a DR-7 casualty, and the
             // two rules stay orthogonal however the weight is set.
             //
-            // ["alpha","bravo","charlie"] heard as "alpha" matches 1 and misses 2, scoring
-            // 1/3 — above zero, so the Score <= 0 floor is not what stops it. DR-7 is.
+            // ["alpha","bravo","charlie"] heard as "zulu alpha yankee" matches 1 required
+            // element and misses 2, so DR-7 refuses it — while its score stays above zero, so
+            // the Score <= 0 floor (checked first, and which would mask what this pins) is not
+            // what stops it.
+            //
+            // The filler on both sides is what makes the loop mean something: one leading skip
+            // and one trailing orphan, so the candidate's score genuinely moves with the
+            // weight — 1/3 at 0, 1/5 at 1, 1/13 at 5 — while admission does not budge. An
+            // earlier version of this test used a fixture whose coverage was identically zero,
+            // so all three iterations were the same arithmetic and a rule that DID couple
+            // admission to coverage would have passed it.
             var commands = new[]
             {
                 new VoxrCommandDefinition(
@@ -2313,10 +2352,18 @@ namespace VoXR.Tests.Runtime
 
                 Assert.AreEqual(
                     0,
-                    parser.Parse("alpha").Length,
+                    parser.Parse("zulu alpha yankee").Length,
                     $"admission is independent of the score at coverageWeight {weight}"
                 );
             }
+
+            // Direct pin that the charge really is live on this fixture, so a future change
+            // cannot re-zero coverage and silently restore the vacuity described above.
+            var probe = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), commands);
+            probe.BuildCoverageTables(new[] { "zulu", "alpha", "yankee" });
+
+            Assert.AreEqual(1, probe.SkippedBefore(0, 1), "\"zulu\" is a leading skip");
+            Assert.AreEqual(1, probe.OrphanedAfter(2), "\"yankee\" is a trailing orphan");
         }
 
         // --- Required-literal miss cost (issue #65 §5.1) ---
