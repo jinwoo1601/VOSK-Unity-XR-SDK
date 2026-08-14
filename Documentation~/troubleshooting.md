@@ -51,10 +51,24 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 
 ### A command fires but a slot value is missing
 
-The utterance had the slot value in it, the command fired, and `GetSlot` returns `""`. This is almost always a **bare sibling pattern out-scoring the slot-filled one** after a required function word was dropped: the bare pattern still matches perfectly at `1.0`, so it wins, and the recognised slot value is discarded with nothing to signal it.
+The utterance had the slot value in it, the command fired, and `GetSlot` returns `""`. The usual cause was a **bare sibling pattern out-scoring the slot-filled one** after a required function word was dropped, and [coverage](command-recognition.md#coverage) fixed it: the bare pattern is now charged for the words it leaves unexplained, so the slot-filled form wins and the argument survives.
 
-- Mark the droppable literal optional (`"?by"` rather than `"by"`) -- the parser already warns about this at construction, naming the literal and the slot at risk.
-- Full explanation, both costs of the swap, and the score arithmetic: [Never leave a required function word between a bare pattern and its slot](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) and [worked example B](scoring.md#b-a-dropped-function-word-sinks-a-short-pattern).
+If you still see this:
+
+- **Check `coverageWeight` is not `0`.** Zeroing it restores the pre-#65 scoring, and this bug with it.
+- Mark the droppable literal optional (`"?by"` rather than `"by"`) -- the parser warns about the shape at construction, naming the literal and the slot at risk. Coverage leaves the slot-filled form only `0.07` above the default gate, so the swap is still worth making.
+- Full explanation, both costs of the swap, and the score arithmetic: [Never leave a required function word between a bare pattern and its slot](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) and [worked example B](scoring.md#b-coverage-picks-the-pattern-that-explains-more).
+
+### A command stopped firing after upgrading
+
+It worked before, the transcript looks right, and the score in the log is lower than the pattern's own arithmetic predicts. This is [coverage](scoring.md#2-coverage): a command is now scored on how much of the utterance it accounts for, so a short pattern trailed by words the grammar cannot place is demoted -- "decelerate hard burn" against a lone `decelerate` pattern falls from `1.0` to `1 / (1 + 2)` = `0.33`, and "cease fire please" from `1.0` to `0.67`.
+
+Work out `matched / elements` for the winning pattern. If the reported `score` is lower, the difference is the tokens outside the match.
+
+- Register the fuller phrasing as a sibling pattern, so the demotion has somewhere to land. This is the intended response.
+- Bring natural trailing words into the grammar as optional literals (`?please`, `?now`).
+- Blunter: lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0` reverts the model entirely -- including the discarded-argument bug above.
+- Measured cases and the two shapes with no user-level workaround: [Known Limitations](../KNOWN_LIMITATIONS.md), plus [worked examples B2 and D](scoring.md#b2-the-same-demotion-with-nowhere-to-land).
 
 ### A command scores ~0.50 and is rejected
 
