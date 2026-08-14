@@ -150,7 +150,7 @@ Assert.IsTrue(results.AllPassed, results.FailureSummary);
 
 `VoxrBatchTestRunner` is pure C# -- no MonoBehaviour dependency and no audio hardware required. It instantiates a `VoxrCommandParser` directly (the same code path that `InjectText` uses internally).
 
-Both constructors also take an optional `skippedWordPenalty` (default `1.0`, matching the recogniser). Pass the value your `VoxrCommandRecogniser` uses if you have tuned it, so batch results predict runtime behaviour -- see [Skipped-word penalty](command-recognition.md#skipped-word-penalty).
+Both constructors also take an optional `coverageWeight` (default `1.0`, matching the recogniser; named `skippedWordPenalty` before #65). Pass the value your `VoxrCommandRecogniser` uses if you have tuned it, so batch results track runtime behaviour. Two caveats since #65: the batch runner receives real text rather than the decoder's `[unk]` for out-of-grammar words, so trailing filler is charged here where the grammar-constrained decoder would have made it free; and the editor window does not forward this value, so it always runs at the default -- see [Skipped-word penalty](command-recognition.md#skipped-word-penalty).
 
 For command-set-aware testing:
 
@@ -199,8 +199,8 @@ Create a `VoxrTestSuiteAsset` via **Assets > Create > VoXR > Test Suite** and au
 
 | Method | Description |
 |--------|-------------|
-| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence, skippedWordPenalty)` | Constructor. All commands active. |
-| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence, skippedWordPenalty)` | Constructor with named command sets. |
+| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence, coverageWeight)` | Constructor. All commands active. |
+| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence, coverageWeight)` | Constructor with named command sets. |
 | `RunAll(VoxrTestCase[])` | Returns `VoxrBatchResults` with per-case pass/fail. |
 | `Run(VoxrTestCase)` | Returns a single `VoxrTestResult`. |
 | `ToCsv(VoxrBatchResults)` | Static. Exports results as a CSV string. |

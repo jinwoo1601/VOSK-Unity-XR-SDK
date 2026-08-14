@@ -146,7 +146,9 @@ commandRecogniser.minConfidence = 0.4f;   // Reject low VOSK word confidence
 
 The sliding start can begin a match anywhere in the utterance, and the words it walks past used to cost nothing. That let any stray sentence whose *tail* happened to resemble a short pattern execute it at a full 1.0 — "thrusters port", misheard as "thrusters report", would skip the unmatched "thrusters" and fire a one-word `report` command.
 
-`skippedWordPenalty` (default `1.0`) adds each skipped in-grammar word to the score denominator, so the score becomes the fraction of the utterance the pattern actually covers:
+> **Changed in #65 §5.2.** The weight now also charges in-grammar tokens left over *after* a match, not only those skipped before it, and it is applied during candidate selection rather than to the winner afterwards — so it can change which pattern wins. The prose in this section still describes the leading half only; the full model is rewritten in the scoring-docs pass that follows this release. `KNOWN_LIMITATIONS.md` carries the behaviour changes in the meantime.
+
+`coverageWeight` (default `1.0`, named `skippedWordPenalty` before #65) adds each skipped in-grammar word to the score denominator, so the score becomes the fraction of the utterance the pattern actually covers:
 
 | Utterance | Matched pattern | Score |
 |-----------|-----------------|-------|
@@ -159,7 +161,7 @@ The penalty is proportional, so it only bites patterns short enough to be swallo
 - **`[unk]` tokens.** Out-of-grammar preamble and hesitation are exactly what the sliding start is for, so filler VOSK could not resolve stays free.
 - **Words before a previous match ended.** Counting restarts after each extracted command, so chained commands in one utterance ("cease fire resume fire") do not penalise each other.
 
-Set `skippedWordPenalty` to `0` to restore the previous behaviour. Raise it above `1.0` to demand that a command be an even larger share of what was said.
+Set `coverageWeight` to `0` to restore the pre-#31 behaviour — note this also switches off the #42 protection added in #65. Raise it above `1.0` to demand that a command be an even larger share of what was said.
 
 When tuning thresholds:
 - Start with the defaults (`minScore=0.6`, `minConfidence=0.4`) and adjust based on testing.

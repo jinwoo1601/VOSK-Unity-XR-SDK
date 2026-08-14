@@ -77,10 +77,12 @@ The authoring lesson is unchanged and still worth following: do not make a short
 
 ## 2. The skipped-word penalty
 
-The parser slides its start point through the utterance, so a pattern can match anywhere in it. `skippedWordPenalty` (default `1.0`) charges the winner for the in-grammar words that sliding start walked past:
+> **Changed in #65 §5.2.** The weight now also charges in-grammar tokens left over *after* a match, not only those skipped before it, and it is applied during candidate selection rather than to the winner afterwards — so it can change which pattern wins. The prose in this section still describes the leading half only; the full model is rewritten in the scoring-docs pass that follows this release. `KNOWN_LIMITATIONS.md` carries the behaviour changes in the meantime.
+
+The parser slides its start point through the utterance, so a pattern can match anywhere in it. `coverageWeight` (default `1.0`, named `skippedWordPenalty` before #65) charges for the in-grammar words that sliding start walked past:
 
 ```
-finalScore = rawScore / (denominator + skippedWords × skippedWordPenalty)
+finalScore = rawScore / (denominator + skippedWords × coverageWeight)
 ```
 
 Four rules govern it, and all four are load-bearing:
@@ -257,7 +259,7 @@ Utterance: **"launch missiles target hotel one"** — 5 tokens.
 
 1. **Candidates.** The pattern is tried at every start token. Start 0 matches all four elements: `4 / 4` = `1.00`. Start 1 misses the `launch` literal but still matches the other three: `3 / 4` = `0.75`. Start 2 misses both `launch` and `{weapon}` — two matched against two missed, so it is still admitted, at `(0 − 1 + 1 + 1) / 4` = `0.25`.
 2. **Selection.** Start 0 is earliest — it wins on key 1 alone.
-3. **Skipped-word penalty.** The winner starts at the search origin, so nothing is skipped. Score stays `1.00`.
+3. **Coverage.** The winner starts at the search origin and consumes to the end, so nothing is left unexplained on either side. Score stays `1.00`.
 4. **Confidence.** The minimum per-word confidence over tokens 0–4.
 5. **Gates.** `1.00 ≥ 0.6`; confidence compared against `0.4`.
 
