@@ -450,6 +450,104 @@ namespace VoXR.Tests.Runtime
                 "a prefix command matches fully but could still grow, so it is held, not committed");
         }
 
+        // ---------- Coverage and the eager gate (issue #65 §5.2) ----------
+        //
+        // Design §5.4 claimed the trailing coverage term "cannot destabilise the eager gate,
+        // structurally", on the ground that anything reaching a verdict already spans the
+        // buffer and so has no trailing orphans. The premise is right and the conclusion is
+        // wrong: the term does not change the WINNER'S score, but it changes which candidate
+        // IS the winner, and the completeness gates are applied to whoever that is.
+        //
+        // The movement is one-way, and the reason is worth stating because it is what makes
+        // the change safe rather than merely small. A candidate that clears the gates starts
+        // at the first recognised token (so no leading skips) and ends at the buffer end (so
+        // its orphan run is empty, the ConsumedEndIdx..EndIdx gap being all-[unk] and [unk]
+        // free). Its score is therefore IDENTICAL before and after. Every other candidate's
+        // score can only fall. So a verdict above None can never be withdrawn and a committed
+        // command can never change identity — the only available move is None -> Commit or
+        // None -> HoldExtendable, when the bare sibling that used to outrank the real command
+        // is demoted out of the way.
+
+        [Test]
+        public void TryEagerCommit_MedialDropWithEverySlotFilled_NowCommits()
+        {
+            // Design §5.4's counter-example. "at" is dropped, so before coverage the bare
+            // "fire" won at 1.0, spanned only one token of three, and the gate refused —
+            // correctly, but for the wrong command. Now bare "fire" is charged for the two
+            // tokens it cannot explain (1/(1+2) = 0.333), "fire at {target}" wins on 2/3, and
+            // it clears every gate in turn: no required slot missed, no required element
+            // after the last match, starts at token 0, ends at the buffer end.
+            //
+            // The new verdict is the one DR-6 already blesses as safe — a medial drop with
+            // every argument present — so the gate now fires the right command early instead
+            // of waiting out the full buffer window to fire the wrong one.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("target", new[] { "hotel one" })),
+                Commands(Cmd("fire", P("fire")), Cmd("fire_at", P("fire", "at", "{target}")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("fire hotel one"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_VerdictNamesTheCommandTheFlushFires()
+        {
+            // The invariant the whole eager path rests on, checked on the utterance that
+            // newly moves. Both paths call the same scorer over the same token array, so they
+            // cannot disagree — but that is true by construction only while a single method
+            // computes the score, which is exactly why coverage went into TryMatchScored
+            // rather than into each caller.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("target", new[] { "hotel one" })),
+                Commands(Cmd("fire", P("fire")), Cmd("fire_at", P("fire", "at", "{target}")))
+            );
+
+            var verdict = parser.TryEagerCommit(Tok("fire hotel one"), null, 0.6f, 0.4f);
+            var flushed = parser.Parse("fire hotel one");
+
+            Assert.AreEqual(EagerCommitVerdict.Commit, verdict);
+            Assert.AreEqual(1, flushed.Length);
+            Assert.AreEqual(
+                "fire_at",
+                flushed[0].Command.Intent,
+                "the flush must fire the command the verdict was computed on"
+            );
+            Assert.AreEqual("hotel one", flushed[0].Command.GetSlot("target"));
+            Assert.AreEqual(2f / 3f, flushed[0].Command.Score, 0.001f);
+            Assert.Greater(
+                flushed[0].Command.Score,
+                0.6f,
+                "and it must clear the same threshold the gate applied"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_TrailingUnkGap_CostsTheCandidateNothing()
+        {
+            // The gate's end-of-buffer condition is over EndIdx while orphans count from
+            // ConsumedEndIdx, so "spans the buffer" does not by itself mean "explains the
+            // buffer". What closes that gap is that the region between the two indices is
+            // only ever reached by the [unk] skip loop, and [unk] is never charged.
+            //
+            // "cease fire [unk]" leaves ConsumedEndIdx at 2 and EndIdx at 3 — the skip runs
+            // before the trailing optional, which then matches nothing. The candidate must
+            // still score a full 1.0 and reach the same verdict as the gapless buffer.
+            var parser = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("mode", new[] { "silent" })),
+                Commands(Cmd("cease_fire", P("cease", "fire", "{?mode}")))
+            );
+
+            Assert.AreEqual(
+                parser.TryEagerCommit(Tok("cease fire"), null, 0.6f, 0.4f),
+                parser.TryEagerCommit(Tok("cease fire [unk]"), null, 0.6f, 0.4f),
+                "a trailing [unk] the pattern never consumed must not change the verdict"
+            );
+            Assert.AreEqual(1.0f, parser.Parse("cease fire [unk]")[0].Command.Score, 0.001f);
+        }
+
         // ---------- HoldExtendable classification (issue #32) ----------
 
         [Test]

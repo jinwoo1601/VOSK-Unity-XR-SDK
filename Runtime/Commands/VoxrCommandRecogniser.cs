@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace VoXR.Commands
 {
@@ -29,14 +30,25 @@ namespace VoXR.Commands
                  "Prevents partial or garbled matches.")]
         [SerializeField] float minScore = 0.6f;
 
-        [Tooltip("How much each in-grammar word the parser skips before a match starts " +
-                 "counts against the score. The parser slides its start point through the " +
-                 "utterance, so without this a short pattern found in the tail of a stray " +
-                 "sentence scores a full 1.0 and fires. At 1.0 the score becomes the " +
-                 "fraction of the utterance the pattern covers, so a one-word command " +
-                 "needs to be most of what was said. Unrecognised ([unk]) filler is never " +
-                 "charged. Set to 0 to disable.")]
-        [SerializeField] float skippedWordPenalty = VoxrCommandParser.DefaultSkippedWordPenalty;
+        [Tooltip(
+            "How much each in-grammar word a match leaves unexplained counts against "
+                + "the score — both the words the parser skipped to reach the match and the "
+                + "ones left over after it. The parser slides its start point through the "
+                + "utterance, so without this a short pattern found anywhere inside a longer "
+                + "sentence scores a full 1.0 and fires, discarding the rest. At 1.0 the "
+                + "score becomes the fraction of the utterance the pattern covers, so a "
+                + "one-word command needs to be most of what was said. Unrecognised ([unk]) "
+                + "filler is never charged, and leftover words that could begin another "
+                + "command are not either, so chained commands still work. Set to 0 to "
+                + "disable — note that this also restores the behaviour where a spoken "
+                + "argument can be silently dropped in favour of a shorter pattern."
+        )]
+        // DR-4: carries the value across the rename, so a scene or prefab that set the old
+        // field keeps its tuning. The field is private, so this covers the whole serialized
+        // surface — there is no public property or constant to forward from.
+        [FormerlySerializedAs("skippedWordPenalty")]
+        [SerializeField]
+        float coverageWeight = VoxrCommandParser.DefaultCoverageWeight;
 
         [Tooltip("Time in seconds to wait for additional speech before parsing. " +
                  "Longer values recover split commands but add latency. " +
@@ -170,7 +182,7 @@ namespace VoXR.Commands
             EnsureAcceptedBuffer(commands.Length);
 
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands,
-                skippedWordPenalty);
+                coverageWeight);
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
             if (!freeSpeechMode && speechRecogniser != null && speechRecogniser.IsModelReady)
@@ -272,7 +284,7 @@ namespace VoXR.Commands
                     "Configure must be called before RebuildParser().");
 
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands,
-                skippedWordPenalty);
+                coverageWeight);
         }
 
         public void RebuildGrammar()
