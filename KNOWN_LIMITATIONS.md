@@ -321,6 +321,99 @@ deliberate trade-offs rather than oversights.
   validation should run once per `Configure()` call, not per parser rebuild.
   Filed as a low-priority follow-up.
 
+### Coverage demotes a command when it explains too little of what was said
+
+- **Repro**: Register only `decelerate` (no slot-filled sibling) and say
+  "decelerate hard burn". The command scores `1 / (1 + 2)` = `0.333` against the
+  default `minScore` of `0.6` and does not fire; before v2.6 it scored `1.0` and
+  fired. Same shape for any short pattern followed by words the grammar cannot
+  place: "cease fire please" drops `1.0` → `0.667`, "approach target alpha one now"
+  → `0.750`.
+- **Where seen**: measured across a 699-utterance A/B during #65 §5.2. 17 of 699
+  stopped clearing the gate; 8 of those were partially-heard utterances that had
+  been sitting on exactly `0.600`.
+- **Root cause**: coverage charges a candidate for the in-grammar tokens it leaves
+  unexplained on either side, so a command is no longer judged on how neatly it
+  matched the part it chose but on how much of the utterance it accounts for. That
+  is deliberate — it is what stops a bare pattern silently discarding a spoken
+  argument (#42) — but it applies whether or not a better sibling exists to win
+  instead.
+- **Workaround**:
+  - Register the fuller phrasing as a sibling pattern, so the demotion has
+    somewhere to land. This is the intended authoring response.
+  - Mark natural trailing words optional (`?please`) to bring them into the
+    grammar.
+  - Lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0`
+    restores pre-v2.6 behaviour entirely — including the discarded-argument bug.
+
+### Out-of-grammar words are only free when the decoder returns them as `[unk]`
+
+- **Repro**: With `freeSpeechMode` enabled, or via `InjectText`, or through
+  `VoxrBatchTestRunner.Run`, feed "cease fire please". The score is `0.667`, not
+  the `1.0` the same utterance gets through the grammar-constrained decoder.
+- **Where seen**: #65 §5.2 review; `requirements.md` §4.1 records the derivation.
+- **Root cause**: coverage exempts the literal token `[unk]`, which is what a
+  grammar-constrained VOSK returns for a word outside its vocabulary. The three
+  paths above deliver real text instead, so a word the decoder would have hidden
+  arrives verbatim and is charged as unexplained. The leading half of the rule has
+  always behaved this way; v2.6 newly exposes the trailing half, where filler is
+  commoner.
+- **Workaround**: treat batch and free-speech scores as a lower bound on the
+  grammar-constrained score, not as equal to it. `Documentation~/editor-testing.md`'s
+  claim that batch results "predict runtime behaviour" is weaker for grammars whose
+  users add natural trailing words.
+
+### A slot-initial pattern weakens trailing coverage for the whole grammar
+
+- **Repro**: Register any pattern whose first matchable element is a permissive
+  slot — an open-ended `NumberSequence`, say. Trailing coverage then charges
+  almost nothing anywhere in that grammar, because the orphan run stops at the
+  first token that could begin a match and nearly every token now qualifies.
+- **Where seen**: identified at design time (#65 architecture D4), confirmed by
+  the `CanStartPattern` tests.
+- **Root cause**: the orphan test is deliberately conservative — where it is
+  uncertain whether a pattern could start at a token, it charges nothing, because
+  over-charging destroys multi-command utterances while under-charging only leaves
+  a score where it was. A permissive slot-initial pattern makes the predicate say
+  "yes" almost everywhere.
+- **Workaround**: none needed for correctness — the grammar reverts to pre-v2.6
+  scoring. If the #42 protection matters, avoid slot-initial patterns over
+  open-ended slots, or anchor them behind a literal.
+
+### A second command that loses its own leading word is charged to the first
+
+- **Repro**: Say two commands in one breath and have VOSK drop the second's first
+  word: "cease fire" + "approach target hotel one" heard as
+  "cease fire target hotel one". `cease_fire` falls `1.0` → `0.4` and stops
+  firing; `approach_target` still fires at `0.667`. Say the second command in
+  full and both fire at `1.0`.
+- **Where seen**: #65 §5.2 A/B — 11 intent-changes and 1 count-change of 699, all
+  this shape.
+- **Root cause**: the orphan run stops at the first token that could *begin* a
+  pattern, but the matcher can begin a pattern anywhere by missing its leading
+  elements. "target" begins no pattern, so the first command is charged for tokens
+  a later extraction round then explains. A per-position admissibility probe would
+  close it; a cruder widening collapses into the slot-initial case above.
+- **Workaround**: none at user level. It loses a command; it never fires a wrong
+  one. Tracked as a follow-up.
+
+### A demoted winner can block a better-scoring match that starts later
+
+- **Repro**: With the demo grammar, say "switch navigation mode" (the "to"
+  dropped and a stray "switch" leading). `switch to navigation` matches at token 0
+  by skipping the "to", scores `0.500`, and fires nothing; `navigation mode` at
+  token 1 would have scored `0.667`.
+- **Where seen**: #65 §5.2 review. Swept exhaustively over 699 utterances: 29
+  candidates were blocked this way and **28 were recovered** by a later extraction
+  round. This is the only one that was not.
+- **Root cause**: selection ranks earliest start above score, so a later-starting
+  candidate cannot be promoted however much better it scores — coverage can only
+  reorder candidates that begin at the same token. Normally sequential extraction
+  picks the better one up on the next round; it fails only when the winner's
+  consumed span covers the start the better candidate needed, as it does here.
+- **Workaround**: none at user level. Rare by measurement (1 in 699), and it
+  requires the winning pattern to span the alternative's start.
+
 ### Default `bufferWindow` is too short for split commands on Quest 3
 
 - **Repro**: Speak a two-part command with a deliberate mid-command pause:
