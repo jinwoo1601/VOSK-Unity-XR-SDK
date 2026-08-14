@@ -69,12 +69,30 @@ namespace VoXR.Commands
         // stops the command firing.
         const float RequiredLiteralMissPenalty = 0f;
 
-        // Weight added to the score denominator per in-grammar word the sliding start skips
-        // before a match begins (issue #31). At 1.0 the score becomes the fraction of the
-        // utterance the pattern actually covers, so a lone one-element pattern found in the
-        // tail of a longer utterance scores 0.5 instead of a full 1.0 and falls below the
-        // default minScore. 0 restores the previous behaviour (skipped words cost nothing).
-        internal const float DefaultSkippedWordPenalty = 1.0f;
+        // Weight added to the score denominator per in-grammar token a match leaves
+        // unexplained: those the sliding start skipped to reach it (issue #31) and those left
+        // orphaned after it (issue #65 §5.2). At 1.0 a one-element pattern found in the tail
+        // of a longer utterance scores 0.5 and falls below the default minScore.
+        //
+        // Close to "the fraction of the utterance the pattern accounts for", but not exactly:
+        // trailing tokens that could begin another pattern are not charged, so "cease fire"
+        // keeps a full 1.0 in "cease fire launch missiles target hotel one" while accounting
+        // for two tokens of seven. That amnesty is what makes multi-command utterances work.
+        //
+        // Renamed from skippedWordPenalty by DR-4, because one weight now governs both sides
+        // and the old name described only the leading half. The rename also stops hiding a
+        // coupling: setting this to 0 restores pre-#31 behaviour AND silently switches off
+        // the issue #42 fix, which "coverage weight" at least admits to.
+        internal const float DefaultCoverageWeight = 1.0f;
+
+        // Kept one minor version as DR-4 prescribes. Inert in practice: the type is internal
+        // and InternalsVisibleTo names only first-party assemblies, so there is no external
+        // call site for the warning to reach.
+        [Obsolete(
+            "Renamed to DefaultCoverageWeight — the weight governs orphaned trailing tokens "
+                + "as well as leading skipped ones (issue #65 §5.2)."
+        )]
+        internal const float DefaultSkippedWordPenalty = DefaultCoverageWeight;
 
         // Upper bound on optional elements in a single pattern for eager-commit analysis
         // (issue #25). ExpandOptionals enumerates 2^optionals concrete forms; past this the
@@ -88,7 +106,7 @@ namespace VoXR.Commands
 
         readonly VoxrSlotDefinition[] _slots;
         readonly VoxrCommandDefinition[] _commands;
-        readonly float _skippedWordPenalty;
+        readonly float _coverageWeight;
 
         // Per-slot lookup: first word -> list of (fullValue, wordCount), sorted longest first.
         readonly Dictionary<string, List<SlotValueEntry>>[] _slotLookups;
@@ -106,6 +124,49 @@ namespace VoXR.Commands
 
         // Pre-computed set of optional slot elements (e.g. "{?target}").
         readonly HashSet<string> _optionalSlotElements;
+
+        // Grammar-derived answer to "could any active pattern begin a match at this token?"
+        // (issue #65 §5.2). Coverage charges a candidate for the in-grammar tokens it leaves
+        // unexplained AFTER its match, and that count stops at the first token which could
+        // begin some other pattern. Stopping there is what keeps sequential extraction
+        // intact: "cease fire launch missiles target hotel one" must charge cease_fire
+        // nothing, not five, because the launch is a command in its own right.
+        //
+        // Derived from the registered patterns ALONE, never from which candidates survived
+        // admission. Defining it over admitted candidates is the tempting shortcut — the
+        // selection loop already has them in hand — but it would couple coverage to the
+        // admission rule: rejecting one candidate would withdraw a pattern's claim on a
+        // token, turn that token into an orphan, and lower a DIFFERENT candidate's score.
+        //
+        // Built here in the constructor rather than alongside the _canCommitEarly analysis,
+        // which is lazy and reached only from the eager entry points. Those are never
+        // touched at the shipped default (eagerFlushOnCompleteMatch = false), so caches
+        // built there would be empty on an ordinary parse, every trailing token would be
+        // charged, and sequential extraction would break exactly as above. Invalidation is
+        // automatic: an active-set change rebuilds the whole parser.
+        readonly HashSet<string> _startLiterals;
+        readonly int[] _startSlots;
+
+        // Per-utterance coverage tables, rebuilt by BuildCoverageTables at the top of every
+        // parse and reused across that parse's extraction rounds. Grown on demand and never
+        // shrunk. Like _matchSlotBuf / _resultBuf they are allocated off the parse path, so
+        // coverage adds no per-utterance allocation (those two are sized once instead).
+        //
+        //   _recognisedPrefix[i]  — non-[unk] tokens in [0, i), so the words a round's sliding
+        //                           start walked past are one subtraction instead of a scan.
+        //   _orphanRun[i]         — tokens left unexplained in the run starting at i.
+        //   _forcedOrphanRun[i]   — the same, under Amendment A3, for a candidate that
+        //                           mis-predicted the token at i (see BuildCoverageTables).
+        //
+        // All are functions of the token array and the grammar alone and are complete before
+        // any candidate is scored, so no candidate's score depends on evaluation order.
+        int[] _recognisedPrefix;
+        int[] _orphanRun;
+        int[] _forcedOrphanRun;
+
+        // The array the tables above were built for, so the coupling between them can be
+        // asserted rather than merely described. Not used for scoring.
+        string[] _coverageTokens;
 
         // Pre-allocated slot match buffers — avoids per-call List allocations in TryMatchScored/Parse.
         readonly int _maxSlotsPerPattern;
@@ -147,15 +208,30 @@ namespace VoXR.Commands
             public int WordCount;
         }
 
+        // additionalGrammarWords are words the caller also put in the DECODER's grammar but
+        // that appear in no pattern — in practice the confirm/cancel follow-up vocabulary
+        // (VoxrCommandRecogniser.GetFollowUpGrammarWords). They matter to coverage because the
+        // decoder returns them as real tokens rather than [unk], so without them the trailing
+        // term charges a speaker for saying "disengage, yes": nothing can begin a match at
+        // "yes", so it reads as an orphan and sinks a command that used to fire. They can
+        // legitimately begin something — a follow-up — so they terminate an orphan run exactly
+        // as a pattern start does. Null is correct for a caller that registered no follow-up
+        // vocabulary with the decoder either.
         public VoxrCommandParser(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
-            float skippedWordPenalty = DefaultSkippedWordPenalty)
+            float coverageWeight = DefaultCoverageWeight,
+            string[] additionalGrammarWords = null
+        )
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
             if (commands == null) throw new ArgumentNullException(nameof(commands));
 
             _slots = slots;
             _commands = commands;
-            _skippedWordPenalty = skippedWordPenalty > 0f ? skippedWordPenalty : 0f;
+            // Rejects negatives and NaN, and also non-finite positives: at +infinity a
+            // candidate with nothing unexplained computes 0 * infinity = NaN, and NaN slips
+            // through every `<= 0f` floor because those comparisons are false for NaN.
+            _coverageWeight =
+                coverageWeight > 0f && !float.IsInfinity(coverageWeight) ? coverageWeight : 0f;
 
             // Build slot name -> index mapping
             _slotIndex = new Dictionary<string, int>(slots.Length, StringComparer.Ordinal);
@@ -231,6 +307,61 @@ namespace VoXR.Commands
                     }
                 }
             }
+
+            // Which literals and slots can be the FIRST thing a pattern matches. The walk
+            // takes each element from index 0 and continues past it only while that element
+            // is OPTIONAL — an omitted optional lets the element behind it legitimately begin
+            // the match — stopping at and including the first required one.
+            _startLiterals = new HashSet<string>(StringComparer.Ordinal);
+            var startSlots = new List<int>();
+            foreach (var command in commands)
+            {
+                foreach (var pattern in command.Patterns)
+                {
+                    foreach (string element in pattern)
+                    {
+                        bool optional;
+                        if (_slotNameCache.TryGetValue(element, out string slotName))
+                        {
+                            optional = _optionalSlotElements.Contains(element);
+                            // Slot references were validated above, so this cannot miss.
+                            int slotIdx = _slotIndex[slotName];
+                            if (!startSlots.Contains(slotIdx))
+                                startSlots.Add(slotIdx);
+                        }
+                        else if (IsOptionalLiteral(element))
+                        {
+                            optional = true;
+                            // The STRIPPED form: "?mark" can only ever match the token "mark",
+                            // and storing the raw element would add a string no utterance can
+                            // contain, silently weakening the predicate.
+                            _startLiterals.Add(_optionalLiteralCache[element]);
+                        }
+                        else
+                        {
+                            optional = false;
+                            _startLiterals.Add(element);
+                        }
+
+                        if (!optional)
+                            break;
+                    }
+                }
+            }
+            // Words the decoder can return that begin no pattern but do begin a follow-up.
+            // Folded in here rather than kept separate because the predicate's question is
+            // "could anything the grammar knows about start here?", and the answer for a
+            // confirm/cancel word is yes.
+            if (additionalGrammarWords != null)
+            {
+                foreach (string word in additionalGrammarWords)
+                {
+                    if (!string.IsNullOrEmpty(word))
+                        _startLiterals.Add(word);
+                }
+            }
+
+            _startSlots = startSlots.ToArray();
 
             // Compute max slots per pattern to size reusable buffers.
             int maxSlots = 0;
@@ -339,11 +470,27 @@ namespace VoXR.Commands
         // element's credit while still counting it in its denominator, so it drops below the
         // perfectly-matching P, which wins and the spoken slot content is discarded with
         // nothing to signal it. Issue #65 §5.1 reduced that loss (a drop now costs 1/N rather
-        // than 1.5/N) but cannot close this, and no penalty tuning can: P scores a clean 1.0
-        // and nothing normalized to 1.0 can beat it. Marking the literal optional does — an
-        // omitted optional leaves both sides of the ratio, so the longer pattern reaches 1.0
-        // whether or not the literal was spoken and takes the consumed-span tie-break
+        // than 1.5/N) but could not close it, and no penalty tuning could: P scored a clean
+        // 1.0 and nothing normalized to 1.0 can beat it. Marking the literal optional does —
+        // an omitted optional leaves both sides of the ratio, so the longer pattern reaches
+        // 1.0 whether or not the literal was spoken and takes the consumed-span tie-break
         // (issue #41) over the bare form.
+        //
+        // §5.2 CLOSED THE COMMON CASE, so the paragraph above is now the history of this
+        // detector rather than its reason. Coverage charges P for what it leaves unexplained,
+        // which is exactly the stranded slot value: bare "decelerate" on "decelerate hard
+        // burn" falls from 1.0 to 1/(1+2) and loses to the longer pattern's 2/3.
+        //
+        // The hazard is REDUCED, not eliminated, and the residue is what this still warns
+        // about. An orphan run stops at the first token that could begin some other pattern,
+        // so when the stranded value's first word happens to start one, P is charged nothing
+        // and strands the value exactly as before — register ["hard","stop"] beside the pair
+        // above and "hard" becomes such a token.
+        //
+        // Deliberately NOT narrowed to that residue, though _startLiterals/_startSlots could
+        // now answer it. The remedy is the better authoring either way: an optional literal
+        // reaches 1.0 rather than 2/3, so it wins by more, and it also wins in the residual
+        // case where coverage alone does not.
         //
         // The scan mirrors what ParseInternal actually compares, which is why it is this wide:
         //   - ACROSS COMMANDS, not just within one. Selection runs over every pattern of every
@@ -485,13 +632,16 @@ namespace VoXR.Commands
 
             return $"[VoxrCommandParser] {sameIntent}, which extends it with {gap} in front of "
                 + $"slot \"{slot}\". If that literal is dropped, the longer pattern loses that "
-                + "element's credit while the bare one still matches perfectly — so the bare one "
-                + "wins and the slot value the speaker did say is discarded silently. Make the literal "
-                + $"optional (\"?{firstRequired}\") so an otherwise-complete match reaches the same "
-                + "score with or without the word and wins on consumed span. That trade is not "
-                + "free: an optional literal also lowers the score of matches that are already "
-                + "missing something, and stops anchoring the slot behind it, which can then "
-                + "claim adjacent tokens.";
+                + "element's credit while the bare one still matches perfectly. The bare one is "
+                + "now charged for the words it leaves unexplained (issue #65 §5.2), so it "
+                + "usually loses that exchange — but not when the stranded value's first word "
+                + "could itself begin some pattern, which stops the charge and hands the bare "
+                + "form the win with the value the speaker did say discarded silently. Make the "
+                + $"literal optional (\"?{firstRequired}\") to close the case that remains: an "
+                + "otherwise-complete match then reaches the same score with or without the word "
+                + "and wins on consumed span. That trade is not free: an optional literal also "
+                + "lowers the score of matches that are already missing something, and stops "
+                + "anchoring the slot behind it, which can then claim adjacent tokens.";
         }
 
         // The other hazard the eager-flush analysis carries (issue #44): one pattern past
@@ -579,6 +729,8 @@ namespace VoXR.Commands
                 return 0;
             }
 
+            BuildCoverageTables(tokens);
+
             int searchStart = 0;
 #if UNITY_EDITOR
             var diagnosticEntries = new List<ParseDiagnosticEntry>();
@@ -587,8 +739,6 @@ namespace VoXR.Commands
             while (searchStart < tokens.Length)
             {
                 float bestScore = float.MinValue;
-                float bestRawScore = 0f;
-                float bestDenominator = 0f;
                 int bestLiteralCount = -1;
                 int bestCommandIdx = -1;
                 int bestPatternIdx = -1;
@@ -607,7 +757,12 @@ namespace VoXR.Commands
                             if (tokens[startIdx] == UnkToken)
                                 continue;
 
-                            var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
+                            var matchResult = TryMatchScored(
+                                tokens,
+                                startIdx,
+                                patterns[pi],
+                                searchStart
+                            );
 
                             if (
                                 IsBetterCandidate(
@@ -621,8 +776,6 @@ namespace VoXR.Commands
                             )
                             {
                                 bestScore = matchResult.Score;
-                                bestRawScore = matchResult.RawScore;
-                                bestDenominator = matchResult.Denominator;
                                 bestLiteralCount = matchResult.LiteralCount;
                                 bestCommandIdx = ci;
                                 bestPatternIdx = pi;
@@ -651,25 +804,8 @@ namespace VoXR.Commands
                 if (bestEndIdx <= searchStart)
                     break;
 
-                // Charge the winner for the in-grammar words the sliding start walked past
-                // (issue #31). Skipped words cost nothing on their own, so a short pattern
-                // found in the tail of a stray utterance ("thrusters report" matching the
-                // one-word "report" command) used to score a full 1.0 and fire. Adding them
-                // to the denominator makes the score the fraction of the utterance the
-                // pattern covers, which only bites patterns short enough to be swallowed
-                // whole. [unk] runs are excluded — tolerating out-of-grammar preamble and
-                // hesitation is what the sliding start is for. The penalty is applied after
-                // selection so it filters via minScore without changing which pattern wins,
-                // and it measures from searchStart, so a second command in a multi-command
-                // utterance starts clean.
-                if (_skippedWordPenalty > 0f && bestStartIdx > searchStart)
-                {
-                    int skipped = CountRecognisedTokens(tokens, searchStart, bestStartIdx);
-                    if (skipped > 0)
-                        bestScore = bestRawScore
-                            / (bestDenominator + skipped * _skippedWordPenalty);
-                }
-
+                // No post-selection adjustment: the score a candidate was SELECTED on is the
+                // score it is reported with.
                 float confidence = ComputeConfidence(tokens, bestStartIdx, bestEndIdx, wordConfidence);
 
                 VoxrSlotMatch[] slotsArray;
@@ -868,8 +1004,6 @@ namespace VoXR.Commands
         struct MatchResult
         {
             public float Score;
-            public float RawScore;
-            public float Denominator;
             public int LiteralCount;
             public int SlotCount;
 
@@ -1007,7 +1141,11 @@ namespace VoXR.Commands
         internal ParseDiagnosticEntry[] LastParseDiagnostics;
 #endif
 
-        MatchResult TryMatchScored(string[] tokens, int startIdx, string[] pattern)
+        // searchStart is where this extraction round began, and only the leading coverage
+        // term reads it: the words charged are those between the round's origin and where
+        // this candidate starts, so a second command in a multi-command utterance is never
+        // charged for the tokens the first one consumed.
+        MatchResult TryMatchScored(string[] tokens, int startIdx, string[] pattern, int searchStart)
         {
             int tokenIdx = startIdx;
             float rawScore = 0f;
@@ -1080,11 +1218,12 @@ namespace VoXR.Commands
                         denominator += MatchScore;
                         missedRequired++;
                         missedRequiredSlot = true;
-                        // Currently dominated: missedRequiredSlot refuses an eager commit one
-                        // guard earlier, so this increment can never be the sole cause of a
-                        // refusal. Kept so the field stays true to its name — "any required
-                        // ELEMENT after the last match" — and so the tail condition does not
-                        // quietly depend on the slot guard's existence or its placement.
+                        // Dominated as an eager-REFUSAL cause: missedRequiredSlot refuses one
+                        // guard earlier, so this increment is never the sole reason a commit
+                        // is refused. It is NOT dominated generally — Amendment A3 gave it a
+                        // second consumer, and there it acts alone: a non-zero value here
+                        // selects the forced orphan table and so changes the flush-path score.
+                        // Narrowing this increment would move scores grammar-wide.
                         requiredAfterLastMatch++;
                     }
                     // Unmatched optional slot: contributes nothing to score or denominator.
@@ -1130,13 +1269,36 @@ namespace VoXR.Commands
             }
 
             _matchSlotCount = slotCount;
-            float normalizedScore = denominator > 0f ? rawScore / denominator : 0f;
+
+            // Coverage (issue #65 §5.2), computed HERE — before the caller compares
+            // candidates — which is the whole of the change. The leading term used to be
+            // applied to the winner alone, after selection, so that it could only filter via
+            // minScore and never reorder; symptom 2 cannot be fixed under that constraint,
+            // because a bare pattern that matches perfectly scores 1.0 and nothing normalised
+            // to 1.0 can beat it. See DefaultCoverageWeight for what the weight means.
+            //
+            // Adding to the denominator cannot change the sign of a negative rawScore, so the
+            // Score <= 0f floors above and in IsBetterCandidate behave exactly as before; and
+            // since rawScore <= denominator always holds, a strictly larger denominator keeps
+            // the score inside [0, 1].
+            //
+            // requiredAfterLastMatch selects WHICH orphan table to read (Amendment A3): a
+            // candidate whose own next required element failed at this position owns the token
+            // it mis-predicted and may not claim some other pattern could have begun there.
+            // Both tables are built once per utterance, so coverage is three array reads.
+            AssertCoverageTablesMatch(tokens);
+
+            float coverage =
+                (
+                    SkippedBefore(searchStart, startIdx)
+                    + OrphanedAfter(consumedEndIdx, requiredAfterLastMatch > 0)
+                ) * _coverageWeight;
+
+            float normalizedScore = denominator > 0f ? rawScore / (denominator + coverage) : 0f;
 
             return new MatchResult
             {
                 Score = normalizedScore,
-                RawScore = rawScore,
-                Denominator = denominator,
                 LiteralCount = literalCount,
                 SlotCount = slotCount,
                 MissedRequiredSlot = missedRequiredSlot,
@@ -1191,15 +1353,24 @@ namespace VoXR.Commands
             return null;
         }
 
-        string TryMatchNumberSequence(string[] tokens, int startIdx, int minWords, int maxWords, out int consumed)
+        // Consecutive digit words starting at startIdx (after the leading [unk] skip), capped
+        // at maxWords. Shared by TryMatchNumberSequence and CanStartPattern's slot probe so
+        // the two cannot drift on what counts as a number sequence — and so the probe, which
+        // only needs to know whether enough digits are there, never builds the joined string
+        // it would immediately throw away.
+        static int CountNumberSequenceWords(
+            string[] tokens,
+            int startIdx,
+            int maxWords,
+            out int matchStart
+        )
         {
-            consumed = 0;
             int idx = startIdx;
 
             while (idx < tokens.Length && tokens[idx] == UnkToken)
                 idx++;
 
-            int matchStart = idx;
+            matchStart = idx;
             int count = 0;
             while (count < maxWords && idx < tokens.Length
                 && VoxrNumberParser.DigitVocabulary.Contains(tokens[idx]))
@@ -1208,10 +1379,24 @@ namespace VoXR.Commands
                 idx++;
             }
 
+            return count;
+        }
+
+        string TryMatchNumberSequence(
+            string[] tokens,
+            int startIdx,
+            int minWords,
+            int maxWords,
+            out int consumed
+        )
+        {
+            consumed = 0;
+            int count = CountNumberSequenceWords(tokens, startIdx, maxWords, out int matchStart);
+
             if (count < minWords)
                 return null;
 
-            consumed = idx - startIdx;
+            consumed = matchStart + count - startIdx;
 
             if (count == 1)
                 return tokens[matchStart];
@@ -1273,6 +1458,11 @@ namespace VoXR.Commands
 
         // Tokens in [startIdx, endIdx) that VOSK resolved to a grammar word, i.e. excluding
         // the [unk] filler the sliding start is meant to skip for free.
+        //
+        // No longer on the parse path — issue #65 §5.2 replaced the scan with a prefix-sum
+        // subtraction (SkippedBefore) because coverage moved inside the candidate loop, where
+        // an O(n) scan per candidate would multiply parse cost by utterance length. Kept as
+        // the reference implementation that optimisation is pinned against.
         internal static int CountRecognisedTokens(string[] tokens, int startIdx, int endIdx)
         {
             int count = 0;
@@ -1280,6 +1470,156 @@ namespace VoXR.Commands
                 if (tokens[i] != UnkToken)
                     count++;
             return count;
+        }
+
+        // -------- Coverage tables (issue #65 §5.2) --------
+
+        // Rebuilds the per-utterance coverage tables. Every path that reaches TryMatchScored
+        // — ParseInternal's extraction loop and TryEagerCommit's scan — calls this first, over
+        // the token array it is about to score, and the tables then stay valid for that whole
+        // parse: the leading term re-bases per round through the searchStart subtraction, and
+        // the trailing term is searchStart-independent by construction.
+        internal void BuildCoverageTables(string[] tokens)
+        {
+            int n = tokens.Length;
+            if (_recognisedPrefix == null || _recognisedPrefix.Length < n + 1)
+            {
+                // All three grow together and are only ever read below their built length, so
+                // one capacity test covers them. Adding a fourth outside this block would
+                // reintroduce the per-utterance allocation the pooling exists to avoid.
+                _recognisedPrefix = new int[n + 1];
+                _orphanRun = new int[n + 1];
+                _forcedOrphanRun = new int[n + 1];
+            }
+
+            // Binds the tables to the array they describe, so a future entry point that
+            // reaches TryMatchScored without building them fails loudly instead of reading
+            // another utterance's answers. The arrays are grown and never shrunk, so a stale
+            // longer table returns in-range numbers for the wrong tokens — silently wrong on
+            // a shorter utterance, and only out-of-range on a longer one, which is the worse
+            // ordering of the two.
+            _coverageTokens = tokens;
+
+            _recognisedPrefix[0] = 0;
+            for (int i = 0; i < n; i++)
+                _recognisedPrefix[i + 1] = _recognisedPrefix[i] + (tokens[i] == UnkToken ? 0 : 1);
+
+            // Backwards in one pass. _orphanRun's three cases are the ordinary rule; the
+            // [unk] line carries both halves of that token's exemption at once — never
+            // charged, and TRANSPARENT rather than a run terminator. A stopper would let one
+            // noise token shield every real orphan behind it, so "decelerate [unk] hard burn"
+            // must cost exactly what "decelerate hard burn" costs.
+            //
+            // _forcedOrphanRun is the same quantity under Amendment A3, for a candidate whose
+            // own next required element failed at this position: the first non-[unk] token is
+            // charged outright instead of being tested against the start predicate, and the
+            // run continues normally after it.
+            //
+            // Without that, the rule rewards matching LESS. Take ["switch","to","weapons"] and
+            // ["switch","to","navigation"] on "switch to weapons target hotel". The navigation
+            // pattern MISSES its final element, so its consumed span stops at "weapons" —
+            // which begins ["weapons","mode"], terminating its orphan run at zero for a tidy
+            // 2/3. The weapons pattern MATCHES that element, so its origin moves past the very
+            // token that would have terminated its own run, and pays for "target hotel":
+            // 3/(3+2) = 0.6. The wrong command wins by 0.067 and fires. Measured: safe at one
+            // leftover token, flips at two.
+            //
+            // Tabulated here rather than branched at the call site because the A3 rule is a
+            // function of the token array alone — requiredAfterLastMatch only selects WHICH
+            // table to read — which keeps the per-candidate cost at one array index and keeps
+            // both forms of the rule at the one site that defines them.
+            _orphanRun[n] = 0;
+            _forcedOrphanRun[n] = 0;
+            for (int i = n - 1; i >= 0; i--)
+            {
+                if (tokens[i] == UnkToken)
+                {
+                    _orphanRun[i] = _orphanRun[i + 1];
+                    _forcedOrphanRun[i] = _forcedOrphanRun[i + 1];
+                    continue;
+                }
+
+                _orphanRun[i] = CanStartPattern(tokens, i) ? 0 : 1 + _orphanRun[i + 1];
+                _forcedOrphanRun[i] = 1 + _orphanRun[i + 1];
+            }
+        }
+
+        // Guards the precondition that BuildCoverageTables ran over the array being scored.
+        // Editor-only: the coupling is real but the check is not worth a branch in a shipped
+        // build, and both production callers build the tables at the top of the same method.
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        void AssertCoverageTablesMatch(string[] tokens)
+        {
+            if (!ReferenceEquals(_coverageTokens, tokens))
+            {
+                throw new InvalidOperationException(
+                    "Coverage tables were not built for this token array — call "
+                        + "BuildCoverageTables(tokens) before scoring candidates over it."
+                );
+            }
+        }
+
+        // In-grammar words the sliding start walked past this round — the count
+        // CountRecognisedTokens produces by scanning, in O(1). Coverage sits inside a triple
+        // nested loop (commands x patterns x start index), so a scan here would multiply
+        // parse cost by utterance length.
+        internal int SkippedBefore(int searchStart, int startIdx)
+        {
+            return _recognisedPrefix[startIdx] - _recognisedPrefix[searchStart];
+        }
+
+        // Tokens left unexplained in the run starting where the candidate's last match ended,
+        // under whichever of the two rules applies to it.
+        //
+        // Measured from ConsumedEndIdx rather than EndIdx: the two provably agree today (the
+        // only thing that moves the cursor without recording a match is the [unk] skip, and
+        // [unk] is transparent above), but ConsumedEndIdx is the index whose correctness does
+        // not depend on that staying true.
+        //
+        // `ownsTheNextToken` is Amendment A3: pass true when the candidate's own next required
+        // element failed at this position, so it may not claim that some OTHER pattern could
+        // have begun on the token it just mis-predicted.
+        internal int OrphanedAfter(int consumedEndIdx, bool ownsTheNextToken = false)
+        {
+            return ownsTheNextToken ? _forcedOrphanRun[consumedEndIdx] : _orphanRun[consumedEndIdx];
+        }
+
+        // Could any registered active pattern begin a match at tokens[idx]? Deliberately
+        // CONSERVATIVE: where the answer is uncertain it must be yes, and nothing is charged.
+        // Corrected by Amendment A3: the asymmetry below held only while coverage sat BELOW
+        // the selection barrier. Once coverage reorders, under-charging ONE candidate relative
+        // to a sibling is not "today's behaviour" — it is how the wrong command came to beat
+        // the right one, which is what A3 exists to close. The conservative default stands;
+        // the argument for it does not extend to the reordering regime.
+        //
+        // The failure modes are not symmetric — over-charging destroys sequential extraction,
+        // while under-charging merely leaves a score where it already is today.
+        //
+        // Callers must not pass an [unk] index; BuildCoverageTables settles those first.
+        internal bool CanStartPattern(string[] tokens, int idx)
+        {
+            if (_startLiterals.Contains(tokens[idx]))
+                return true;
+
+            for (int s = 0; s < _startSlots.Length; s++)
+            {
+                int slotIdx = _startSlots[s];
+                if (_slots[slotIdx].Type == VoxrSlotType.NumberSequence)
+                {
+                    // Capped at minWords, not maxWords: the question is only whether enough
+                    // digits are present to satisfy the slot, so there is no reason to walk
+                    // the rest of the run.
+                    int minWords = _slots[slotIdx].MinWords;
+                    if (CountNumberSequenceWords(tokens, idx, minWords, out _) >= minWords)
+                        return true;
+                }
+                else if (TryMatchSlot(tokens, idx, slotIdx, out _) != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         internal static float ComputeConfidence(string[] tokens, int startIdx, int endIdx,
@@ -1473,6 +1813,7 @@ namespace VoXR.Commands
                 return EagerCommitVerdict.None;
 
             EnsureCanCommitEarly();
+            BuildCoverageTables(tokens);
 
             float bestScore = float.MinValue;
             int bestLiteralCount = -1;
@@ -1494,7 +1835,8 @@ namespace VoXR.Commands
                         if (tokens[startIdx] == UnkToken)
                             continue;
 
-                        var matchResult = TryMatchScored(tokens, startIdx, patterns[pi]);
+                        // searchStart is 0: this scan mirrors ParseInternal's first round.
+                        var matchResult = TryMatchScored(tokens, startIdx, patterns[pi], 0);
 
                         if (
                             IsBetterCandidate(
@@ -1576,11 +1918,13 @@ namespace VoXR.Commands
             // preamble ("Helm, coast") is skipped rather than blocking the commit (issue #43),
             // matching the sliding start that already absorbs it for free everywhere else.
             //
-            // Only [unk] may precede the match. ParseInternal charges skipped *recognised*
-            // words against the score after selection (issue #31) and this scan does not, so
-            // relaxing this to tolerate any leading leftover would let the gate commit a
-            // buffer the subsequent flush then scores below minScore. [unk] is exempt from
-            // that penalty, which is what keeps the two scores identical here.
+            // Only [unk] may precede the match. This scan and the flush now compute the SAME
+            // score — both charge leading skipped words through TryMatchScored (issue #65
+            // §5.2), where the flush path once applied that charge after selection and this
+            // scan omitted it — so the two can no longer diverge, and this condition is not
+            // what keeps them aligned. What it still buys is completeness: a leading run of
+            // recognised words the match did not consume means the buffer holds more than
+            // this command, and committing would fire on part of it.
             int firstRecognisedIdx = 0;
             while (firstRecognisedIdx < tokens.Length && tokens[firstRecognisedIdx] == UnkToken)
                 firstRecognisedIdx++;

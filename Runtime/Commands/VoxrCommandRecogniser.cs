@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace VoXR.Commands
 {
@@ -29,14 +30,37 @@ namespace VoXR.Commands
                  "Prevents partial or garbled matches.")]
         [SerializeField] float minScore = 0.6f;
 
-        [Tooltip("How much each in-grammar word the parser skips before a match starts " +
-                 "counts against the score. The parser slides its start point through the " +
-                 "utterance, so without this a short pattern found in the tail of a stray " +
-                 "sentence scores a full 1.0 and fires. At 1.0 the score becomes the " +
-                 "fraction of the utterance the pattern covers, so a one-word command " +
-                 "needs to be most of what was said. Unrecognised ([unk]) filler is never " +
-                 "charged. Set to 0 to disable.")]
-        [SerializeField] float skippedWordPenalty = VoxrCommandParser.DefaultSkippedWordPenalty;
+        [Tooltip(
+            "How much each in-grammar word a match leaves unexplained counts against "
+                + "the score — both the words the parser skipped to reach the match and the "
+                + "ones left over after it. The parser slides its start point through the "
+                + "utterance, so without this a short pattern found anywhere inside a longer "
+                + "sentence scores a full 1.0 and fires, discarding the rest. At 1.0 the "
+                + "score is close to the fraction of the utterance the pattern covers, so a "
+                + "one-word command needs to be most of what was said. Unrecognised ([unk]) "
+                + "filler is never charged, and a leftover word that could begin another "
+                + "command or a confirm/cancel reply usually is not either, so chained "
+                + "commands still work — the exception is a word the pattern itself tried "
+                + "and failed to match, which is always charged. Set to 0 to disable — note "
+                + "that this also restores the behaviour where a spoken argument can be "
+                + "silently dropped in favour of a shorter pattern."
+        )]
+        // DR-4: carries the value across the rename for this field's OWN serialized data, so
+        // a scene or asset that set the old name deserializes onto the new one. The field is
+        // private, so there is no public property or constant needing a separate forwarder.
+        //
+        // Scope, deliberately narrow: [FormerlySerializedAs] governs field deserialization.
+        // A prefab-INSTANCE override is stored as a literal propertyPath string in the
+        // instance's m_Modifications and applied against the already-loaded prefab, and the
+        // same is true of .preset assets and of any editor script calling FindProperty with
+        // the old name. Whether Unity remaps those paths through this attribute is not
+        // established here and no automated instrument in this package can settle it — it
+        // needs a real prefab-override round-trip in a host project. Nothing shipped in this
+        // package is affected: no prefab, no preset, no CustomEditor, and no sample scene
+        // serializes this field at all.
+        [FormerlySerializedAs("skippedWordPenalty")]
+        [SerializeField]
+        float coverageWeight = VoxrCommandParser.DefaultCoverageWeight;
 
         [Tooltip("Time in seconds to wait for additional speech before parsing. " +
                  "Longer values recover split commands but add latency. " +
@@ -169,8 +193,13 @@ namespace VoXR.Commands
             _setManager.BuildLookup(commands);
             EnsureAcceptedBuffer(commands.Length);
 
+            // Same word list to both: the decoder can return follow-up vocabulary as real
+            // tokens, so the parser's coverage rule has to know those words are legitimate
+            // rather than charge them as unexplained (issue #65 §5.2).
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands,
-                skippedWordPenalty);
+                coverageWeight,
+                GetFollowUpGrammarWords()
+            );
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
             if (!freeSpeechMode && speechRecogniser != null && speechRecogniser.IsModelReady)
@@ -272,7 +301,9 @@ namespace VoXR.Commands
                     "Configure must be called before RebuildParser().");
 
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands,
-                skippedWordPenalty);
+                coverageWeight,
+                GetFollowUpGrammarWords()
+            );
         }
 
         public void RebuildGrammar()
