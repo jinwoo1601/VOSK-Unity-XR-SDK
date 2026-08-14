@@ -36,12 +36,14 @@ namespace VoXR.Commands
                 + "ones left over after it. The parser slides its start point through the "
                 + "utterance, so without this a short pattern found anywhere inside a longer "
                 + "sentence scores a full 1.0 and fires, discarding the rest. At 1.0 the "
-                + "score becomes the fraction of the utterance the pattern covers, so a "
+                + "score is close to the fraction of the utterance the pattern covers, so a "
                 + "one-word command needs to be most of what was said. Unrecognised ([unk]) "
-                + "filler is never charged, and leftover words that could begin another "
-                + "command are not either, so chained commands still work. Set to 0 to "
-                + "disable — note that this also restores the behaviour where a spoken "
-                + "argument can be silently dropped in favour of a shorter pattern."
+                + "filler is never charged, and a leftover word that could begin another "
+                + "command or a confirm/cancel reply usually is not either, so chained "
+                + "commands still work — the exception is a word the pattern itself tried "
+                + "and failed to match, which is always charged. Set to 0 to disable — note "
+                + "that this also restores the behaviour where a spoken argument can be "
+                + "silently dropped in favour of a shorter pattern."
         )]
         // DR-4: carries the value across the rename for this field's OWN serialized data, so
         // a scene or asset that set the old name deserializes onto the new one. The field is
@@ -191,8 +193,13 @@ namespace VoXR.Commands
             _setManager.BuildLookup(commands);
             EnsureAcceptedBuffer(commands.Length);
 
+            // Same word list to both: the decoder can return follow-up vocabulary as real
+            // tokens, so the parser's coverage rule has to know those words are legitimate
+            // rather than charge them as unexplained (issue #65 §5.2).
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands,
-                coverageWeight);
+                coverageWeight,
+                GetFollowUpGrammarWords()
+            );
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
             if (!freeSpeechMode && speechRecogniser != null && speechRecogniser.IsModelReady)
@@ -294,7 +301,9 @@ namespace VoXR.Commands
                     "Configure must be called before RebuildParser().");
 
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands,
-                coverageWeight);
+                coverageWeight,
+                GetFollowUpGrammarWords()
+            );
         }
 
         public void RebuildGrammar()

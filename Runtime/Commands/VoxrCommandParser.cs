@@ -149,8 +149,8 @@ namespace VoXR.Commands
 
         // Per-utterance coverage tables, rebuilt by BuildCoverageTables at the top of every
         // parse and reused across that parse's extraction rounds. Grown on demand and never
-        // shrunk, matching the _matchSlotBuf / _resultBuf pooling discipline — coverage adds
-        // no per-utterance allocation.
+        // shrunk. Like _matchSlotBuf / _resultBuf they are allocated off the parse path, so
+        // coverage adds no per-utterance allocation (those two are sized once instead).
         //
         //   _recognisedPrefix[i]  — non-[unk] tokens in [0, i), so the words a round's sliding
         //                           start walked past are one subtraction instead of a scan.
@@ -208,8 +208,18 @@ namespace VoXR.Commands
             public int WordCount;
         }
 
+        // additionalGrammarWords are words the caller also put in the DECODER's grammar but
+        // that appear in no pattern — in practice the confirm/cancel follow-up vocabulary
+        // (VoxrCommandRecogniser.GetFollowUpGrammarWords). They matter to coverage because the
+        // decoder returns them as real tokens rather than [unk], so without them the trailing
+        // term charges a speaker for saying "disengage, yes": nothing can begin a match at
+        // "yes", so it reads as an orphan and sinks a command that used to fire. They can
+        // legitimately begin something — a follow-up — so they terminate an orphan run exactly
+        // as a pattern start does. Null is correct for a caller that registered no follow-up
+        // vocabulary with the decoder either.
         public VoxrCommandParser(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
-            float coverageWeight = DefaultCoverageWeight
+            float coverageWeight = DefaultCoverageWeight,
+            string[] additionalGrammarWords = null
         )
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
@@ -217,7 +227,11 @@ namespace VoXR.Commands
 
             _slots = slots;
             _commands = commands;
-            _coverageWeight = coverageWeight > 0f ? coverageWeight : 0f;
+            // Rejects negatives and NaN, and also non-finite positives: at +infinity a
+            // candidate with nothing unexplained computes 0 * infinity = NaN, and NaN slips
+            // through every `<= 0f` floor because those comparisons are false for NaN.
+            _coverageWeight =
+                coverageWeight > 0f && !float.IsInfinity(coverageWeight) ? coverageWeight : 0f;
 
             // Build slot name -> index mapping
             _slotIndex = new Dictionary<string, int>(slots.Length, StringComparer.Ordinal);
@@ -334,6 +348,19 @@ namespace VoXR.Commands
                     }
                 }
             }
+            // Words the decoder can return that begin no pattern but do begin a follow-up.
+            // Folded in here rather than kept separate because the predicate's question is
+            // "could anything the grammar knows about start here?", and the answer for a
+            // confirm/cancel word is yes.
+            if (additionalGrammarWords != null)
+            {
+                foreach (string word in additionalGrammarWords)
+                {
+                    if (!string.IsNullOrEmpty(word))
+                        _startLiterals.Add(word);
+                }
+            }
+
             _startSlots = startSlots.ToArray();
 
             // Compute max slots per pattern to size reusable buffers.
@@ -1258,7 +1285,7 @@ namespace VoXR.Commands
             // requiredAfterLastMatch selects WHICH orphan table to read (Amendment A3): a
             // candidate whose own next required element failed at this position owns the token
             // it mis-predicted and may not claim some other pattern could have begun there.
-            // Both tables are built once per utterance, so this is two array reads.
+            // Both tables are built once per utterance, so coverage is three array reads.
             AssertCoverageTablesMatch(tokens);
 
             float coverage =
@@ -1473,18 +1500,6 @@ namespace VoXR.Commands
             // ordering of the two.
             _coverageTokens = tokens;
 
-            // Nothing is charged at zero weight, so skip the predicate sweep entirely rather
-            // than compute a table that will be multiplied away. The tables are still cleared
-            // rather than left stale, so the accessors keep answering honestly ("nothing is
-            // charged") instead of returning the previous utterance's counts.
-            if (_coverageWeight <= 0f)
-            {
-                Array.Clear(_recognisedPrefix, 0, n + 1);
-                Array.Clear(_orphanRun, 0, n + 1);
-                Array.Clear(_forcedOrphanRun, 0, n + 1);
-                return;
-            }
-
             _recognisedPrefix[0] = 0;
             for (int i = 0; i < n; i++)
                 _recognisedPrefix[i + 1] = _recognisedPrefix[i] + (tokens[i] == UnkToken ? 0 : 1);
@@ -1531,7 +1546,7 @@ namespace VoXR.Commands
 
         // Guards the precondition that BuildCoverageTables ran over the array being scored.
         // Editor-only: the coupling is real but the check is not worth a branch in a shipped
-        // build, and every production caller is two lines away from its own build call.
+        // build, and both production callers build the tables at the top of the same method.
         [System.Diagnostics.Conditional("UNITY_EDITOR")]
         void AssertCoverageTablesMatch(string[] tokens)
         {
@@ -1571,6 +1586,12 @@ namespace VoXR.Commands
 
         // Could any registered active pattern begin a match at tokens[idx]? Deliberately
         // CONSERVATIVE: where the answer is uncertain it must be yes, and nothing is charged.
+        // Corrected by Amendment A3: the asymmetry below held only while coverage sat BELOW
+        // the selection barrier. Once coverage reorders, under-charging ONE candidate relative
+        // to a sibling is not "today's behaviour" — it is how the wrong command came to beat
+        // the right one, which is what A3 exists to close. The conservative default stands;
+        // the argument for it does not extend to the reordering regime.
+        //
         // The failure modes are not symmetric — over-charging destroys sequential extraction,
         // while under-charging merely leaves a score where it already is today.
         //

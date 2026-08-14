@@ -1256,8 +1256,9 @@ namespace VoXR.Tests.Runtime
                 }
             );
 
+            // No BuildCoverageTables call: CanStartPattern reads only the constructor-built
+            // start caches and the token argument. It is what FILLS the tables, not a reader.
             var tokens = "please fire missiles two hotel".Split(' ');
-            parser.BuildCoverageTables(tokens);
 
             Assert.IsTrue(
                 parser.CanStartPattern(tokens, 0),
@@ -1290,7 +1291,6 @@ namespace VoXR.Tests.Runtime
             );
 
             var tokens = "halt two seven banana".Split(' ');
-            parser.BuildCoverageTables(tokens);
 
             Assert.IsTrue(parser.CanStartPattern(tokens, 0), "literal-initial pattern");
             Assert.IsTrue(parser.CanStartPattern(tokens, 1), "two digits available, minWords 2");
@@ -1303,12 +1303,12 @@ namespace VoXR.Tests.Runtime
 
         // --- [unk] handling on the trailing side (issue #65 §5.2) ---
         //
-        // Written before the trailing coverage term exists. Both tests are stated as
-        // EQUALITIES rather than values, which is what lets them stand on both sides of
-        // the change: today every score below is 1.0 because nothing after a match is
-        // charged, and afterwards the charged pairs move together. What they discriminate
-        // is an implementation that gets [unk] wrong, which is invisible either way if the
-        // assertion is a bare number.
+        // Written before the trailing coverage term existed, and deliberately kept in that
+        // form. Both tests are stated as EQUALITIES rather than values, which is what let
+        // them stand on both sides of the change: before, every score here was 1.0 because
+        // nothing after a match was charged; now the charged pairs move together. What they
+        // discriminate is an implementation that gets [unk] wrong — invisible either way if
+        // the assertion is a bare number.
 
         [Test]
         public void TrailingUnk_DoesNotTerminateTheOrphanRun()
@@ -1519,7 +1519,7 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void LongerSpanPatternWins_NowOnScoreRatherThanTheSpanKey()
+        public void SpanTieBreak_LongerSpanPatternNowWinsOnScore()
         {
             // Span sits ABOVE literal count, so it also settles equal-score candidates whose
             // literal counts differ — outcomes literal count used to decide on its own,
@@ -1550,13 +1550,13 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 1,
                 result.Command.MatchedPatternIndex,
-                "the 2-literal/4-token pattern must beat the 3-literal/3-token one"
+                "the slot pattern wins on score now — the literal one strands \"one\""
             );
             Assert.AreEqual("hotel one", result.Command.GetSlot("target"));
         }
 
         [Test]
-        public void LongerSpanCommandWins_AcrossCommands_NowOnScore()
+        public void SpanTieBreak_LongerSpanCommandNowWinsOnScore_AcrossCommands()
         {
             // The comparison runs across the whole command list, so a span tie changes which
             // *intent* fires, not merely which pattern index within one command.
@@ -2161,16 +2161,175 @@ namespace VoXR.Tests.Runtime
                         "decelerate_by",
                         new[] { new[] { "decelerate", "by", "{burn_level}" } }
                     ),
-                    new VoxrCommandDefinition("hard_stop", new[] { new[] { "hard", "stop" } }),
+                    // Three elements, so on "hard burn" it matches 1 required and misses 2 —
+                    // DR-7 REFUSES it. That is deliberate: the orphan test is defined over
+                    // registered patterns, not over admitted candidates, so "hard" must
+                    // terminate the run even though no candidate starting there survives. An
+                    // earlier two-element version of this fixture was DR-7-admitted, so it
+                    // passed identically under both definitions and pinned neither.
+                    new VoxrCommandDefinition(
+                        "hard_stop",
+                        new[] { new[] { "hard", "stop", "now" } }
+                    ),
                 }
             );
 
             var results = parser.Parse("decelerate hard burn");
 
+            Assert.AreEqual(1, results.Length, "the hard_stop candidate is refused by DR-7");
             Assert.AreEqual("decelerate", results[0].Command.Intent);
             Assert.AreEqual(1.0f, results[0].Command.Score, 0.001f);
             Assert.IsFalse(results[0].Command.HasSlot("burn_level"));
             LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Coverage_LeadingTerm_ReordersSiblingsAtTheSameStart()
+        {
+            // The leading half of "coverage is computed before candidates are compared" — and
+            // the only shape that can demonstrate it. Earliest start outranks score, and
+            // SkippedBefore is the same constant for every candidate at a given start index,
+            // so the leading term can only decide between siblings that START TOGETHER and
+            // whose denominators differ.
+            //
+            // Without such a case the whole leading half can be reverted to post-selection
+            // application with the suite staying green — verified by building that mutant and
+            // finding zero failures across the suite and 1095 utterances.
+            //
+            // "burn_now" makes "hard" a pattern start so both trailing terms are zero;
+            // "set target mode" makes "target" in-grammar filler that begins nothing. Two
+            // leading skips then separate 1/(1+2) = 0.333 from 2/(3+2) = 0.400, inverting the
+            // 1.0-vs-0.667 order the un-charged scores would have given.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"by\""));
+
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("burn", new[] { "hard" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition("decelerate", new[] { new[] { "decelerate" } }),
+                    new VoxrCommandDefinition(
+                        "decelerate_by",
+                        new[] { new[] { "decelerate", "by", "{burn}" } }
+                    ),
+                    new VoxrCommandDefinition("burn_now", new[] { new[] { "{burn}", "now" } }),
+                    new VoxrCommandDefinition(
+                        "set_target_mode",
+                        new[] { new[] { "set", "target", "mode" } }
+                    ),
+                }
+            );
+
+            var results = parser.Parse("target target decelerate hard");
+
+            Assert.AreEqual(
+                1,
+                results.Length,
+                "the bare form would strand \"hard\" and split this into two commands"
+            );
+            Assert.AreEqual("decelerate_by", results[0].Command.Intent);
+            Assert.AreEqual("hard", results[0].Command.GetSlot("burn"));
+            Assert.AreEqual(2f / 5f, results[0].Command.Score, 0.001f);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Coverage_MisPredictedTokenCharge_StopsAtTheNextPatternStart()
+        {
+            // A3 charges the mis-predicted token and then hands back to the ordinary run — it
+            // is an exception at ONE position, not a licence to charge everything after.
+            //
+            // "switch to navigation" misses its final element against "weapons", so A3 charges
+            // that token; the run then stops at "halt", which begins a pattern. 2/(3+1) = 0.5.
+            // Charging the whole tail instead would give 2/(3+2) = 0.4 — which is exactly what
+            // the second parse shows, where nothing after the mis-predicted token is a start.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "mode_navigation",
+                        new[] { new[] { "switch", "to", "navigation" } }
+                    ),
+                    new VoxrCommandDefinition("halt", new[] { new[] { "halt" } }),
+                }
+            );
+
+            Assert.AreEqual(
+                0.5f,
+                parser.Parse("switch to weapons halt")[0].Command.Score,
+                0.001f,
+                "the run stops at \"halt\", so only the mis-predicted token is charged"
+            );
+            Assert.AreEqual(
+                0.4f,
+                parser.Parse("switch to weapons stuff")[0].Command.Score,
+                0.001f,
+                "with no start to stop at, the run continues and charges both"
+            );
+        }
+
+        [Test]
+        public void Coverage_FractionalWeight_ScalesBothTermsAlike()
+        {
+            // The only assertions on the weight were at 0 and 1, where many inequivalent
+            // formulas agree — Ceil(w), w squared, or a weight applied to one term only all
+            // pass. One leading skip ("zulu") and one trailing orphan ("yankee") over a
+            // one-element pattern make the arithmetic 1/(1 + 2w), which separates them.
+            var commands = new[] { new VoxrCommandDefinition("solo", new[] { new[] { "alpha" } }) };
+
+            foreach (var (weight, expected) in new[] { (0f, 1f), (0.5f, 0.5f), (1f, 1f / 3f) })
+            {
+                var parser = new VoxrCommandParser(
+                    Array.Empty<VoxrSlotDefinition>(),
+                    commands,
+                    weight
+                );
+
+                Assert.AreEqual(
+                    expected,
+                    ParseOne(parser, "zulu alpha yankee").Command.Score,
+                    0.001f,
+                    $"1 / (1 + 2 x {weight})"
+                );
+            }
+        }
+
+        [Test]
+        public void Coverage_FollowUpVocabulary_IsNotChargedAsAnOrphan()
+        {
+            // The recogniser puts confirm/cancel words in the DECODER's grammar, so VOSK
+            // returns them as real tokens rather than [unk] — and they begin no pattern. Left
+            // out of the parser's view they read as orphans, and "disengage, yes" drops from
+            // 1.0 to 0.5, under minScore, firing nothing: a working utterance broken by the
+            // package's own vocabulary.
+            //
+            // The two parsers below differ only in whether the parser was told what the
+            // decoder was told, which is the whole of the fix.
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("cease_fire", new[] { new[] { "disengage" } }),
+            };
+
+            var informed = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                commands,
+                VoxrCommandParser.DefaultCoverageWeight,
+                new[] { "yes", "confirm", "cancel" }
+            );
+            var uninformed = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), commands);
+
+            Assert.AreEqual(
+                1.0f,
+                ParseOne(informed, "disengage yes").Command.Score,
+                0.001f,
+                "a follow-up word can legitimately begin something, so it ends the orphan run"
+            );
+            Assert.AreEqual(
+                0.5f,
+                ParseOne(uninformed, "disengage yes").Command.Score,
+                0.001f,
+                "and this is what it costs when the parser is not told — the defect being fixed"
+            );
         }
 
         [Test]
