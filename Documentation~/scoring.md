@@ -112,10 +112,11 @@ A trailing token is orphaned only if **no active pattern could begin a match at 
 
 The test reads the registered patterns alone — never which candidates happened to survive admission — and it is deliberately **conservative**: where it is unsure whether a pattern could start at a token, it answers yes and charges nothing. The failure modes are not symmetric. Over-charging destroys sequential extraction; under-charging merely leaves a score where it already was.
 
-Two consequences of that conservatism:
+Three consequences of that conservatism, all of them grammar-wide — the start set is one table shared by every candidate, so widening it anywhere weakens trailing coverage everywhere:
 
 - **It reads the decoder's word list, not only the pattern set.** Confirm/cancel follow-up vocabulary is in the grammar, so the decoder returns "yes" as a real token rather than `[unk]`. Since a follow-up can legitimately begin there, "disengage, yes" is not charged for the "yes".
-- **A slot-initial pattern over a permissive slot weakens trailing coverage grammar-wide.** If a pattern can begin with an open-ended `NumberSequence`, nearly every token becomes a possible start and almost nothing is charged anywhere in that grammar. See [Known Limitations](../KNOWN_LIMITATIONS.md).
+- **A slot-initial pattern over a permissive slot weakens trailing coverage.** If a pattern can begin with an open-ended `NumberSequence`, nearly every token becomes a possible start and almost nothing is charged anywhere in that grammar. See [Known Limitations](../KNOWN_LIMITATIONS.md).
+- **A pattern's *leading optional* elements are pattern starts too.** The walk that collects start tokens continues past each optional element and stops at the first required one — because an omitted optional lets the element behind it legitimately begin the match. So `["?please", "fire"]` puts **both** "please" and "fire" into the start set, and a stray "please" then terminates the orphan run for every candidate in the grammar. Worth knowing before you bring filler words in as optionals: put them where they are actually spoken, and prefer the **end** of a pattern to the front.
 
 **One exception, at the run's first position only.** Where the candidate's *own* next required element failed to match at that token, the token is charged rather than tested against the predicate. A candidate that has just mis-predicted a token may not then claim that some *other* pattern could have begun there.
 
