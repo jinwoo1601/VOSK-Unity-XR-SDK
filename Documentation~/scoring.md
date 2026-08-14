@@ -136,7 +136,9 @@ Only the literal `[unk]` token is exempt, and that is what a *grammar-constraine
 
 ### Counting restarts at each extraction round
 
-Tokens consumed by a previously extracted command are not charged against the next one, so chained commands in one utterance do not penalise each other. On the trailing side the orphan test does the same job by construction.
+On the **leading** side, tokens consumed by a previously extracted command are not charged against the next one: the count is taken from where the round began, so chained commands do not penalise each other.
+
+The **trailing** side works differently, and the difference is worth knowing. It has no notion of a round at all — the orphan run is a property of the utterance and the grammar, measured forward from the candidate's consumed span. Usually that lands in the same place, because the next command's first word terminates the run. But the orphan test asks whether a pattern could *begin* at a token, while the matcher can begin anywhere by *missing* its leading elements — so where a later round explains tokens by missing its way into them, the earlier command is charged for tokens that did not go unexplained after all. [Worked example D](#d-two-commands-in-one-breath-and-one-of-them-loses-a-word) is that case, and it is a [known limitation](../KNOWN_LIMITATIONS.md).
 
 ### Setting the weight
 
@@ -276,7 +278,7 @@ A verdict above `None` requires **all** of:
 
 1. The winner's score ≥ `minScore` — the same number the flush path would compute. The scan mirrors an extraction round starting at token 0, so it charges [coverage](#2-coverage) identically and the two can no longer disagree about a buffer they both see.
 2. The match starts at the first **recognised** token. A leading `[unk]` run is skipped for free — nothing arriving later extends an utterance leftward, so out-of-grammar preamble ("Helm, ...") does not block a commit. A leading word VOSK *did* resolve does block it, and what that buys is completeness rather than agreement: a run of recognised words the match did not consume means the buffer holds more than this one command, and committing would fire on part of it.
-3. The match reaches the **end** of the buffer. Anything left over — recognised or `[unk]` — is treated as an in-progress tail. Note what this implies about the previous condition: a candidate that reaches here has nothing trailing it, so the *trailing* half of coverage can never be what decides an eager verdict. It can only lower a score the whole-buffer test was going to refuse anyway.
+3. The match reaches the **end** of the buffer. Anything left over — recognised or `[unk]` — is treated as an in-progress tail. Note what this implies for condition 1: whichever candidate ends up being checked here has nothing trailing it, so its *own* trailing charge is always zero. That does **not** make the trailing term irrelevant to the verdict — it still runs in selection, and selection picks the candidate these conditions are then applied to. On the buffer "decelerate hard burn", coverage demotes bare `decelerate` and hands the check to the buffer-spanning `decelerate by {burn_level}`, which commits; at `coverageWeight = 0` the bare form wins selection instead, fails this condition, and the verdict is `None`.
 4. Every **required slot** in the winning pattern actually matched. Condition 3 does not imply this: a missed slot consumes no *recognised* token, so it never moves the end of the match past anything the pattern matched — and where it does carry the end over a trailing `[unk]` run, that only makes condition 3 pass more readily. Either way a pattern can appear to span the buffer while still missing an argument. Required *literals* are exempt from **this** condition — a dropped function word still leaves every argument present — but see condition 5.
 5. **No required element sits after the last element that actually matched.** Condition 3 cannot express this either, and for the same reason: a miss consumes nothing, so a pattern whose *trailing* elements were never spoken ends up looking exactly like one that genuinely finished at the buffer end. A **medial** miss is fine and still commits — "launch all missiles hotel one" drops the "target" literal but fills every slot and still lands its last element on the buffer's final token, so nothing arriving next was owed to it. A **terminal** one is not: with `["switch", "to", "weapons"]` and `["switch", "to", "navigation"]` registered, the buffer "switch to" matches both at `(1 + 1 + 0) / 3` = `0.67`, and the winner is decided by registration order — so committing there fires the *wrong* command, not merely an early one.
 6. Confidence ≥ `minConfidence`, or `-1`.
@@ -339,7 +341,16 @@ Utterance: **"decelerate hard burn"** — the speaker said the burn level; VOSK 
 
 **This is the ordering that #65 inverted.** Until coverage entered selection, the bare pattern scored a flat `1.00` — it did match everything it claimed — and won, firing `decelerate` with an empty `slots` array while the "hard burn" the speaker actually said was silently dropped. No threshold reached it, because nothing normalised to `1.00` can be out-scored. Charging a candidate for what it leaves unexplained is what reverses the order, and it is the reason coverage had to move *above* the selection barrier rather than stay a filter on the winner.
 
-**`"?by"` is still the better grammar.** Make the literal optional and the omitted optional drops out of both sides of the ratio, so the slot-filled form scores `2 / 2` = `1.00` whether or not the word was spoken — a comfortable margin instead of `0.07` above the gate — and the parser stops flagging the shape at construction. Coverage removes the wrong-pattern hazard; `?by` removes the thin margin with it. Read [the cost of the swap](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) before applying it wholesale.
+**`"?by"` is still the better grammar, and the parser still warns about this shape at construction.** Coverage closes the *common* case, not the whole hazard — see below. Make the literal optional and the omitted optional drops out of both sides of the ratio, so the slot-filled form scores `2 / 2` = `1.00` whether or not the word was spoken, a comfortable margin instead of `0.07` above the gate. Read [the cost of the swap](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) before applying it wholesale.
+
+**The case coverage does not close.** The orphan run stops at the first token that could begin another match — so if the stranded value's *own first word* begins some pattern, the bare candidate is charged nothing and strands the value exactly as it did before #65. Register `["hard", "stop"]` alongside the pair above and "decelerate hard burn" goes back to firing bare `decelerate` at a full `1.00`, argument discarded, at the **default** `coverageWeight`:
+
+```json
+{ "intent": "decelerate", "pattern": "decelerate",
+  "score": 1.0, "accepted": true, "slots": [] }
+```
+
+This is why the construction-time warning was not narrowed when coverage shipped: `?by` fixes both the common case and this residue, and coverage alone fixes only the first. The same applies wherever [the orphan test](#what-counts-as-orphaned) charges nothing — including a grammar with a slot-initial pattern over a permissive slot.
 
 **Reading that entry:** a `0.67` on a three-element pattern whose slots *did* extract is the signature of exactly one missing required literal — `(N−1)/N` — with nothing left unexplained. If the number is lower than that arithmetic predicts, the difference is coverage: count the tokens outside the match.
 
@@ -441,7 +452,7 @@ The diagnoses below cover most of what sends you to the log. The first question 
 | The command that *lost* a word fired; the one spoken cleanly was rejected at ≈0.40 | Two commands in one utterance, the second missing its leading word (§7 D). |
 | no result at all for a pattern that clearly part-matched | The candidate missed more required elements than it matched and was refused [admission](#admission-what-counts-as-a-candidate-at-all) (§3). |
 | `score` = 1.0 but `aggregateConfidence` below the gate | One acoustically weak word (§5). Check `words`; consider a slot alias. |
-| Accepted with an empty `slots` array where you expected a value | A bare sibling pattern out-ranked the slot-filled one. Coverage fixed the common case (§7 B); if you still see it, check whether `coverageWeight` is `0`. |
+| Accepted with an empty `slots` array where you expected a value | A bare sibling pattern out-ranked the slot-filled one. Coverage closes the common case (§7 B). If you still see it, the stranded value's first word probably begins another pattern, so coverage charged the bare form nothing — or `coverageWeight` is `0`. |
 
 ---
 

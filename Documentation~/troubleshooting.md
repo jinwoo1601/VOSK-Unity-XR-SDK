@@ -51,12 +51,13 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 
 ### A command fires but a slot value is missing
 
-The utterance had the slot value in it, the command fired, and `GetSlot` returns `""`. The usual cause was a **bare sibling pattern out-scoring the slot-filled one** after a required function word was dropped, and [coverage](command-recognition.md#coverage) fixed it: the bare pattern is now charged for the words it leaves unexplained, so the slot-filled form wins and the argument survives.
+The utterance had the slot value in it, the command fired, and `GetSlot` returns `""`. The cause is a **bare sibling pattern out-ranking the slot-filled one** after a required function word was dropped. [Coverage](command-recognition.md#coverage) closes the common case -- the bare pattern is charged for the words it leaves unexplained, so the slot-filled form wins and the argument survives -- but it does not close all of it.
 
-If you still see this:
+If you still see this, in this order:
 
-- **Check `coverageWeight` is not `0`.** Zeroing it restores the pre-#65 scoring, and this bug with it.
-- Mark the droppable literal optional (`"?by"` rather than `"by"`) -- the parser warns about the shape at construction, naming the literal and the slot at risk. Coverage leaves the slot-filled form only `0.07` above the default gate, so the swap is still worth making.
+- **Check whether the stranded value's first word begins another pattern.** The orphan run stops at the first token that could start a match, so the bare form is charged nothing and wins exactly as it did before. With `["hard", "stop"]` registered, "decelerate hard burn" fires bare `decelerate` at `1.00` again -- at the default `coverageWeight`. This is the residue coverage cannot reach.
+- **Mark the droppable literal optional** (`"?by"` rather than `"by"`). This is the real fix: it reaches `1.00` rather than `0.67`, so it wins by more, and it wins in the residual case above where coverage alone does not. The parser warns about the shape at construction, naming the literal and the slot at risk -- and that warning was deliberately *not* narrowed when coverage shipped, for exactly this reason.
+- **Check `coverageWeight` is not `0`.** Zeroing it turns coverage off entirely -- back to pre-#31 scoring, before skipped words cost anything -- and brings this bug with it.
 - Full explanation, both costs of the swap, and the score arithmetic: [Never leave a required function word between a bare pattern and its slot](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) and [worked example B](scoring.md#b-coverage-picks-the-pattern-that-explains-more).
 
 ### A command stopped firing after upgrading
@@ -67,7 +68,7 @@ Work out `matched / elements` for the winning pattern. If the reported `score` i
 
 - Register the fuller phrasing as a sibling pattern, so the demotion has somewhere to land. This is the intended response.
 - Bring natural trailing words into the grammar as optional literals (`?please`, `?now`).
-- Blunter: lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0` reverts the model entirely -- including the discarded-argument bug above.
+- Blunter: lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0` turns coverage off entirely -- back to pre-#31 scoring, and the discarded-argument bug above comes with it. **The two knobs have different lifetimes**, which matters if you are tuning live: `minScore` is read fresh on every parse, so an Inspector edit applies to the very next utterance. `coverageWeight` is captured when the parser is built, and nothing watches the field -- so a Play Mode edit does nothing until you call `RebuildParser()` (or `Configure`, `SetActiveSets`, `NotifySlotChanged`), or re-enter Play Mode. Drag it mid-session and you will wrongly conclude coverage was not the cause.
 - Measured cases and the two shapes with no user-level workaround: [Known Limitations](../KNOWN_LIMITATIONS.md), plus [worked examples B2 and D](scoring.md#b2-the-same-demotion-with-nowhere-to-land).
 
 ### A command scores ~0.50 and is rejected
