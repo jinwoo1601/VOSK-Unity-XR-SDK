@@ -137,6 +137,8 @@ Regression-test command definitions after changing thresholds, aliases, or slot 
 
 Open **Window > VoXR > Batch Test Runner**. Assign slot/command assets and a `VoxrTestSuiteAsset`, then click **Run All**. Results appear in a table with per-row expansion for diagnostics. Export results as CSV for diffing across runs.
 
+**Min Score**, **Min Confidence**, and **Coverage Weight** mirror the fields of the same name on `VoxrCommandRecogniser` and are passed to the runner as they stand. Set them to the values your recogniser uses, or batch results will not track what the runtime does.
+
 ### Programmatic API
 
 ```csharp
@@ -150,7 +152,7 @@ Assert.IsTrue(results.AllPassed, results.FailureSummary);
 
 `VoxrBatchTestRunner` is pure C# -- no MonoBehaviour dependency and no audio hardware required. It instantiates a `VoxrCommandParser` directly (the same code path that `InjectText` uses internally).
 
-Both constructors also take an optional `coverageWeight` (default `1.0`, matching the recogniser; named `skippedWordPenalty` before #65). Pass the value your `VoxrCommandRecogniser` uses if you have tuned it, so batch results track runtime behaviour. Two caveats since #65: the batch runner receives real text rather than the decoder's `[unk]` for out-of-grammar words, so trailing filler is charged here where the grammar-constrained decoder would have made it free; and the editor window does not forward this value, so it always runs at the default -- see [Coverage](command-recognition.md#coverage).
+Both constructors also take an optional `coverageWeight` (default `1.0`, matching the recogniser; named `skippedWordPenalty` before #65). Pass the value your `VoxrCommandRecogniser` uses if you have tuned it, so batch results track runtime behaviour. One caveat since #65, on this path and in the window alike: the batch runner receives real text rather than the decoder's `[unk]` for out-of-grammar words, so trailing filler is charged here where the grammar-constrained decoder would have made it free -- see [Coverage](command-recognition.md#coverage).
 
 For command-set-aware testing:
 

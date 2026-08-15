@@ -22,6 +22,7 @@ namespace VoXR.Editor
 
         [SerializeField] float minScore = 0.6f;
         [SerializeField] float minConfidence = 0.4f;
+        [SerializeField] float coverageWeight = VoxrCommandParser.DefaultCoverageWeight;
 
         VoxrBatchResults _results;
         bool[] _expanded;
@@ -92,6 +93,7 @@ namespace VoXR.Editor
             EditorGUILayout.Space(2);
             minScore = EditorGUILayout.FloatField("Min Score", minScore);
             minConfidence = EditorGUILayout.FloatField("Min Confidence", minConfidence);
+            coverageWeight = EditorGUILayout.FloatField("Coverage Weight", coverageWeight);
         }
 
         // ─── Toolbar ────────────────────────────────────────────────────
@@ -325,7 +327,7 @@ namespace VoXR.Editor
 
                 if (activeSetNames != null && activeSetNames.Length > 0)
                     return new VoxrBatchTestRunner(slots, sets, activeSetNames,
-                        minScore, minConfidence);
+                        minScore, minConfidence, coverageWeight);
 
                 // No active set filter — use all commands from all sets
                 var allNames = new string[sets.Length];
@@ -333,7 +335,7 @@ namespace VoXR.Editor
                     allNames[i] = sets[i].Name;
 
                 return new VoxrBatchTestRunner(slots, sets, allNames,
-                    minScore, minConfidence);
+                    minScore, minConfidence, coverageWeight);
             }
             catch (Exception e)
             {
