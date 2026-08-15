@@ -1623,17 +1623,32 @@ namespace VoXR.Commands
         // does fire it, so cease_fire paid 0.4 for words that were never orphans.
         //
         // So the run asks the matcher instead. A position is a start when some active pattern,
-        // started there, yields an ADMISSIBLE candidate — admissible in exactly IsBetterCandidate's
-        // sense: a positive score, and no more missed required elements than matched ones.
+        // started there, matches STRICTLY MORE of its required elements than it misses.
         //
-        // That admission rule is the whole of what keeps this from being the "crude widening"
-        // the design refused. Widening to "any token any pattern could match anywhere" makes
-        // "hard burn" terminate a run and reverts #42 grammar-wide; DR-7 refuses precisely the
-        // candidates that widening would have admitted — a pattern that reaches a trailing slot
-        // only by missing everything ahead of it has more evidence against it than for it, and
-        // is no more a start here than it is a candidate there.
+        // That threshold is the whole of what keeps this from being the "crude widening" the
+        // design refused, and it is deliberately one notch STRONGER than DR-7's admission rule
+        // (`missed <= matched`, IsBetterCandidate:1120). DR-7 asks "is this a candidate at
+        // all?" — a question answered for a candidate that may still lose its round and never
+        // fire. Terminating another command's orphan run is a bigger claim: it moves score off
+        // a candidate that IS firing, so it takes strictly more evidence for than against.
+        //
+        // The gap between the two is not academic; it is the whole #42 regression. Take the
+        // pair command-recognition.md recommends as the safe remedy — ["decelerate"] beside
+        // ["decelerate","?by","{burn_level}"] — on "decelerate hard burn please". Probed from
+        // "hard", the slot-filled pattern misses "decelerate" (1) and matches {burn_level} (1).
+        // Under `missed <= matched` that is admissible, so the value the bare pattern strands
+        // terminates the bare pattern's own orphan run: bare scores 1/(1+0) = 1.00 against the
+        // slot-filled 2/(2+1) = 0.67, the bare command fires, and the burn level the speaker
+        // said is discarded — which is #42, reverted, on the grammar the docs prescribe.
+        // Under `missed < matched` the probe refuses it and the charge stands.
+        //
+        // Counted over the WHOLE pattern, not over the elements skipped to reach idx: a pattern
+        // is being asked whether it plausibly explains this token as a command, and a trailing
+        // required element it also matched is evidence for exactly that.
         //
         // Two properties worth stating, because F11 is argued against this method:
+        //   - The threshold is a COUNT, like DR-7 itself: no knob, nothing to configure, and
+        //     independent of minScore and of coverageWeight.
         //   - It only ever ADDS claims. CanStartPattern is consulted first and is never
         //     overruled, so a pattern that begins here keeps terminating the run whatever DR-7
         //     would say about the candidate — which is the half of F11 that
@@ -1661,7 +1676,7 @@ namespace VoXR.Commands
                     // suppresses the whole coverage term regardless.
                     var probe = TryMatchScored(tokens, idx, patterns[pi], idx, forStartProbe: true);
 
-                    if (probe.Score > 0f && probe.MissedRequired <= probe.MatchedRequired)
+                    if (probe.Score > 0f && probe.MissedRequired < probe.MatchedRequired)
                         return true;
                 }
             }

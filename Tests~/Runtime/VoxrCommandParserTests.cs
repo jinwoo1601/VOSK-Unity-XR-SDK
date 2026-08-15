@@ -1180,11 +1180,11 @@ namespace VoXR.Tests.Runtime
             // five tokens after it, and the multi-command utterance survives. Charging them
             // would take it from 2/2 to 2/7.
             //
-            // Indices 3 and 4 were 4 and 3 before issue #82: they are starts now because the
-            // terminator asks the MATCHER, and the matcher reaches them by missing leading
-            // elements it never heard. Both remain starts for a reason the run cares about —
-            // a real candidate begins there — while "hotel" at index 5 does not, so the run
-            // the rule exists to express is still visible at the tail.
+            // Index 3 was 4 before issue #82 and is the one number the new terminator moves
+            // here. The pair 3/4 is the whole point of the rule: at "missiles" the launch
+            // pattern matches {weapon}, "target" and {target} against one miss, so a real
+            // candidate begins there and the run stops; at "target" that same pattern matches
+            // two and misses two, which is not more evidence for than against, so it does not.
             var parser = CreateParser();
             var tokens = "cease fire launch missiles target hotel one".Split(' ');
 
@@ -1194,12 +1194,12 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 0,
                 parser.OrphanedAfter(3),
-                "\"missiles\": shoot {weapon} matches there, missing only its literal"
+                "\"missiles\": the launch pattern matches 3 required elements against 1 miss"
             );
             Assert.AreEqual(
-                0,
+                3,
                 parser.OrphanedAfter(4),
-                "\"target\": the launch pattern matches its last two elements there"
+                "\"target\": 2 matched against 2 missed is not a start — target, hotel, one"
             );
             Assert.AreEqual(
                 2,
@@ -1362,9 +1362,9 @@ namespace VoXR.Tests.Runtime
             // than a widening. "hard burn" is a slot value, so a crude "could any pattern
             // match anything here" test would call index 1 a start, charge the bare pattern
             // nothing, and hand the utterance straight back to it — un-fixing #42 grammar-wide.
-            // DR-7 refuses that candidate: reaching {burn_level} costs it both literals, so it
-            // has more evidence against it than for it and is no more a start here than it is
-            // a candidate there.
+            // Reaching {burn_level} from here costs this pattern both its literals, so it has
+            // more evidence against it than for it and is no more a start here than it is a
+            // candidate there.
             var parser = new VoxrCommandParser(
                 new[] { new VoxrSlotDefinition("burn_level", new[] { "hard burn" }) },
                 new[]
@@ -1392,6 +1392,81 @@ namespace VoXR.Tests.Runtime
             var result = ParseOne(parser, "decelerate hard burn");
             Assert.AreEqual("decelerate_by", result.Command.Intent);
             Assert.AreEqual("hard burn", result.Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void IsAdmissibleStart_RefusesAPatternWithAsMuchMissedAsMatched()
+        {
+            // The case the test above does NOT cover, and the one that caught a real
+            // regression in review. The guard cannot be DR-7's own `missed <= matched`: it has
+            // to be strictly `missed < matched`.
+            //
+            // This is the pair `command-recognition.md` prescribes as the SAFE remedy for the
+            // #42 hazard — the required "by" replaced with an optional "?by". Probed from
+            // "hard", `decelerate ?by {burn_level}` misses one required element ("decelerate")
+            // and matches one ({burn_level}); the optional counts toward neither side. Under
+            // `missed <= matched` that is admissible, the stranded value terminates the BARE
+            // pattern's own orphan run, and the bare command wins at 1/(1+0) = 1.00 over
+            // 2/(2+1) = 0.67 — firing with no argument at all, which is #42 restored on the
+            // grammar the docs recommend.
+            //
+            // A trailing token is required to expose it: without one the slot-filled pattern
+            // consumes to the end and wins on span regardless.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("burn_level", new[] { "hard burn" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition("decelerate", new[] { new[] { "decelerate" } }),
+                    new VoxrCommandDefinition(
+                        "decelerate_by",
+                        new[] { new[] { "decelerate", "?by", "{burn_level}" } }
+                    ),
+                }
+            );
+
+            var tokens = "decelerate hard burn please".Split(' ');
+
+            Assert.IsFalse(
+                parser.IsAdmissibleStart(tokens, 1),
+                "one matched against one missed is not more evidence for than against"
+            );
+
+            parser.BuildCoverageTables(tokens);
+            Assert.AreEqual(3, parser.OrphanedAfter(1), "hard, burn, please");
+
+            var result = ParseOne(parser, "decelerate hard burn please");
+            Assert.AreEqual("decelerate_by", result.Command.Intent, "not the bare pattern");
+            Assert.AreEqual("hard burn", result.Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void IsAdmissibleStart_LeavesOneAnchoringLiteralEnoughToTameAPermissiveSlot()
+        {
+            // KNOWN_LIMITATIONS.md tells authors that a slot-initial pattern over an
+            // open-ended slot weakens trailing coverage grammar-wide, and that the remedy is
+            // to "anchor them behind a literal". Under `missed <= matched` that remedy stopped
+            // working — ["heading", "{heading}"] probed from any digit misses one and matches
+            // one — so the limitation silently widened from slot-initial to slot-second and
+            // the documented workaround bought nothing.
+            var parser = new VoxrCommandParser(
+                new[] { VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_heading",
+                        new[] { new[] { "heading", "{heading}" } }
+                    ),
+                    new VoxrCommandDefinition("halt", new[] { new[] { "halt" } }),
+                }
+            );
+
+            var tokens = "halt two seven zero".Split(' ');
+
+            Assert.IsFalse(parser.CanStartPattern(tokens, 1));
+            Assert.IsFalse(parser.IsAdmissibleStart(tokens, 1), "the literal still anchors it");
+
+            parser.BuildCoverageTables(tokens);
+            Assert.AreEqual(3, parser.OrphanedAfter(1), "the digits are still charged");
         }
 
         [Test]

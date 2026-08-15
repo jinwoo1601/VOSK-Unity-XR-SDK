@@ -70,7 +70,7 @@ Work out `matched / elements` for the winning pattern. If the reported `score` i
 - Register the fuller phrasing as a sibling pattern, so the demotion has somewhere to land. This is the intended response.
 - Bring natural trailing words into the grammar as optional literals (`?please`, `?now`).
 - Blunter: lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0` turns coverage off entirely -- back to pre-#31 scoring, and the discarded-argument bug above comes with it. **The two knobs have different lifetimes**, which matters if you are tuning live: `minScore` is read fresh on every parse, so an Inspector edit applies to the very next utterance. `coverageWeight` is captured when the parser is built, and nothing watches the field -- so a Play Mode edit does nothing until you call `RebuildParser()` (or `Configure`, `SetActiveSets`, `NotifySlotChanged`), or re-enter Play Mode. Drag it mid-session and you will wrongly conclude coverage was not the cause.
-- Measured cases and the two shapes with no user-level workaround: [Known Limitations](../KNOWN_LIMITATIONS.md), plus worked examples [B2](scoring.md#b2-the-same-demotion-with-nowhere-to-land) and [D](scoring.md#d-two-commands-in-one-breath-and-one-of-them-loses-a-word).
+- Measured cases and the shapes with no user-level workaround: [Known Limitations](../KNOWN_LIMITATIONS.md), plus worked example [B2](scoring.md#b2-the-same-demotion-with-nowhere-to-land).
 
 ### A command scores ~0.50 and is rejected
 

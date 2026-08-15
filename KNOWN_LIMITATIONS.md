@@ -386,25 +386,22 @@ deliberate trade-offs rather than oversights.
 
 ### A demoted winner can block a better-scoring match that starts later
 
-- **Repro**: none known. The shape requires a round-1 winner that falls under
-  `minScore`, a better-scoring candidate starting *later* in the same utterance,
-  and a winning span that covers the token the better candidate needed — so
-  sequential extraction cannot reach it on the next round.
-- **Where seen**: #65 §5.2 review, swept exhaustively over 699 utterances: 29
-  candidates were blocked this way, **28 recovered** by a later extraction round,
-  and 1 ("switch navigation mode") was not. The same sweep re-run after #82 closed
-  the orphan-terminator gap gives **27 blocked, 27 recovered, 0 silent** — the one
-  case that survived scored `0.500` only because its trailing "mode" was charged as
-  an orphan, and it now scores `0.667` and fires. The property is unchanged; no
-  utterance in the corpus still exhibits it.
+- **Repro**: With the demo grammar, say "switch navigation mode" (the "to"
+  dropped and a stray "switch" leading). `switch to navigation` matches at token 0
+  by skipping the "to", scores `0.500`, and fires nothing; `navigation mode` at
+  token 1 would have scored `0.667`.
+- **Where seen**: #65 §5.2 review. Swept exhaustively over 699 utterances: 29
+  candidates were blocked this way and **28 were recovered** by a later extraction
+  round. This is the only one that was not. Re-swept after #82 changed the orphan
+  run's terminator: **28 blocked, 27 recovered**, and the same single case still
+  silent.
 - **Root cause**: selection ranks earliest start above score, so a later-starting
   candidate cannot be promoted however much better it scores — coverage can only
   reorder candidates that begin at the same token. Normally sequential extraction
   picks the better one up on the next round; it fails only when the winner's
-  consumed span covers the start the better candidate needed.
-- **Workaround**: none at user level. Listed because the selection key that causes
-  it is unchanged and the shape remains constructible, not because a measured case
-  remains.
+  consumed span covers the start the better candidate needed, as it does here.
+- **Workaround**: none at user level. Rare by measurement (1 in 699), and it
+  requires the winning pattern to span the alternative's start.
 
 ### Default `bufferWindow` is too short for split commands on Quest 3
 
