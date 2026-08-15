@@ -3405,6 +3405,12 @@ namespace VoXR.Tests.Runtime
             // Distinct from issue #70, which closed this shape at the EAGER gate: there the
             // speaker may still be mid-utterance and a tail rule is available. Here the
             // transcript is final, nothing more is coming, and no tail rule applies.
+            //
+            // This grammar is the #74 example itself, so since that issue's backlog item 1 it
+            // is also reported at construction — the author now learns about the coin flip
+            // before shipping, which is the whole point of that scan. The expectation is added
+            // rather than the assertion below weakened: the warning is correct here.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
             var parser = new VoxrCommandParser(
                 Array.Empty<VoxrSlotDefinition>(),
                 new[]
@@ -3434,6 +3440,696 @@ namespace VoXR.Tests.Runtime
                 "the tie falls to registration order, so the FIRST sibling wins regardless of "
                     + "which one the speaker meant"
             );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // ---------- Sibling discriminator detection (issue #74, design §5.1/§5.2/§5.5) ----------
+        //
+        // The construction-time half of the sibling-tie design. The test above pins the runtime
+        // consequence — a coin flip resolved by registration order — and these pin that the
+        // shape is now REPORTED to the author, statically, before a word is ever spoken.
+        //
+        // The predicate tests call FindSiblingSets directly rather than reading log text, so a
+        // reworded message breaks the four message tests below and nothing else.
+
+        static VoxrCommandDefinition Sib(string intent, params string[][] patterns) =>
+            new VoxrCommandDefinition(intent, patterns);
+
+        static string[] SibP(params string[] elements) => elements;
+
+        static VoxrCommandDefinition[] SwitchSiblings() =>
+            new[]
+            {
+                Sib("mode_weapons", SibP("switch", "to", "weapons")),
+                Sib("mode_navigation", SibP("switch", "to", "navigation")),
+            };
+
+        [Test]
+        public void SiblingSets_TrailingDiscriminator_IsDetected()
+        {
+            var sets = VoxrCommandParser.FindSiblingSets(SwitchSiblings());
+
+            Assert.AreEqual(1, sets.Count);
+            Assert.AreEqual(2, sets[0].DiscriminatorIndex, "0-based; the message adds one");
+            Assert.AreEqual(2, sets[0].Members.Length);
+            Assert.AreEqual("mode_weapons", sets[0].Members[0].Intent);
+            Assert.AreEqual("weapons", sets[0].Members[0].Value);
+            Assert.AreEqual("mode_navigation", sets[0].Members[1].Intent);
+            Assert.AreEqual("navigation", sets[0].Members[1].Value);
+        }
+
+        [Test]
+        public void SiblingSets_MedialDiscriminator_IsDetected()
+        {
+            // DR-1 puts the discriminator at ANY position, and this is why. A trailing-only
+            // definition would exclude the medial case, which is the MORE dangerous of the two:
+            // the trailing one is at least refused at the eager gate by issue #70's tail rule,
+            // while the medial one commits early there as well (design §2.8, confirmed in
+            // VoxrEagerCommitTests). Narrowing to the reported example would have missed it.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_mode", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_level", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count);
+            Assert.AreEqual(2, sets[0].DiscriminatorIndex);
+            Assert.AreEqual("mode", sets[0].Members[0].Value);
+            Assert.AreEqual("level", sets[0].Members[1].Value);
+        }
+
+        [Test]
+        public void SiblingSets_ThreeWay_IsOneSetNotThreePairs()
+        {
+            // The unit is the SET, not the pair. Three intents differing at one shared position
+            // are one hazard with three answers, which is also what makes the discriminating
+            // values usable as a disambiguation vocabulary later.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("autopilot_on", SibP("set", "auto", "pilot", "on")),
+                    Sib("autopilot_off", SibP("set", "auto", "pilot", "off")),
+                    Sib("autopilot_standby", SibP("set", "auto", "pilot", "standby")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count, "one set, not three pairs");
+            Assert.AreEqual(3, sets[0].Members.Length);
+            CollectionAssert.AreEqual(
+                new[] { "on", "off", "standby" },
+                Array.ConvertAll(sets[0].Members, m => m.Value)
+            );
+        }
+
+        [Test]
+        public void SiblingSets_OptionalLiteralInTheFrame_IsNotASet()
+        {
+            // An included "?to" consumes the same token a required "to" does, so it is tempting
+            // to treat the two frames as equal — and an earlier draft did. But consumption is
+            // not scoring: a matched optional literal credits OptionalLiteralScore to BOTH
+            // sides where a required one credits MatchScore, and (r-0.5)/(d-0.5) < r/d for
+            // r < d. On "switch to" these score 1.5/2.5 = 0.60 and 2/3 = 0.667, so selection
+            // separates them on its first key and never reaches registration order.
+            //
+            // Detecting this pair would therefore assert a tie that does not happen — the same
+            // false-positive class the empty-frame and same-intent rules exclude.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("mode_weapons", SibP("switch", "?to", "weapons")),
+                    Sib("mode_navigation", SibP("switch", "to", "navigation")),
+                }
+            );
+
+            Assert.AreEqual(
+                0,
+                sets.Count,
+                "an optional literal does not score like a required one"
+            );
+        }
+
+        [Test]
+        public void SiblingSets_OptionalSlotInTheFrame_StillMatches()
+        {
+            // The other half of the asymmetry, and the reason NormalizeElement still folds slot
+            // decoration: a matched slot credits MatchScore whether it was written {ship} or
+            // {?ship}, so these two DO tie on the dropped word and the set is real.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_mode", SibP("set", "{?ship}", "mode", "on")),
+                    Sib("set_level", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count, "optional slots are score-neutral, so the tie is real");
+            Assert.AreEqual(2, sets[0].DiscriminatorIndex);
+        }
+
+        [Test]
+        public void SiblingSets_DifferingAtAnOptionalLiteral_IsNotASet()
+        {
+            // At the DISCRIMINATOR the "?" is load-bearing, which is the other half of the
+            // asymmetry above. An optional discriminating word means the author already said
+            // the pattern matches with or without it, so these are duplicates, not siblings.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("light_on", SibP("turn", "light", "?on")),
+                    Sib("light_off", SibP("turn", "light", "?off")),
+                }
+            );
+
+            Assert.AreEqual(0, sets.Count);
+        }
+
+        [Test]
+        public void SiblingSets_NonSiblingShapes_AreNotSets()
+        {
+            Assert.AreEqual(
+                0,
+                VoxrCommandParser
+                    .FindSiblingSets(
+                        new[]
+                        {
+                            Sib("a", SibP("switch", "to", "weapons")),
+                            Sib("b", SibP("switch", "weapons")),
+                        }
+                    )
+                    .Count,
+                "unequal length"
+            );
+
+            Assert.AreEqual(
+                0,
+                VoxrCommandParser
+                    .FindSiblingSets(
+                        new[]
+                        {
+                            Sib("a", SibP("switch", "to", "weapons")),
+                            Sib("b", SibP("switch", "at", "navigation")),
+                        }
+                    )
+                    .Count,
+                "two differences is not one"
+            );
+
+            Assert.AreEqual(
+                0,
+                VoxrCommandParser
+                    .FindSiblingSets(
+                        new[]
+                        {
+                            Sib("a", SibP("fire", "{weapon}")),
+                            Sib("b", SibP("fire", "{target}")),
+                        }
+                    )
+                    .Count,
+                "a slot is not a required literal, so a differing slot is not a discriminator"
+            );
+
+            Assert.AreEqual(
+                0,
+                VoxrCommandParser
+                    .FindSiblingSets(
+                        new[]
+                        {
+                            Sib("a", SibP("switch", "to", "weapons")),
+                            Sib("b", SibP("switch", "to", "weapons")),
+                        }
+                    )
+                    .Count,
+                "identical patterns differ at ZERO positions — an authoring error, not a tie"
+            );
+        }
+
+        [Test]
+        public void SiblingSets_SingleElementPatterns_AreSuppressed()
+        {
+            // These satisfy the relation — equal length, one differing required literal — but
+            // the frame is empty, so if the word is dropped NOTHING matches: both candidates
+            // score 0 and are rejected outright. There is no tie to fall through to
+            // registration order, so warning about one would be telling the author something
+            // untrue. The demo grammar contains this pair.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[] { Sib("cease_fire", SibP("disengage")), Sib("resume_fire", SibP("reengage")) }
+            );
+
+            Assert.AreEqual(0, sets.Count, "an empty frame leaves no remainder to tie on");
+        }
+
+        [Test]
+        public void SiblingSets_OnePatternsOwnForms_AreNotSiblingsOfEachOther()
+        {
+            // A pattern cannot be ambiguous with itself, and since frame comparison stopped
+            // folding optional literals it cannot even look as though it is: two same-length
+            // forms of one pattern differ only in which optionals they include, and with the
+            // "?" preserved those positions never compare equal. The shift that would once
+            // have aligned a required literal against a different one — including "?one" while
+            // omitting "?two" — now yields ["?one","one","two","three"] against
+            // ["one","two","?two","three"], which differ at three positions, not one.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[] { Sib("count", SibP("?one", "one", "two", "?two", "three")) }
+            );
+
+            Assert.AreEqual(0, sets.Count, "a pattern cannot be ambiguous with itself");
+        }
+
+        [Test]
+        public void SiblingSets_RemainderOfOnlyOptionals_IsNotASet()
+        {
+            // The frame is non-empty, so the length gate passes — but nothing in it credits
+            // MatchedRequired. An optional literal contributes to score and span and never to
+            // that counter, so with the discriminator dropped both members are 0 matched
+            // against 1 missed and the admission rule refuses BOTH before any comparison key.
+            // Nothing fires; there is no intent to get wrong.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("mode_weapons", SibP("?please", "weapons")),
+                    Sib("mode_navigation", SibP("?please", "navigation")),
+                }
+            );
+
+            Assert.AreEqual(0, sets.Count, "a remainder that credits nothing cannot tie");
+        }
+
+        [Test]
+        public void SiblingSets_OptionalSlotLeavingNoRequiredEvidence_IsNotASet()
+        {
+            // The asymmetric half of the same rule, and the limit of folding {?ship} onto
+            // {ship}. The fold is right about SCORE — a matched slot credits MatchScore either
+            // way — but only the required one credits MatchedRequired. Here the frame's sole
+            // other element IS that slot, so dropping the discriminator leaves set_mode at
+            // 0 matched / 1 missed (refused) and set_level at 1 / 1 (admitted). They score the
+            // same and never compete: one is gone before selection compares anything.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_mode", SibP("{?ship}", "mode")),
+                    Sib("set_level", SibP("{ship}", "level")),
+                }
+            );
+
+            Assert.AreEqual(0, sets.Count, "score-equivalent is not admission-equivalent");
+        }
+
+        [Test]
+        public void SiblingWarning_CrossIntent_NamesIntentsPatternsAndValues()
+        {
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'mode_weapons' and 'mode_navigation' have patterns "
+                        + "\"switch to weapons\" and \"switch to navigation\" that differ only "
+                        + "at element 3 \\(\"weapons\" or \"navigation\"\\).*"
+                        + "the wrong intent can fire"
+                )
+            );
+
+            var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), SwitchSiblings());
+
+            Assert.IsNotNull(parser, "the shape is a warning, not an error");
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingSets_SameIntent_IsDetectedButNotWarnedAbout()
+        {
+            // Within one intent the wrong INTENT cannot fire — the same command is dispatched
+            // whichever pattern wins, and the "tie" is between two phrasings the author
+            // deliberately made equivalent. Measured over the demo grammar (design §7.3), all
+            // six same-intent sets were ordinary synonym authoring, so warning about these
+            // would have made the scan noise on the package's own sample grammar.
+            //
+            // Detected but not reported, and the split matters: the RELATION stays exactly as
+            // DR-1 defines it, so a later consumer that does care about a same-intent tie still
+            // sees one. Only the author-facing warning is filtered.
+            var commands = new[]
+            {
+                Sib(
+                    "set_mode",
+                    SibP("set", "auto", "pilot", "on"),
+                    SibP("set", "auto", "pilot", "off")
+                ),
+            };
+
+            Assert.AreEqual(
+                1,
+                VoxrCommandParser.FindSiblingSets(commands).Count,
+                "the primitive still reports it — items downstream may want it"
+            );
+
+            var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), commands);
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_OneIntentContributingTwoPatterns_NamesItOnce()
+        {
+            // Two patterns of cease_fire both tie with resume_fire's, so cease_fire contributes
+            // two of the three members. Naming the intent once per PATTERN would print
+            // "Intents 'cease_fire', 'cease_fire' and 'resume_fire'", so intents are
+            // deduplicated for display while every pattern is still listed.
+            //
+            // Three elements rather than the demo grammar's two, deliberately: at two the tie
+            // scores 0.5 and is suppressed as unreachable, which would leave this test pinning
+            // nothing.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'cease_fire' and 'resume_fire' have patterns \"cease the fire\", "
+                        + "\"hold the fire\" and \"resume the fire\" that differ only at "
+                        + "element 1 \\(\"cease\", \"hold\" or \"resume\"\\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("cease_fire", SibP("cease", "the", "fire"), SibP("hold", "the", "fire")),
+                    Sib("resume_fire", SibP("resume", "the", "fire")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingSets_DemoGrammar_VolumeAndOrderAreStable()
+        {
+            // The design gates "warning on by default" on measured volume over a real grammar
+            // (§7.3), and the human's ruling to suppress same-intent sets rests on that split.
+            // Pinned here so the evidence is reproducible from the branch and so a later change
+            // that makes this scan noisier cannot pass unnoticed — the earlier measurement was
+            // taken from a HAND TRANSCRIPTION of this grammar and was wrong because of it, so
+            // this reads the shipped definitions directly.
+            //
+            // It also pins emission ORDER, which nothing else does: the scan walks a first-seen
+            // key list precisely because Dictionary iteration order is unspecified, and without
+            // an assertion over a multi-set grammar that guarantee is untested.
+            var sets = VoxrCommandParser.FindSiblingSets(DemoGrammar.AllCommands());
+
+            int cross = 0;
+            var crossFrames = new List<string>();
+            foreach (var set in sets)
+            {
+                // The SHIPPED filter, not a copy of the rule — this split is the evidence the
+                // default-on ruling rests on, so it has to track what the scan actually does.
+                if (VoxrCommandParser.IsSingleIntent(set))
+                    continue;
+
+                cross++;
+                crossFrames.Add(
+                    $"{set.Members[0].Intent}@{set.DiscriminatorIndex + 1}:"
+                        + string.Join("/", Array.ConvertAll(set.Members, m => m.Value))
+                );
+            }
+
+            Assert.AreEqual(
+                11,
+                sets.Count,
+                "total sets the relation admits in the shipped demo grammar"
+            );
+            Assert.AreEqual(5, cross, "…of which these are cross-intent");
+            Assert.AreEqual(
+                6,
+                sets.Count - cross,
+                "…and these are same-intent synonym authoring, suppressed by the human's ruling"
+            );
+
+            // Registration order, not hash order.
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "cease_fire@1:cease/resume",
+                    "cease_fire@1:stop/resume",
+                    "mode_weapons@1:weapons/navigation",
+                    "mode_weapons@3:weapons/navigation",
+                    "mode_all@1:enable/disable",
+                },
+                crossFrames,
+                "emission order must be stable across runs"
+            );
+        }
+
+        [Test]
+        public void SiblingWarning_DemoGrammar_WarnsOnlyOnTheReachableTie()
+        {
+            // The number that actually matters for the default-on ruling, and it is NOT the
+            // cross-intent count above. Four of those five have two-element frames, which drop
+            // to 0.5 when the discriminator goes — under the default gate, so both siblings are
+            // rejected and nothing fires. Only "switch to weapons"/"switch to navigation"
+            // reaches 2/3 = 0.667 and can actually coin-flip.
+            //
+            // So the shipped sample emits ONE warning, not five. Asserted through construction
+            // rather than through FindSiblingSets, because the reachability rule lives in the
+            // warning: LogAssert fails the test on any warning beyond the one expected here.
+            // Pre-existing and unrelated: the demo grammar's quantity slot aliases "a" to "one",
+            // and the single-character-alias validation has always warned about it. This is the
+            // first test to put the demo SLOTS through the constructor, so it is the first to
+            // see it. Declared rather than filtered, so the NoUnexpectedReceived below still
+            // means "exactly one sibling warning".
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("single-character alias \"a\"")
+            );
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'mode_weapons' and 'mode_navigation' have patterns "
+                        + "\"switch to weapons\" and \"switch to navigation\""
+                )
+            );
+
+            var parser = new VoxrCommandParser(DemoGrammar.AllSlots(), DemoGrammar.AllCommands());
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_SameHazardFromTwoExpansions_WarnsOnce()
+        {
+            // One pattern pair, but an optional element in front of the discriminator gives
+            // each of them two forms, so the scan meets the SAME hazard under two different
+            // frames — "please switch to *" and "switch to *". Bucketing alone cannot collapse
+            // those, so the dedup is keyed on the members rather than on the frame that
+            // happened to reveal them. LogAssert fails on a second unexpected warning, so the
+            // count is half of what this pins.
+            //
+            // The other half is WHICH frame survives. It has to be the longest — the reading
+            // closest to what the author wrote — or the message would report the discriminator
+            // at element 3, its position in the form that silently dropped "?please", and an
+            // author counting elements in their own pattern would land on "to" instead of the
+            // word the warning is about.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"\\?please switch to weapons\" and "
+                        + "\"\\?please switch to navigation\" that differ only at element 4"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mode_weapons", SibP("?please", "switch", "to", "weapons")),
+                    Sib("mode_navigation", SibP("?please", "switch", "to", "navigation")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_DiscriminatorCollidingWithCancel_IsAlsoReported()
+        {
+            // Follow-up handling checks the cancel vocabulary before anything else, so a
+            // discriminating value that IS cancel vocabulary would be swallowed by cancel and
+            // that choice made unreachable once disambiguation ships. Cancel keeps precedence —
+            // safety wins — so the author is told at build time instead.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "carries the discriminating value \"negative\" at element 3, which is also "
+                        + "in the default cancel vocabulary"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("answer_affirmative", SibP("mark", "contact", "friendly")),
+                    Sib("answer_negative", SibP("mark", "contact", "negative")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_DiscriminatorsClearOfCancel_ReportNoCollision()
+        {
+            // The other half: the collision report must not fire on ordinary values, or it is
+            // noise attached to every sibling set. LogAssert.NoUnexpectedReceived is what pins
+            // it — a second warning here would fail the test.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mark_alpha", SibP("mark", "contact", "alpha")),
+                    Sib("mark_bravo", SibP("mark", "contact", "bravo")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_TwoElementFrame_IsDetectedButNotWarnedAbout()
+        {
+            // Losing one required element out of a frame worth D leaves (D-1)/D, so a
+            // two-element pattern drops to 0.5 — under the default minScore, which rejects
+            // BOTH siblings. MissedLiteral_TwoElementPattern_StillRejected pins the score and
+            // its recogniser-level counterpart pins that nothing fires. So the tie the message
+            // describes is unreachable at shipped settings and reporting it would tell the
+            // author something untrue.
+            //
+            // Still DETECTED: the relation admits it, and a consumer that applies its own
+            // threshold may care. Only the author-facing warning is withheld.
+            var commands = new[]
+            {
+                Sib("cease_fire", SibP("cease", "fire")),
+                Sib("resume_fire", SibP("resume", "fire")),
+            };
+
+            Assert.AreEqual(
+                1,
+                VoxrCommandParser.FindSiblingSets(commands).Count,
+                "the relation still admits it"
+            );
+
+            var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), commands);
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_OptionalLiteralCarriesTheFrameOverTheGate()
+        {
+            // An optional literal weighs OptionalLiteralScore on both sides, so it lifts the
+            // frame's total without lifting it as far as a required element would: two
+            // required plus one optional gives 1.5/2.5 = 0.60, landing exactly on the default
+            // gate rather than under it. Pinned because the reachability rule has to weigh
+            // elements, not count them — counting would suppress this real tie.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mode_weapons", SibP("switch", "?to", "weapons")),
+                    Sib("mode_navigation", SibP("switch", "?to", "navigation")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_ReachabilityGateTracksTheRecogniserDefault()
+        {
+            // The scan judges reachability against a copy of the recogniser's default, because
+            // the parser constructor is never handed the configured threshold. If the shipped
+            // default moves and this copy does not, the scan starts warning about ties that no
+            // longer clear the gate, or goes quiet on ties that newly do.
+            var field = typeof(VoxrCommandRecogniser).GetField(
+                "minScore",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+            );
+            Assert.IsNotNull(field, "VoxrCommandRecogniser.minScore");
+
+            var recogniser = new UnityEngine.GameObject(
+                "gate"
+            ).AddComponent<VoxrCommandRecogniser>();
+            try
+            {
+                Assert.AreEqual(
+                    0.6f,
+                    (float)field.GetValue(recogniser),
+                    0.0001f,
+                    "the sibling scan's DefaultMinScore mirrors this value — update both together"
+                );
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(recogniser.gameObject);
+            }
+        }
+
+        [Test]
+        public void SiblingWarning_OmittedOptionalIsNotedInTheQuotedPattern()
+        {
+            // When the surviving frame is shorter than a member's authored pattern, the element
+            // number indexes the FORM and not the text being quoted, so the message says so.
+            // Here the optional sits on one side only, so no full-length expansion is a sibling
+            // and the longest-frame rule cannot rescue the alignment: element 3 of the quoted
+            // "?please switch to weapons" is "to", not "weapons".
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "\"\\?please switch to weapons\" \\(with its optional elements omitted\\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mode_weapons", SibP("?please", "switch", "to", "weapons")),
+                    Sib("mode_navigation", SibP("switch", "to", "navigation")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingScan_IsEditorOnly()
+        {
+            // The whole "costs a player build nothing" claim rests on one attribute, and
+            // deleting it would break no other test — the scan would simply start running in
+            // built players, silently, where its output cannot be seen. Pinned by reflection
+            // the way the coverage-weight rename is.
+            var scan = typeof(VoxrCommandParser).GetMethod(
+                "WarnOnSiblingDiscriminator",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+            );
+
+            Assert.IsNotNull(scan, "the construction-time sibling scan");
+            var conditionals = scan.GetCustomAttributes(
+                typeof(System.Diagnostics.ConditionalAttribute),
+                inherit: false
+            );
+            Assert.AreEqual(1, conditionals.Length, "the scan must carry [Conditional]");
+            Assert.AreEqual(
+                "UNITY_EDITOR",
+                ((System.Diagnostics.ConditionalAttribute)conditionals[0]).ConditionString,
+                "so the call — and therefore the whole scan — is elided in a player build"
+            );
+        }
+
+        [Test]
+        public void SiblingWarning_LeavesTheDroppableLiteralWarningAlone()
+        {
+            // Two hazards, two scans, two messages. The issue #42 scan needs a strictly longer
+            // pattern, an element-prefix relation and a stranded SLOT; issue #81 has just
+            // narrowed it to cut false positives. This grammar carries that shape and NOT the
+            // sibling one — its patterns are of length 1 and 3, so no two forms are even
+            // comparable — and it must still produce exactly the one warning it always did.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"by\""));
+
+            var parser = new VoxrCommandParser(BurnSlots(), DecelerateCommands("by"));
+
+            Assert.IsNotNull(parser);
             LogAssert.NoUnexpectedReceived();
         }
     }

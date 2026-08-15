@@ -125,6 +125,49 @@ The parser logs a validation warning at construction naming the literal and the 
 
 The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild an Editor session makes and expansion is exponential. That costs recall on that pattern only.
 
+### Do not separate two commands by a single word
+
+If two *different* intents differ at exactly one required word, the parser cannot tell them apart when the recogniser drops it:
+
+```csharp
+// Warned about -- one dropped word and registration order picks the intent
+new VoxrCommandDefinition("mode_weapons",    new[] { new[] { "switch", "to", "weapons" } })
+new VoxrCommandDefinition("mode_navigation", new[] { new[] { "switch", "to", "navigation" } })
+
+// Safe -- the two phrasings differ in TWO places, so losing one word still leaves
+// the other to decide
+new VoxrCommandDefinition("mode_weapons",    new[] { new[] { "arm", "weapons" } })
+new VoxrCommandDefinition("mode_navigation", new[] { new[] { "show", "navigation" } })
+```
+
+Say "switch to navigation", lose the last word, and the surviving `switch to` fits **both** patterns exactly equally: same start, same `(1 + 1 + 0) / 3` = 0.67, same consumed span, same literal count. Selection exhausts every key it has and falls through to its last — the order the patterns were registered in — so `mode_weapons` fires because it happens to be declared first. It fires consistently, not randomly, which is what makes it easy to miss in testing and easy to hit in the field.
+
+This is not a scoring bug and no threshold reaches it. The word that would have decided is exactly the word that went missing; the evidence is not weak but **absent**. What the parser can do is notice the shape before you ship it.
+
+**The differing word can sit anywhere, and the middle is the dangerous place.** A word at the *end* is at least caught by the eager-flush gate, which refuses to commit a pattern whose trailing required element never matched — only the final flush guesses. A word in the *middle* clears that guard, because the elements after it still match and the gate's tail check resets:
+
+```
+set {ship} mode  on      "set alpha on"  ->  3/4 = 0.75, spans the buffer,
+set {ship} level on                          commits EARLY with the wrong sibling
+```
+
+**What the warning reports, and what it does not.** It fires in the Editor at construction, naming the intents, the patterns as you wrote them, the element they differ at, and the competing values. It is deliberately narrow in two ways:
+
+- **Same-intent patterns are not reported.** Two phrasings of one command dispatch the same intent whichever wins, so the tie is between things you made equivalent on purpose — `set` / `hold` / `keep` / `maintain distance {range}` is not a hazard.
+- **Ties that cannot clear `minScore` are not reported.** Losing one required element from a pattern worth `D` leaves `(D − 1) / D`, so a two-element pattern falls to 0.5 — below the default gate, where *both* siblings are rejected and nothing fires. That is a different problem from the wrong command firing, and saying "the wrong intent can fire" about it would be untrue.
+
+The second exclusion has a cost worth knowing: the parser is built from the grammar alone and never sees your configured `minScore`, so it judges against the default. **If you run below `minScore` 0.6, short sibling pairs become live without the warning noticing** — see `KNOWN_LIMITATIONS.md`.
+
+**Remedies**, in the order worth trying:
+
+1. **Make the two commands differ in more than one element.** This is the only fix that removes the tie rather than moving it: with two differing words, losing one still leaves the other to decide.
+2. **Give the more destructive of the pair `requiresConfirmation`**, so a coin flip costs a confirmation prompt rather than an action.
+3. **Where both phrasings must exist verbatim, register the safer one first** — the tie-break is deterministic, so first-registered is what fires.
+
+Note what is *not* on that list. **Making the difference come earlier in the pattern does not help.** `weapons mode` and `navigation mode` differ at their first element instead of their last, and tie exactly as before — `(0 + 1) / 2` for both. What changes with a shorter pattern is only that the tie falls under `minScore`, so nothing fires instead of the wrong thing. That is an improvement, but a small and accidental one, and it disappears the moment the pattern grows: `weapons mode active` and `navigation mode active` tie at `0.67` and fire the first-registered again.
+
+One further warning fires if a discriminating value is also in the default cancel vocabulary (`cancel`, `abort`, `negative`). Follow-up handling checks cancel before anything else, so if that ambiguity is ever routed back to the speaker to resolve, answering with that word would cancel rather than choose it. Rename the literal, or override `cancelVocabulary`.
+
 ---
 
 ## Scored Matching

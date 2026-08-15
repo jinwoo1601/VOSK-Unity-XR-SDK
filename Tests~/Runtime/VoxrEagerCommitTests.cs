@@ -1281,5 +1281,106 @@ namespace VoXR.Tests.Runtime
                 "at weight 0 the bare form wins selection and fails the whole-buffer condition"
             );
         }
+
+        // ---------- Medial sibling discriminator (issue #74 design §2.8) ----------
+        //
+        // The sibling-tie design reasoned from source that a MEDIAL discriminator slips every
+        // condition this file documents, and rests DR-5 — the eager gate refusing on a sibling
+        // tie — entirely on that. It was never observed. These two tests are what backlog item
+        // 1 owes the design (§7.5): together they either confirm the finding or refute it, and
+        // a refutation reopens the design rather than being quietly dropped.
+        //
+        // Nothing above covers it. TryEagerCommit_UnmatchedTerminalLiteral_ReturnsNone is the
+        // sibling shape but TRAILING, where the issue #70 tail condition refuses it.
+        // TryEagerCommit_MedialMissNewlyClearingTheGate_CommitsAndAgreesWithParse is a medial
+        // miss that commits, but on a SINGLE command with no rival — so it says nothing about
+        // what happens when a second pattern ties it. This pair is the intersection.
+
+        // Two intents differing only at a MEDIAL required literal, with a slot in front of it
+        // so the discriminator cannot be the first divergence the matcher meets.
+        static VoxrCommandParser MedialSiblingParser() =>
+            new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("ship", new[] { "alpha" })),
+                Commands(
+                    Cmd("set_mode", P("set", "{ship}", "mode", "on")),
+                    Cmd("set_level", P("set", "{ship}", "level", "on"))
+                )
+            );
+
+        [Test]
+        public void TryEagerCommit_MedialSiblingDiscriminator_CommitsOnAnUndecidableBuffer()
+        {
+            // "set alpha on" — the discriminating word elided. Walking the conditions in the
+            // order TryEagerCommit applies them:
+            //
+            //   minScore                     (1 + 1 + 0 + 1) / 4 = 0.75, clears the default
+            //   bestMissedRequiredSlot       false — {ship} is filled; the miss is a LITERAL
+            //   bestHasUnmatchedRequiredTail false — the miss is MEDIAL, so "on" matches after
+            //                                it and resets the counter (issue #70 by design)
+            //   whole-buffer                 satisfied — the match spans "set alpha on" exactly
+            //   confidence                   null confidence bypasses the gate
+            //   CanCommitEarly               both patterns are terminal on "on" and neither is
+            //                                a prefix of the other, so the precompute allows it
+            //
+            // Every condition is satisfied by BOTH siblings identically, at the same score,
+            // over the same span, with the same matched-literal count. The gate therefore
+            // commits on evidence that cannot distinguish which command the speaker meant.
+            //
+            // Note the score is 0.75, not the 0.8 the design's §2.8 predicted — that constant
+            // belongs to the five-element analog above (MissedRequiredLiteral_AllSlotsFilled).
+            // Both clear the 0.6 default, so the condition outcome §2.8 reasoned to is
+            // unaffected; only the illustrative arithmetic was carried from the wrong example.
+            // This grammar is the sibling shape by construction, so it now warns at
+            // construction too (issue #74 backlog item 1). Declared rather than tolerated,
+            // matching every other warning-producing test in this file.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                MedialSiblingParser().TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f),
+                "design §2.8: a medial discriminator slips every condition and commits early"
+            );
+        }
+
+        [Test]
+        public void Parse_MedialSiblingDiscriminator_FiresByRegistrationOrderAlone()
+        {
+            // The other half of §2.8. The verdict above names no command, so it cannot show
+            // that the WRONG sibling fires — that happens in the flush the verdict authorises,
+            // where both siblings tie on every selection key and the comparison falls through
+            // to registration order.
+            //
+            // The medial analog of MissedLiteral_DroppedDiscriminator_FiresTheFirstRegistered
+            // Sibling (VoxrCommandParserTests.cs), which pins the same fall-through for a
+            // TRAILING discriminator. Worth pinning separately because the trailing case never
+            // reaches the eager gate — issue #70 refuses it there — while this one does.
+            //
+            // Reversing the declaration order is what makes this a coin flip rather than a
+            // defensible preference: nothing about the utterance changed, only the order the
+            // author happened to register two commands in.
+            // Two constructions below, each emitting the construction-time sibling warning.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            var flushed = MedialSiblingParser().Parse("set alpha on");
+
+            Assert.AreEqual(1, flushed.Length, "the tie resolves to exactly one command");
+            Assert.AreEqual("set_mode", flushed[0].Command.Intent, "the first-registered wins");
+            Assert.AreEqual(3f / 4f, flushed[0].Command.Score, 0.001f);
+
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            var reversed = new VoxrCommandParser(
+                Slots(new VoxrSlotDefinition("ship", new[] { "alpha" })),
+                Commands(
+                    Cmd("set_level", P("set", "{ship}", "level", "on")),
+                    Cmd("set_mode", P("set", "{ship}", "mode", "on"))
+                )
+            ).Parse("set alpha on");
+
+            Assert.AreEqual(1, reversed.Length);
+            Assert.AreEqual(
+                "set_level",
+                reversed[0].Command.Intent,
+                "the same utterance fires the other intent purely because it was declared first"
+            );
+        }
     }
 }

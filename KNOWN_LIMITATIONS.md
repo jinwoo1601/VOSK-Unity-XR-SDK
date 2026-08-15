@@ -515,13 +515,12 @@ deliberate trade-offs rather than oversights.
   Prefer the swap where the trailing slot's vocabulary is distinct from its
   neighbours'; be careful where it is a `NumberSequence`.
 
-### Sibling patterns that differ only in their last word fire the first-registered one
+### Sibling patterns that differ at one word fire the first-registered one
 
-- **Symptom**: Two commands share every element but the last — `switch to weapons`
-  and `switch to navigation`, or `set auto pilot on` and `... off`. The speaker says
-  one of them, VOSK drops the final discriminating word, and the *other* command
-  fires. Not an early fire: the wrong command, with nothing in the log flagging it
-  as ambiguous.
+- **Symptom**: Two commands share every element but one — `switch to weapons` and
+  `switch to navigation`, or `set {ship} mode on` and `set {ship} level on`. The
+  speaker says one of them, VOSK drops the discriminating word, and the *other*
+  command fires. Not an early fire: the wrong command.
 - **Repro**: Register both `["switch", "to", "weapons"]` and
   `["switch", "to", "navigation"]`, then feed the transcript "switch to". Both
   patterns score `(1 + 1 + 0) / 3` = 0.67, which clears the default `minScore`.
@@ -529,18 +528,59 @@ deliberate trade-offs rather than oversights.
   on score, on consumed span and on literal count, and selection falls through to
   its final key — registration order. The word that would have decided is exactly
   the one that went missing, so no scorer can recover the intent; the parser is
-  guessing, and it guesses consistently rather than randomly. This is the ordinary
-  flush path: the eager-flush gate refuses this shape (it will not commit a pattern
-  whose trailing required element never matched), but a *final* transcript that ends
-  there is not in progress and no tail rule applies.
-- **Workaround**: Prefer sibling patterns that diverge earlier than their last
-  element (`weapons mode` / `navigation mode` rather than `switch to weapons` /
-  `switch to navigation`), or give the more destructive of the pair
-  `requiresConfirmation`. Where both phrasings must exist, register the safer one
-  first — registration order is the tie-break, and it is deterministic.
+  guessing, and it guesses consistently rather than randomly.
+- **The differing word can sit anywhere, and a *medial* one is worse.** For a
+  trailing discriminator the eager-flush gate refuses the shape — it will not commit
+  a pattern whose trailing required element never matched — so only the final flush
+  guesses. A discriminator in the *middle* clears that guard, because the elements
+  after it still match and the gate's tail check resets: `set {ship} mode on` heard
+  as "set alpha on" scores `3 / 4` = 0.75, spans the buffer, and commits **early**
+  with the wrong sibling. Both paths guess; the medial one guesses sooner.
+- **The parser now warns about this shape at construction**, in the Editor, naming
+  the intents, the patterns as authored, the differing element and the competing
+  values. It reports only what it can see going wrong: two patterns of *different*
+  intents (within one intent the same command dispatches either way), where the tie
+  would actually clear the default `minScore`. See the note below for what that
+  second condition costs.
+- **Workaround**: Make the two commands differ in **more than one element**, so
+  losing one word still leaves another to decide (`arm weapons` / `show navigation`,
+  not `switch to weapons` / `switch to navigation`). Failing that, give the more
+  destructive of the pair `requiresConfirmation`, or — where both phrasings must
+  exist verbatim — register the safer one first, since the tie-break is
+  deterministic.
+- **What does not work**: moving the difference *earlier* in the pattern.
+  `weapons mode` and `navigation mode` tie exactly as the longer pair does; all that
+  changes is that a two-element tie scores `0.5` and falls under `minScore`, so
+  nothing fires instead of the wrong thing. Grow the pattern back
+  (`weapons mode active`) and the wrong-command behaviour returns at `0.67`.
 - **Note**: This shape predates the current miss cost. At four or more elements it
   already cleared the gate; reducing the miss cost extends it down to three-element
   patterns, which is where two-word-prefix grammars live.
+
+### The sibling warning is silent below the default `minScore`
+
+- **Symptom**: A grammar carries the sibling shape above, the wrong command fires,
+  and no construction-time warning was ever logged for it.
+- **Repro**: Register `["cease", "fire"]` and `["resume", "fire"]`, lower `minScore`
+  to `0.4`, and say either one with the first word dropped. Both score `0.5`, the
+  tie is live, and the command that fires is whichever was registered first — but
+  the Editor logged nothing at construction.
+- **Root cause**: Losing one required element from a pattern worth `D` leaves
+  `(D − 1) / D`, so a two-element pattern drops to `0.5`. At the default `minScore`
+  of `0.6` that is *below the gate* — both siblings are rejected and nothing fires,
+  which is a different problem from the wrong thing firing. The warning would be
+  telling you something untrue, so it stays quiet. But the parser is constructed
+  with the grammar alone and is never handed the recogniser's configured threshold,
+  so it judges against the default. Lower `minScore` far enough and those ties
+  become live without the warning noticing.
+- **Workaround**: If you run below the default `minScore`, treat short sibling pairs
+  as hazardous whether or not the Editor flagged them — the rule is that any two
+  patterns of different intents differing at exactly one required word can tie once
+  that word is dropped. Raising `minScore` back to `0.6` or above restores the
+  correspondence between what the warning reports and what can actually happen.
+- **Note**: The reverse error would be worse. Warning unconditionally would put a
+  "the wrong intent can fire" claim in front of every author running default
+  settings, for grammars where nothing fires at all.
 
 ### Confidence of `-1.00` means "no data", not "zero confidence"
 
