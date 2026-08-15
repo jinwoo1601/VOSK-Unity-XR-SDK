@@ -315,8 +315,12 @@ deliberate trade-offs rather than oversights.
 - **Root cause**: `SetActiveSets()` constructs a fresh `VoxrCommandParser` via
   `RebuildParserAndGrammar()`, and the parser ctor unconditionally re-runs its
   validation passes — `RunValidationWarnings()` for slot values and aliases, and
-  the pattern-shape check that flags a droppable required literal before a slot.
-  The warnings are correct, just noisier than they should be.
+  `WarnOnExcessiveOptionalExpansion()` for a pattern past the eager-flush
+  expansion cap. The warnings are correct, just noisier than they should be.
+  The droppable-required-literal check re-emitted here too until it was demoted
+  to Editor-only ([#81](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/81)):
+  in a player build it no longer contributes, and in the Editor it still
+  re-emits alongside the other two.
 - **Workaround**: None at user level. This is a candidate for cleanup —
   validation should run once per `Configure()` call, not per parser rebuild.
   Filed as a low-priority follow-up.
@@ -493,7 +497,8 @@ deliberate trade-offs rather than oversights.
   candidate covering more of the utterance. This still works in the residual case,
   where coverage alone does not — which is why the construction-time warning was
   deliberately *not* narrowed when coverage shipped, even though the parser now has
-  the information to narrow it. Removing the literal outright
+  the information to narrow it. That warning is logged in the **Editor only**, so
+  look for it there rather than in a device log. Removing the literal outright
   (`["decelerate", "{burn_level}"]`) works too, at the cost of the phrasing.
   `VoxrCommandParser` logs a validation warning at construction naming the literal
   and the slot at risk. The scan follows what the parser itself compares, so it

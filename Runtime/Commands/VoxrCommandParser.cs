@@ -508,6 +508,29 @@ namespace VoXR.Commands
         // is already imperfect scores strictly lower than the required form would —
         // (r-0.5)/(d-0.5) < r/d for r < d. It also stops anchoring the element after it, which
         // can then claim adjacent tokens the literal never introduced.
+        //
+        // EDITOR-ONLY as of issue #81. §5.2 demoted this from a hazard every such grammar
+        // carries to a residue most of them do not, while it went on firing on every parser
+        // construction — in shipped builds, and again on every SetActiveSets rebuild (see the
+        // "Validation warnings re-emit on every active-set switch" limitation, which this
+        // compounded). A warning that loud on grammars that now behave correctly is the kind
+        // that gets globally suppressed, taking the residual case with it. The TRIGGER stays at
+        // full breadth, for three reasons. The remedy is the better authoring either way and
+        // does reach the residue coverage alone does not — though it is not the only edit that
+        // does: removing the literal outright reaches it too, scoring the same 1.0 and taking
+        // the same span tie-break, at the cost of the phrasing. A narrowing here could consult
+        // only _startLiterals/_startSlots, which answer CanStartPattern; the orphan run
+        // actually terminates on the strictly wider IsAdmissibleStart (issue #82), so a
+        // construction-time trigger would go silent on every position the cheap test declines.
+        // And at coverageWeight 0 the hazard is not residual at all but reverts wholesale.
+        // What changes is only that this is authoring guidance now, delivered where authoring
+        // happens. The two passes beside it are untouched — they report outright authoring
+        // mistakes, not a shape that is usually fine.
+        //
+        // Conditional rather than #if so the call site and the helpers below stay one piece of
+        // code; the tests that LogAssert.Expect this message therefore pin it in editor Play
+        // Mode, where this package's Runtime suite runs, and not in a built player.
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
         static void WarnOnDroppableRequiredLiteral(VoxrCommandDefinition[] commands)
         {
             int patternCount = 0;
@@ -593,9 +616,9 @@ namespace VoXR.Commands
 
         // Concrete forms of a pattern for the warning scan. Patterns with no optional elements
         // are their own single form, with no copy. The expansion is capped well below
-        // MaxOptionalExpansion because this scan runs unconditionally in the ctor — and so on
-        // every parser rebuild — where ComputeCanCommitEarly's expansion is lazy; past the cap
-        // the pattern is compared raw, costing recall on that one pattern only.
+        // MaxOptionalExpansion because this scan runs in the ctor — and so on every parser
+        // rebuild an editor session makes — where ComputeCanCommitEarly's expansion is lazy;
+        // past the cap the pattern is compared raw, costing recall on that one pattern only.
         const int MaxWarningExpansion = 6;
 
         static List<string[]> WarningForms(string[] pattern)
