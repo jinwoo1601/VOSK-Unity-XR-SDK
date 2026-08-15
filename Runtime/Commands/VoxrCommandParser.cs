@@ -1,11 +1,13 @@
 // ============================================================================
 // Purpose:  Pure C# pattern matcher: scores tokenized VOSK output against command patterns
 // Layer:    Runtime.Commands
-// Owns:     VoxrCommandParser (internal class), EagerCommitVerdict (internal enum)
-// Depends:  VoxrSlotDefinition, VoxrCommandDefinition, VoxrSlotMatch, VoxrCommand, VoxrCommandResult, VoxrNumberParser
+// Owns:     VoxrCommandParser (internal class), EagerCommitVerdict (internal enum),
+//           SiblingSet + SiblingMember (internal structs)
+// Depends:  VoxrSlotDefinition, VoxrCommandDefinition, VoxrSlotMatch, VoxrCommand, VoxrCommandResult, VoxrNumberParser, VoxrFollowUpVocabulary
 // ============================================================================
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace VoXR.Commands
 {
@@ -23,6 +25,41 @@ namespace VoXR.Commands
 
         // Complete, confident, and unextendable — safe to fire immediately.
         Commit,
+    }
+
+    // One pattern's membership of a sibling set: which pattern it is, and the discriminating
+    // literal it carries at the position the set differs on.
+    internal readonly struct SiblingMember
+    {
+        public readonly int CommandIndex;
+        public readonly int PatternIndex;
+        public readonly string Intent;
+        public readonly string Value;
+
+        public SiblingMember(int commandIndex, int patternIndex, string intent, string value)
+        {
+            CommandIndex = commandIndex;
+            PatternIndex = patternIndex;
+            Intent = intent;
+            Value = value;
+        }
+    }
+
+    // Patterns that are element-wise equal but for one position, where each holds a required
+    // literal (issue #74 design DR-1). Frame carries the shared elements, normalized, with
+    // null at DiscriminatorIndex.
+    internal readonly struct SiblingSet
+    {
+        public readonly int DiscriminatorIndex;
+        public readonly string[] Frame;
+        public readonly SiblingMember[] Members;
+
+        public SiblingSet(int discriminatorIndex, string[] frame, SiblingMember[] members)
+        {
+            DiscriminatorIndex = discriminatorIndex;
+            Frame = frame;
+            Members = members;
+        }
     }
 
     internal class VoxrCommandParser
@@ -393,6 +430,10 @@ namespace VoXR.Commands
             RunValidationWarnings(slots);
             WarnOnDroppableRequiredLiteral(commands);
             WarnOnExcessiveOptionalExpansion(commands);
+            // Appended last on purpose: VoxrCommandRecogniserInjectionTests queues ORDERED log
+            // expectations across the two scans above, so a new scan between them would break
+            // the queue rather than merely add to it.
+            WarnOnSiblingDiscriminator(commands);
         }
 
         static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
@@ -705,6 +746,353 @@ namespace VoXR.Commands
                 if (!string.Equals(prefix[i], pattern[i], StringComparison.Ordinal))
                     return false;
             return true;
+        }
+
+        // The other construction-time hazard two patterns can carry (issue #74): they are
+        // identical but for one required literal, so when the recogniser drops that one word
+        // the surviving evidence fits both EXACTLY equally — same start, same score, same
+        // consumed span, same literal count. Selection exhausts every key it has and falls
+        // through to its last, the order the patterns were registered in. The word that would
+        // have decided is precisely the word that went missing, so no scorer can recover the
+        // intent; the evidence is not weak but absent.
+        //
+        // This is a different shape from the one the scan above reports, and deliberately not
+        // merged with it. That one needs a strictly longer pattern, an element-prefix relation
+        // and a SLOT stranded behind an added literal; it detects a dropped argument. This one
+        // detects a coin-flipped intent, and the #74 shape satisfies none of those three.
+        //
+        // Neither can occur in an authored element, so the bucket key below is unambiguous
+        // about element boundaries, form length, and which position is wildcarded. A printable
+        // separator would key ["switch to","weapons"] at position 1 and ["switch","to",
+        // "weapons"] at position 2 to the same string, pairing forms of DIFFERENT lengths.
+        const char SiblingKeySeparator = '\u0001';
+        const char SiblingKeyWildcard = '\u0002';
+
+        // Frame equality is decoration-INSENSITIVE. An included optional element matches the
+        // same token a required one does, and ExpandOptionals emits it with its "?" intact, so
+        // comparing raw text would make the relation depend on an unrelated authoring choice:
+        // ["switch","?to","weapons"] and ["switch","to","navigation"] would read as differing
+        // at two positions and the hazard would be missed.
+        static string NormalizeElement(string element)
+        {
+            if (IsOptionalLiteral(element))
+                return element.Substring(1);
+            string slot = ExtractSlotName(element);
+            return slot != null ? "{" + slot + "}" : element;
+        }
+
+        // Discriminator eligibility, on the RAW element — here the "?" is load-bearing. An
+        // optional discriminating word means the author already declared the pattern matches
+        // with or without it, which makes the two forms duplicates rather than siblings.
+        // Testing element[0] covers "?word" and the malformed "?{slot}"; the emptiness test
+        // covers an element left blank in the inspector, which both helpers below decline and
+        // which would otherwise be treated as a discriminating value.
+        static bool IsRequiredLiteral(string element) =>
+            !string.IsNullOrEmpty(element) && element[0] != '?' && ExtractSlotName(element) == null;
+
+        // The sole definition of "sibling" (design DR-2): equal length, equal at every position
+        // but one, a required literal in each at that position — at ANY position, not only the
+        // last, since a medial discriminator is the more dangerous case and is unguarded on
+        // both the eager and flush paths (design §2.8, confirmed by VoxrEagerCommitTests).
+        //
+        // Buckets each (form, position) by the frame it leaves behind, so two forms share a
+        // bucket exactly when they are siblings and an n-way set is collected in one pass
+        // rather than assembled from pairs. O(forms x length^2), against the
+        // O(patterns^2 x forms^2) of the scan above.
+        internal static List<SiblingSet> FindSiblingSets(VoxrCommandDefinition[] commands)
+        {
+            var sets = new List<SiblingSet>();
+            if (commands == null || commands.Length == 0)
+                return sets;
+
+            var buckets = new Dictionary<string, List<SiblingMember>>(StringComparer.Ordinal);
+            var frames = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            var positions = new Dictionary<string, int>(StringComparer.Ordinal);
+            // Dictionary iteration order is unspecified, and warnings have to come out the same
+            // way every run or the tests that assert on them go flaky.
+            var order = new List<string>();
+
+            var key = new StringBuilder();
+
+            for (int ci = 0; ci < commands.Length; ci++)
+            {
+                var patterns = commands[ci].Patterns;
+                for (int pi = 0; pi < patterns.Length; pi++)
+                {
+                    var forms = WarningForms(patterns[pi]);
+                    for (int fi = 0; fi < forms.Count; fi++)
+                    {
+                        string[] form = forms[fi];
+                        for (int d = 0; d < form.Length; d++)
+                        {
+                            if (!IsRequiredLiteral(form[d]))
+                                continue;
+
+                            key.Length = 0;
+                            for (int i = 0; i < form.Length; i++)
+                            {
+                                if (i > 0)
+                                    key.Append(SiblingKeySeparator);
+                                if (i == d)
+                                    key.Append(SiblingKeyWildcard);
+                                else
+                                    key.Append(NormalizeElement(form[i]));
+                            }
+
+                            string k = key.ToString();
+                            if (!buckets.TryGetValue(k, out var members))
+                            {
+                                members = new List<SiblingMember>();
+                                buckets[k] = members;
+                                positions[k] = d;
+                                order.Add(k);
+
+                                var frame = new string[form.Length];
+                                for (int i = 0; i < form.Length; i++)
+                                    frame[i] = i == d ? null : NormalizeElement(form[i]);
+                                frames[k] = frame;
+                            }
+
+                            members.Add(new SiblingMember(ci, pi, commands[ci].Intent, form[d]));
+                        }
+                    }
+                }
+            }
+
+            for (int o = 0; o < order.Count; o++)
+            {
+                string k = order[o];
+                var members = buckets[k];
+                if (members.Count < 2)
+                    continue;
+
+                // A member is kept only if it brings BOTH a pattern and a discriminating value
+                // the set does not already have. The two tests catch different things:
+                //
+                //   same (command, pattern) — one pattern's own forms CAN differ at a required
+                //     literal once decoration is normalized away (["?a","a","b","?b","c"]
+                //     yields [a,a,b,c] and [a,b,b,c]), which would report it as its own sibling
+                //   same value — two patterns reaching the same literal are duplicates, not
+                //     siblings, which is what keeps author-duplicated patterns out of this
+                //
+                // Greedy and first-wins, so the surviving member of each is the earliest
+                // registered, and the result is stable across runs.
+                var kept = new List<SiblingMember>();
+                for (int i = 0; i < members.Count; i++)
+                {
+                    bool seen = false;
+                    for (int j = 0; j < kept.Count; j++)
+                    {
+                        if (
+                            (
+                                kept[j].CommandIndex == members[i].CommandIndex
+                                && kept[j].PatternIndex == members[i].PatternIndex
+                            )
+                            || string.Equals(
+                                kept[j].Value,
+                                members[i].Value,
+                                StringComparison.Ordinal
+                            )
+                        )
+                        {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen)
+                        kept.Add(members[i]);
+                }
+
+                if (kept.Count < 2)
+                    continue;
+
+                // The frame has to leave something behind. Two single-element patterns satisfy
+                // the relation, but with the word dropped NOTHING matches: both candidates
+                // score 0 and IsBetterCandidate rejects them outright, so there is no tie to
+                // fall through and nothing to report.
+                if (frames[k].Length < 2)
+                    continue;
+
+                var set = new SiblingSet(positions[k], frames[k], kept.ToArray());
+
+                // One hazard can surface under several frames: a pattern pair carrying an
+                // optional element fills one bucket per expansion, with the same members each
+                // time. Collapse those here rather than in each consumer — a sibling set is a
+                // hazard, not a frame.
+                //
+                // The survivor is the one with the MOST elements, which is the reading closest
+                // to what the author wrote. Keeping the first-seen instead would report the
+                // discriminator's position within a form that silently dropped an optional,
+                // so an author counting elements in their own pattern would land on the wrong
+                // word.
+                int existing = IndexOfSameMembers(sets, set);
+                if (existing < 0)
+                    sets.Add(set);
+                else if (set.Frame.Length > sets[existing].Frame.Length)
+                    sets[existing] = set;
+            }
+
+            return sets;
+        }
+
+        static int IndexOfSameMembers(List<SiblingSet> sets, SiblingSet candidate)
+        {
+            for (int s = 0; s < sets.Count; s++)
+            {
+                var members = sets[s].Members;
+                if (members.Length != candidate.Members.Length)
+                    continue;
+
+                bool same = true;
+                for (int m = 0; m < members.Length; m++)
+                {
+                    if (
+                        members[m].CommandIndex != candidate.Members[m].CommandIndex
+                        || members[m].PatternIndex != candidate.Members[m].PatternIndex
+                        || !string.Equals(
+                            members[m].Value,
+                            candidate.Members[m].Value,
+                            StringComparison.Ordinal
+                        )
+                    )
+                    {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same)
+                    return s;
+            }
+            return -1;
+        }
+
+        // Conditional rather than #if for the same reason the scan above is: the call site and
+        // the builders below stay one piece of code, and the tests that LogAssert.Expect these
+        // messages pin them in editor Play Mode, where this package's Runtime suite runs, and
+        // not in a built player.
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        static void WarnOnSiblingDiscriminator(VoxrCommandDefinition[] commands)
+        {
+            var sets = FindSiblingSets(commands);
+
+            for (int s = 0; s < sets.Count; s++)
+            {
+                var set = sets[s];
+
+                // Only a CROSS-intent set is worth an author's attention. Within one intent the
+                // wrong intent cannot fire — the same command is dispatched either way, and the
+                // "tie" is between two phrasings the author deliberately made equivalent.
+                //
+                // Measured over the shipped demo grammar (design §7.3): 9 sets, of which the 4
+                // cross-intent ones were all genuine hazards — "cease fire"/"resume fire",
+                // "enable all"/"disable all" — and all 5 same-intent ones were ordinary synonym
+                // authoring with no remedy short of using fewer synonyms. Reporting those would
+                // have made this scan noise on the package's own sample grammar, which is the
+                // lesson issue #81 just paid for on the scan above. Ruled by the human at that
+                // measurement, 2026-08-15.
+                //
+                // The filter is HERE and not in FindSiblingSets on purpose: the relation stays
+                // exactly as DR-1 defines it, so a later consumer that does care about a
+                // same-intent tie still sees one.
+                if (IsSingleIntent(set))
+                    continue;
+
+                UnityEngine.Debug.LogWarning(BuildSiblingWarning(commands, set));
+
+                for (int m = 0; m < set.Members.Length; m++)
+                {
+                    if (
+                        Array.IndexOf(VoxrFollowUpVocabulary.DefaultCancel, set.Members[m].Value)
+                        < 0
+                    )
+                        continue;
+                    UnityEngine.Debug.LogWarning(BuildCancelCollisionWarning(set, set.Members[m]));
+                }
+            }
+        }
+
+        static string JoinWith(string[] parts, string conjunction)
+        {
+            if (parts.Length == 1)
+                return parts[0];
+            if (parts.Length == 2)
+                return parts[0] + " " + conjunction + " " + parts[1];
+
+            var sb = new StringBuilder();
+            for (int i = 0; i < parts.Length - 1; i++)
+            {
+                if (i > 0)
+                    sb.Append(", ");
+                sb.Append(parts[i]);
+            }
+            return sb.Append(' ')
+                .Append(conjunction)
+                .Append(' ')
+                .Append(parts[parts.Length - 1])
+                .ToString();
+        }
+
+        static bool IsSingleIntent(SiblingSet set)
+        {
+            for (int i = 1; i < set.Members.Length; i++)
+                if (
+                    !string.Equals(
+                        set.Members[i].Intent,
+                        set.Members[0].Intent,
+                        StringComparison.Ordinal
+                    )
+                )
+                    return false;
+            return true;
+        }
+
+        static string BuildSiblingWarning(VoxrCommandDefinition[] commands, SiblingSet set)
+        {
+            var members = set.Members;
+
+            // Report the patterns as authored, noting when a form omitted optionals, so an
+            // author can find the text in their asset — the frame this set was keyed on is
+            // normalized, and normalized text is not what they wrote.
+            var patternTexts = new string[members.Length];
+            var values = new string[members.Length];
+            for (int i = 0; i < members.Length; i++)
+            {
+                string[] raw = commands[members[i].CommandIndex].Patterns[members[i].PatternIndex];
+                patternTexts[i] = "\"" + string.Join(" ", raw) + "\"";
+                if (raw.Length != set.Frame.Length)
+                    patternTexts[i] += " (with its optional elements omitted)";
+                values[i] = "\"" + members[i].Value + "\"";
+            }
+
+            // One intent can contribute several patterns to a set — "cease fire" and "hold
+            // fire" both tie with "resume fire" — so name each intent once rather than once
+            // per pattern.
+            var intents = new List<string>(members.Length);
+            for (int i = 0; i < members.Length; i++)
+            {
+                string quoted = "'" + members[i].Intent + "'";
+                if (!intents.Contains(quoted))
+                    intents.Add(quoted);
+            }
+
+            // Authors count elements from one.
+            return $"[VoxrCommandParser] Intents {JoinWith(intents.ToArray(), "and")} have "
+                + $"patterns {JoinWith(patternTexts, "and")} that differ only at element "
+                + $"{set.DiscriminatorIndex + 1} ({JoinWith(values, "or")}). If that word is "
+                + "dropped, these patterns match the remainder equally — same score, same "
+                + "consumed span, same literal count — and selection falls through to "
+                + "registration order, so the wrong intent can fire. Diverge earlier, or mark "
+                + "the more destructive one requiresConfirmation.";
+        }
+
+        static string BuildCancelCollisionWarning(SiblingSet set, SiblingMember member)
+        {
+            return $"[VoxrCommandParser] Intent '{member.Intent}' carries the discriminating "
+                + $"value \"{member.Value}\" at element {set.DiscriminatorIndex + 1}, which is "
+                + "also in the default cancel vocabulary. Follow-up handling checks cancel "
+                + "before anything else, so a speaker answering with that word would cancel "
+                + "rather than choose that option. Rename the literal, or override "
+                + "cancelVocabulary on VoxrCommandRecogniser.";
         }
 
         public VoxrCommandResult[] Parse(string text, VoxrWord[] words)
