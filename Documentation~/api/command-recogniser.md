@@ -21,7 +21,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `commandSetAssets` | `VoxrCommandSetAsset[]` | -- | Command set definitions for Inspector authoring |
 | `initialActiveSetNames` | `string[]` | -- | Which sets to activate on startup when using Inspector authoring |
 | `pendingTimeout` | `float` | `5.0` | Maximum seconds a pending command waits for follow-up speech before timing out |
-| `pendingTimeoutBehavior` | `VoxrPendingTimeoutBehavior` | `Cancel` | What happens on timeout: `Cancel` discards the command, `FireAsIs` fires it with whatever slots were filled |
+| `pendingTimeoutBehavior` | `VoxrPendingTimeoutBehavior` | `Cancel` | What happens on timeout: `Cancel` discards the command, `FireAsIs` fires it with whatever slots were filled. `FireAsIs` can only deliver an *incomplete* command when that command also sets `allowPartialMatch` — see [the two deliberate exceptions](../command-recognition.md#the-two-ways-an-incomplete-command-still-fires) |
 | `confirmVocabulary` | `string[]` | -- | Phrases that confirm a pending command. Empty = defaults ("confirm", "affirmative", "yes", "go ahead", "do it"). |
 | `cancelVocabulary` | `string[]` | -- | Phrases that cancel a pending command. Empty = defaults ("cancel", "abort", "negative", "belay that", "never mind"). |
 
@@ -40,7 +40,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `OnCommandRecognised` | `Action<VoxrCommand>` | Fired for each successfully recognised command that passes threshold and debounce filters |
 | `OnCommandsRecognised` | `Action<VoxrCommand[]>` | Fired with the full batch of commands extracted from a single utterance (after sequential extraction) |
 | `OnUnrecognisedSpeech` | `Action<string>` | Fired when speech does not produce any accepted command -- no pattern matched, every match fell under `minScore`, or a match was diverted to pending. **Not** fired when a match was rejected by `minConfidence` or suppressed by debounce; those are dropped silently. The `string` parameter is the full buffered transcript. See [Unrecognised Speech](../command-recognition.md#unrecognised-speech) and [the gates](../scoring.md#what-onunrecognisedspeech-actually-means). |
-| `OnCommandPending` | `Action<VoxrCommand>` | Fired when a command enters pending state (partial match with unfilled required slots, or awaiting explicit confirmation). See [Pending Commands](../command-recognition.md#pending-commands). |
+| `OnCommandPending` | `Action<VoxrCommand>` | Fired when a command enters pending state (partial match with unfilled required slots, or awaiting explicit confirmation), **and again each time follow-up speech fills some but not all of the required slots still missing** — so one pending command can raise this event several times, carrying the updated command each time. Expect one invocation per fill, not one per pending. See [Pending Commands](../command-recognition.md#pending-commands). |
 | `OnCommandConfirmed` | `Action<VoxrCommand>` | Fired when a pending command is confirmed by follow-up speech or explicit confirmation. Also fires `OnCommandRecognised` and `OnCommandsRecognised`. |
 | `OnCommandCancelled` | `Action<VoxrCommand>` | Fired when a pending command is cancelled by timeout, explicit cancel vocabulary, or preemption by a new complete command. |
 

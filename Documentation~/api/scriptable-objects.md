@@ -42,7 +42,7 @@ Nested serializable struct for variant-to-canonical mappings.
 |-------|------|-------------|
 | `intent` | `string` | The intent name |
 | `patterns` | `string[]` | Pattern strings with space-separated tokens (e.g. `"launch {?quantity} {weapon} target {target}"`) |
-| `allowPartialMatch` | `bool` | When enabled, the command enters pending state when matched with unfilled required slots, instead of being rejected. Follow-up speech can fill the missing slots. |
+| `allowPartialMatch` | `bool` | When enabled, the command enters pending state when matched with unfilled required slots, instead of being rejected. Follow-up speech can fill the missing slots, one per utterance if that is how they arrive. It is also the precondition for [both ways an incomplete command still fires](../command-recognition.md#the-two-ways-an-incomplete-command-still-fires) — a confirm phrase, or `FireAsIs` on timeout — so this command's handler must tolerate every required slot being absent. |
 | `requiresConfirmation` | `bool` | When enabled, the command enters pending state even when fully matched, requiring explicit confirmation before firing. |
 
 Each pattern string is split on whitespace into a token array at runtime. Tokens can be literal words, `{slotName}`, or `{?slotName}` (optional).

@@ -675,16 +675,22 @@ namespace VoXR.Commands
                 // refusal to fire rather than a refusal to progress: each utterance fills what it
                 // can and the command waits for the rest.
                 bool followUpIncomplete = IsIncomplete(followUpResult.Value);
-                InterpretResolution(
-                    followUpIncomplete
-                        ? _pending.AdvanceSlotFill(followUpResult.Value)
-                        : _pending.Complete(followUpResult.Value)
-                );
+                var followUpRes = followUpIncomplete
+                    ? _pending.AdvanceSlotFill(followUpResult.Value)
+                    : _pending.Complete(followUpResult.Value);
 #if UNITY_EDITOR
+                // Read the re-armed pending BEFORE the resolution is interpreted. Interpreting it
+                // invokes OnCommandPending, whose subscribers may cancel, reconfigure, or disable
+                // the recogniser — any of which clears the pending and would make this read throw
+                // on a Nullable with no value. The rest of the method's diagnostics capture their
+                // locals ahead of the events for the same reason.
                 string followUpReason = followUpIncomplete
                     ? "still pending (partial: unfilled "
                         + $"[{string.Join(", ", _pending.Current.Value.UnfilledSlots)}])"
                     : null;
+#endif
+                InterpretResolution(followUpRes);
+#if UNITY_EDITOR
                 LastMatchDiagnostics = new VoxrMatchDiagnostics(
                     text, diagWords,
                     new[] { new VoxrMatchAttempt(

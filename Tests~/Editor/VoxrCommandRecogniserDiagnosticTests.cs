@@ -147,6 +147,66 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual("cease_fire", diag.Attempts[0].Intent);
         }
 
+        // Issue #77. Documentation~/scoring.md publishes this reason string and its accepted
+        // flag in the session-log table, so pin both here — the page should fail a test rather
+        // than a reader. It is the follow-up path's second outcome: a fill that leaves a
+        // required slot outstanding keeps the command pending instead of firing it.
+        [Test]
+        public void FollowUpPartialFill_LogsStillPending_NotAccepted()
+        {
+            _recogniser.Configure(
+                new[]
+                {
+                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[] { "launch", "{weapon}", "at", "{target}", "on", "my", "mark" },
+                        },
+                        allowPartialMatch: true
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+
+            // Both slots stranded, so the follow-up below can fill one and still leave one.
+            _recogniser.InjectText("launch at on my mark");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "precondition: pending with two gaps");
+
+            _recogniser.InjectText("missiles");
+
+            var diag = _recogniser.LastMatchDiagnostics;
+            Assert.AreEqual(
+                1,
+                diag.Attempts.Length,
+                "the follow-up path logs one synthetic attempt"
+            );
+            Assert.AreEqual("launch_weapon", diag.Attempts[0].Intent);
+            Assert.IsFalse(diag.Attempts[0].IsAccepted, "the command did not fire");
+            StringAssert.Contains("still pending", diag.Attempts[0].RejectReason);
+            StringAssert.Contains(
+                "target",
+                diag.Attempts[0].RejectReason,
+                "and it names the slot still outstanding, not the one just filled"
+            );
+            StringAssert.DoesNotContain("weapon", diag.Attempts[0].RejectReason);
+
+            // The completing fill takes the other branch of the same attempt: accepted, no reason.
+            _recogniser.InjectText("hotel one");
+
+            diag = _recogniser.LastMatchDiagnostics;
+            Assert.AreEqual(1, diag.Attempts.Length);
+            Assert.IsTrue(diag.Attempts[0].IsAccepted);
+            Assert.IsNull(diag.Attempts[0].RejectReason);
+        }
+
         // 4.7
         [Test]
         public void PerSlotConfidence_Computed()

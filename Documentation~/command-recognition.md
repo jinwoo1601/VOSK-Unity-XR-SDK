@@ -430,7 +430,9 @@ A command missing a required argument does not fire on the ordinary path: it is 
 - **Confirming a partial match.** Saying a confirm phrase while a command waits for slot-fill fires it as it stands. The confirm check runs before slot-fill, and it is taken at face value — the user has been shown what is missing (via `OnCommandPending`) and said go anyway.
 - **`FireAsIs` on timeout.** The name is the contract: whatever was filled when the window closed is what fires.
 
-Neither is reachable by default — `allowPartialMatch` is `false` and `pendingTimeoutBehavior` is `Cancel`. Opt into either and the handler for that command **must** tolerate every required slot being absent:
+**Both have the same precondition: `allowPartialMatch`.** Only a partial-match pending ever holds a command with a required slot still absent — a pending that is merely awaiting confirmation was complete when it entered, because the completeness rule refused it otherwise. So `pendingTimeoutBehavior = FireAsIs` on its own cannot fire an incomplete command; it needs a command that opted into partial matching to have one to fire.
+
+Set `allowPartialMatch` on a command and its handler **must** tolerate every required slot being absent — via a confirm phrase, which needs no second opt-in, or on timeout if `pendingTimeoutBehavior` is `FireAsIs`:
 
 ```csharp
 commandRecogniser.OnCommandConfirmed += cmd =>
