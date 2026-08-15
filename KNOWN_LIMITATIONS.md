@@ -384,23 +384,6 @@ deliberate trade-offs rather than oversights.
   scoring. If the #42 protection matters, avoid slot-initial patterns over
   open-ended slots, or anchor them behind a literal.
 
-### A second command that loses its own leading word is charged to the first
-
-- **Repro**: Say two commands in one breath and have VOSK drop the second's first
-  word: "cease fire" + "approach target hotel one" heard as
-  "cease fire target hotel one". `cease_fire` falls `1.0` → `0.4` and stops
-  firing; `approach_target` still fires at `0.667`. Say the second command in
-  full and both fire at `1.0`.
-- **Where seen**: #65 §5.2 A/B — 11 intent-changes and 1 count-change of 699, all
-  this shape.
-- **Root cause**: the orphan run stops at the first token that could *begin* a
-  pattern, but the matcher can begin a pattern anywhere by missing its leading
-  elements. "target" begins no pattern, so the first command is charged for tokens
-  a later extraction round then explains. A per-position admissibility probe would
-  close it; a cruder widening collapses into the slot-initial case above.
-- **Workaround**: none at user level. It loses a command; it never fires a wrong
-  one. Tracked as a follow-up.
-
 ### A demoted winner can block a better-scoring match that starts later
 
 - **Repro**: With the demo grammar, say "switch navigation mode" (the "to"
@@ -409,7 +392,9 @@ deliberate trade-offs rather than oversights.
   token 1 would have scored `0.667`.
 - **Where seen**: #65 §5.2 review. Swept exhaustively over 699 utterances: 29
   candidates were blocked this way and **28 were recovered** by a later extraction
-  round. This is the only one that was not.
+  round. This is the only one that was not. Re-swept after #82 changed the orphan
+  run's terminator: **28 blocked, 27 recovered**, and the same single case still
+  silent.
 - **Root cause**: selection ranks earliest start above score, so a later-starting
   candidate cannot be promoted however much better it scores — coverage can only
   reorder candidates that begin at the same token. Normally sequential extraction

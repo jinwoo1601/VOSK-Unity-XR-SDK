@@ -171,8 +171,7 @@ namespace VoXR.Commands
         // Pre-allocated slot match buffers — avoids per-call List allocations in TryMatchScored/Parse.
         readonly int _maxSlotsPerPattern;
         readonly VoxrSlotMatch[] _matchSlotBuf;   // TryMatchScored writes here
-        readonly VoxrSlotMatch[] _bestSlotBuf;    // copy-on-best in Parse
-        int _matchSlotCount;                      // set by TryMatchScored
+        readonly VoxrSlotMatch[] _bestSlotBuf; // copy-on-best in Parse
 #if UNITY_EDITOR
         readonly int[] _matchSlotStartBuf;
         readonly int[] _matchSlotEndBuf;
@@ -1117,6 +1116,10 @@ namespace VoXR.Commands
             // missed more of its required elements than it matched is not a candidate. It is
             // deliberately a COUNT, not a score threshold — no knob, nothing to configure, and
             // independent of the coverage term that will later enter the score.
+            //
+            // IsAdmissibleStart applies a STRICTER count (missed < matched) for a different
+            // question — whether a token may terminate another command's orphan run. The two
+            // are deliberately one notch apart; see the reasoning there before aligning them.
             if (candidate.MissedRequired > candidate.MatchedRequired)
                 return false;
             if (bestScore <= 0f)
@@ -1145,7 +1148,16 @@ namespace VoXR.Commands
         // term reads it: the words charged are those between the round's origin and where
         // this candidate starts, so a second command in a multi-command utterance is never
         // charged for the tokens the first one consumed.
-        MatchResult TryMatchScored(string[] tokens, int startIdx, string[] pattern, int searchStart)
+        //
+        // forStartProbe is IsAdmissibleStart calling in from inside BuildCoverageTables, before
+        // the coverage tables it would read exist. See the coverage block at the bottom.
+        MatchResult TryMatchScored(
+            string[] tokens,
+            int startIdx,
+            string[] pattern,
+            int searchStart,
+            bool forStartProbe = false
+        )
         {
             int tokenIdx = startIdx;
             float rawScore = 0f;
@@ -1193,7 +1205,11 @@ namespace VoXR.Commands
                     int consumed;
                     if (_slots[slotIdx].Type == VoxrSlotType.NumberSequence)
                         matchedValue = TryMatchNumberSequence(tokens, tokenIdx,
-                            _slots[slotIdx].MinWords, _slots[slotIdx].MaxWords, out consumed);
+                            _slots[slotIdx].MinWords,
+                            _slots[slotIdx].MaxWords,
+                            out consumed,
+                            valueNeeded: !forStartProbe
+                        );
                     else
                         matchedValue = TryMatchSlot(tokens, tokenIdx, slotIdx, out consumed);
 
@@ -1268,8 +1284,6 @@ namespace VoXR.Commands
                 }
             }
 
-            _matchSlotCount = slotCount;
-
             // Coverage (issue #65 §5.2), computed HERE — before the caller compares
             // candidates — which is the whole of the change. The leading term used to be
             // applied to the winner alone, after selection, so that it could only filter via
@@ -1286,13 +1300,24 @@ namespace VoXR.Commands
             // candidate whose own next required element failed at this position owns the token
             // it mis-predicted and may not claim some other pattern could have begun there.
             // Both tables are built once per utterance, so coverage is three array reads.
-            AssertCoverageTablesMatch(tokens);
+            //
+            // The start probe is the one caller that runs BEFORE those tables exist — it is
+            // what builds them — so it takes no coverage term at all. That costs the probe
+            // nothing it needs: it reads only rawScore's sign and the two required-element
+            // counts, and coverage can only ENLARGE the denominator, so it can never flip a
+            // score from positive to non-positive. Skipping it here is what keeps the probe
+            // from reading a half-filled table for its own answer.
+            float coverage = 0f;
+            if (!forStartProbe)
+            {
+                AssertCoverageTablesMatch(tokens);
 
-            float coverage =
-                (
-                    SkippedBefore(searchStart, startIdx)
-                    + OrphanedAfter(consumedEndIdx, requiredAfterLastMatch > 0)
-                ) * _coverageWeight;
+                coverage =
+                    (
+                        SkippedBefore(searchStart, startIdx)
+                        + OrphanedAfter(consumedEndIdx, requiredAfterLastMatch > 0)
+                    ) * _coverageWeight;
+            }
 
             float normalizedScore = denominator > 0f ? rawScore / (denominator + coverage) : 0f;
 
@@ -1382,12 +1407,20 @@ namespace VoXR.Commands
             return count;
         }
 
+        // Non-null stand-in for a matched number sequence whose joined value nobody will read.
+        // Only the start probe passes valueNeeded: false, and it discards every slot it
+        // matches — so this exists to keep "did it match" truthful without the allocation.
+        // Named rather than blank so that if it ever does leak into a VoxrCommand it is
+        // greppable instead of looking like a legitimately empty slot.
+        const string UnreadSlotValue = "<probe>";
+
         string TryMatchNumberSequence(
             string[] tokens,
             int startIdx,
             int minWords,
             int maxWords,
-            out int consumed
+            out int consumed,
+            bool valueNeeded = true
         )
         {
             consumed = 0;
@@ -1400,6 +1433,14 @@ namespace VoXR.Commands
 
             if (count == 1)
                 return tokens[matchStart];
+
+            // Every decision above — match or no match, and how much was consumed — is already
+            // made, and none of it reads the joined string. So the probe can stop here and skip
+            // the only allocation on this path. CanStartPattern avoids it by calling
+            // CountNumberSequenceWords directly; the probe cannot, because it needs the whole
+            // pattern walked, so it opts out here instead.
+            if (!valueNeeded)
+                return UnreadSlotValue;
 
             _numberSb.Clear();
             for (int i = 0; i < count; i++)
@@ -1510,6 +1551,11 @@ namespace VoXR.Commands
             // noise token shield every real orphan behind it, so "decelerate [unk] hard burn"
             // must cost exactly what "decelerate hard burn" costs.
             //
+            // The start test is IsAdmissibleStart, not CanStartPattern: the run must stop
+            // wherever the MATCHER could begin, and the matcher begins patterns whose leading
+            // elements were dropped (issue #82). CanStartPattern is still the cheap first half
+            // of that answer.
+            //
             // _forcedOrphanRun is the same quantity under Amendment A3, for a candidate whose
             // own next required element failed at this position: the first non-[unk] token is
             // charged outright instead of being tested against the start predicate, and the
@@ -1539,7 +1585,7 @@ namespace VoXR.Commands
                     continue;
                 }
 
-                _orphanRun[i] = CanStartPattern(tokens, i) ? 0 : 1 + _orphanRun[i + 1];
+                _orphanRun[i] = IsAdmissibleStart(tokens, i) ? 0 : 1 + _orphanRun[i + 1];
                 _forcedOrphanRun[i] = 1 + _orphanRun[i + 1];
             }
         }
@@ -1582,6 +1628,92 @@ namespace VoXR.Commands
         internal int OrphanedAfter(int consumedEndIdx, bool ownsTheNextToken = false)
         {
             return ownsTheNextToken ? _forcedOrphanRun[consumedEndIdx] : _orphanRun[consumedEndIdx];
+        }
+
+        // Could the MATCHER begin a match at tokens[idx]? This is the orphan run's terminator,
+        // and it exists because CanStartPattern below answers a strictly narrower question than
+        // the one the run needs to ask (issue #82).
+        //
+        // CanStartPattern asks whether a pattern's FIRST matchable element matches here.
+        // ParseInternal asks no such thing: it tries every pattern at every non-[unk] index, so
+        // a pattern whose leading elements VOSK dropped begins wherever its surviving elements
+        // do — which is the single most common decoder failure and the reason coverage exists.
+        // The two disagreed, and the disagreement charged one command for the next command's
+        // tokens: in "cease fire target hotel one", "target" begins no pattern as a first
+        // element, yet `approach target {target}` does match there and a later extraction round
+        // does fire it, so cease_fire paid 0.4 for words that were never orphans.
+        //
+        // So the run asks the matcher instead. A position is a start when some active pattern,
+        // started there, matches STRICTLY MORE of its required elements than it misses.
+        //
+        // That threshold is the whole of what keeps this from being the "crude widening" the
+        // design refused, and it is deliberately one notch STRONGER than DR-7's admission rule
+        // (`missed <= matched`, IsBetterCandidate:1120). DR-7 asks "is this a candidate at
+        // all?" — a question answered for a candidate that may still lose its round and never
+        // fire. Terminating another command's orphan run is a bigger claim: it moves score off
+        // a candidate that IS firing, so it takes strictly more evidence for than against.
+        //
+        // The gap between the two is not academic; it is the whole #42 regression. Take the
+        // pair command-recognition.md recommends as the safe remedy — ["decelerate"] beside
+        // ["decelerate","?by","{burn_level}"] — on "decelerate hard burn please". Probed from
+        // "hard", the slot-filled pattern misses "decelerate" (1) and matches {burn_level} (1).
+        // Under `missed <= matched` that is admissible, so the value the bare pattern strands
+        // terminates the bare pattern's own orphan run: bare scores 1/(1+0) = 1.00 against the
+        // slot-filled 2/(2+1) = 0.67, the bare command fires, and the burn level the speaker
+        // said is discarded — which is #42, reverted, on the grammar the docs prescribe.
+        // Under `missed < matched` the probe refuses it and the charge stands.
+        //
+        // Counted over the WHOLE pattern, not over the elements skipped to reach idx: a pattern
+        // is being asked whether it plausibly explains this token as a command, and a trailing
+        // required element it also matched is evidence for exactly that.
+        //
+        // Two properties worth stating, because F11 is argued against this method:
+        //   - The threshold is a COUNT, like DR-7 itself: no knob, nothing to configure, and
+        //     independent of minScore and of coverageWeight.
+        //   - It only ever ADDS claims. CanStartPattern is consulted first and is never
+        //     overruled, so a pattern that begins here keeps terminating the run whatever DR-7
+        //     would say about the candidate — which is the half of F11 that
+        //     Coverage_ResidualHazard_WhenTheStrandedValueBeginsAPattern pins.
+        //   - The answer is a function of (grammar, tokens, idx) alone. It reads no other
+        //     candidate's verdict, no searchStart, and nothing from the selection round, so
+        //     coverage does not become a function of DR-7's verdicts — the property F11 was
+        //     narrowed to protect after the #78 review.
+        //
+        // Cost is one extraction round's work per utterance, paid once here rather than per
+        // candidate, and only at positions the cheap test already declined.
+        //
+        // Callers must not pass an [unk] index; BuildCoverageTables settles those first.
+        internal bool IsAdmissibleStart(string[] tokens, int idx)
+        {
+            if (CanStartPattern(tokens, idx))
+                return true;
+
+            // At weight 0 coverage is identically zero, so no orphan count can reach any score
+            // and the sweep below is pure waste — on TryEagerCommit that is waste per partial
+            // result, not per utterance. Falling back to the cheap predicate keeps parse
+            // results bit-identical (0 x anything is 0) while skipping it.
+            //
+            // This does mean _orphanRun holds the narrower CanStartPattern answer on a weight-0
+            // parser. Nothing can observe that through scoring; it is visible only to a test
+            // reading OrphanedAfter directly, which is why there is one pinning both halves.
+            if (_coverageWeight <= 0f)
+                return false;
+
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                var patterns = _commands[ci].Patterns;
+                for (int pi = 0; pi < patterns.Length; pi++)
+                {
+                    // searchStart is idx so the leading term would be zero anyway; the probe
+                    // suppresses the whole coverage term regardless.
+                    var probe = TryMatchScored(tokens, idx, patterns[pi], idx, forStartProbe: true);
+
+                    if (probe.Score > 0f && probe.MissedRequired < probe.MatchedRequired)
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         // Could any registered active pattern begin a match at tokens[idx]? Deliberately
