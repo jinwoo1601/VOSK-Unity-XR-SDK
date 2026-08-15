@@ -16,7 +16,7 @@ namespace VoXR.Tests.Runtime
 {
     internal static class DemoGrammar
     {
-        internal static void Configure(VoxrCommandRecogniser commandRecogniser)
+        static void Build(out VoxrSlotDefinition[] slots, out VoxrCommandSet[] sets)
         {
             var targets = new VoxrSlotDefinition(
                 "target",
@@ -154,12 +154,29 @@ namespace VoXR.Tests.Runtime
                 }
             );
 
-            commandRecogniser.Configure(
-                slots: new[] { targets, weapons, quantity, namedRange, heading, elevation },
-                sets: new[] { weaponsSet, navigationSet, commonSet }
-            );
+            slots = new[] { targets, weapons, quantity, namedRange, heading, elevation };
+            sets = new[] { weaponsSet, navigationSet, commonSet };
+        }
 
+        internal static void Configure(VoxrCommandRecogniser commandRecogniser)
+        {
+            Build(out var slots, out var sets);
+            commandRecogniser.Configure(slots: slots, sets: sets);
             commandRecogniser.SetActiveSets("weapons", "navigation", "common");
+        }
+
+        // Every command the demo grammar registers, flattened in the order a parser with all
+        // three sets active sees them. Exists so a test can measure the shipped grammar
+        // directly rather than re-transcribing it — a hand transcription of this grammar is
+        // how the issue #74 warning-volume measurement first got its numbers wrong.
+        internal static VoxrCommandDefinition[] AllCommands()
+        {
+            Build(out _, out var sets);
+
+            var all = new List<VoxrCommandDefinition>();
+            foreach (var set in sets)
+                all.AddRange(set.Commands);
+            return all.ToArray();
         }
     }
 }

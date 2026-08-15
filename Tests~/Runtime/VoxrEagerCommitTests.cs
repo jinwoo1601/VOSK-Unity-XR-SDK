@@ -1330,6 +1330,11 @@ namespace VoXR.Tests.Runtime
             // belongs to the five-element analog above (MissedRequiredLiteral_AllSlotsFilled).
             // Both clear the 0.6 default, so the condition outcome §2.8 reasoned to is
             // unaffected; only the illustrative arithmetic was carried from the wrong example.
+            // This grammar is the sibling shape by construction, so it now warns at
+            // construction too (issue #74 backlog item 1). Declared rather than tolerated,
+            // matching every other warning-producing test in this file.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+
             Assert.AreEqual(
                 EagerCommitVerdict.Commit,
                 MedialSiblingParser().TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f),
@@ -1353,12 +1358,15 @@ namespace VoXR.Tests.Runtime
             // Reversing the declaration order is what makes this a coin flip rather than a
             // defensible preference: nothing about the utterance changed, only the order the
             // author happened to register two commands in.
+            // Two constructions below, each emitting the construction-time sibling warning.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
             var flushed = MedialSiblingParser().Parse("set alpha on");
 
             Assert.AreEqual(1, flushed.Length, "the tie resolves to exactly one command");
             Assert.AreEqual("set_mode", flushed[0].Command.Intent, "the first-registered wins");
             Assert.AreEqual(3f / 4f, flushed[0].Command.Score, 0.001f);
 
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
             var reversed = new VoxrCommandParser(
                 Slots(new VoxrSlotDefinition("ship", new[] { "alpha" })),
                 Commands(

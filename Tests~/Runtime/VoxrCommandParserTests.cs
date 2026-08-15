@@ -3524,13 +3524,17 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void SiblingSets_OptionalDecorationInTheFrame_StillMatches()
+        public void SiblingSets_OptionalLiteralInTheFrame_IsNotASet()
         {
-            // ExpandOptionals emits an INCLUDED optional with its "?" intact, so a raw
-            // comparison would read these as differing at two positions and miss the hazard.
-            // An included "?to" consumes the token "to" exactly as a required "to" does, so the
-            // two patterns compete on precisely the same tokens and only the authoring
-            // decoration differs.
+            // An included "?to" consumes the same token a required "to" does, so it is tempting
+            // to treat the two frames as equal — and an earlier draft did. But consumption is
+            // not scoring: a matched optional literal credits OptionalLiteralScore to BOTH
+            // sides where a required one credits MatchScore, and (r-0.5)/(d-0.5) < r/d for
+            // r < d. On "switch to" these score 1.5/2.5 = 0.60 and 2/3 = 0.667, so selection
+            // separates them on its first key and never reaches registration order.
+            //
+            // Detecting this pair would therefore assert a tie that does not happen — the same
+            // false-positive class the empty-frame and same-intent rules exclude.
             var sets = VoxrCommandParser.FindSiblingSets(
                 new[]
                 {
@@ -3539,7 +3543,28 @@ namespace VoXR.Tests.Runtime
                 }
             );
 
-            Assert.AreEqual(1, sets.Count, "decoration on a FRAME element must not hide the set");
+            Assert.AreEqual(
+                0,
+                sets.Count,
+                "an optional literal does not score like a required one"
+            );
+        }
+
+        [Test]
+        public void SiblingSets_OptionalSlotInTheFrame_StillMatches()
+        {
+            // The other half of the asymmetry, and the reason NormalizeElement still folds slot
+            // decoration: a matched slot credits MatchScore whether it was written {ship} or
+            // {?ship}, so these two DO tie on the dropped word and the set is real.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_mode", SibP("set", "{?ship}", "mode", "on")),
+                    Sib("set_level", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count, "optional slots are score-neutral, so the tie is real");
             Assert.AreEqual(2, sets[0].DiscriminatorIndex);
         }
 
@@ -3706,10 +3731,9 @@ namespace VoXR.Tests.Runtime
         public void SiblingWarning_OneIntentContributingTwoPatterns_NamesItOnce()
         {
             // "cease fire" and "hold fire" both tie with "resume fire", so cease_fire
-            // contributes two of the three members. The demo grammar contains exactly this.
-            // Naming the intent once per PATTERN would print "Intents 'cease_fire',
-            // 'cease_fire' and 'resume_fire'", so intents are deduplicated for display while
-            // every pattern is still listed.
+            // contributes two of the three members. Naming the intent once per PATTERN would
+            // print "Intents 'cease_fire', 'cease_fire' and 'resume_fire'", so intents are
+            // deduplicated for display while every pattern is still listed.
             LogAssert.Expect(
                 UnityEngine.LogType.Warning,
                 new Regex(
@@ -3730,6 +3754,73 @@ namespace VoXR.Tests.Runtime
 
             Assert.IsNotNull(parser);
             LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingSets_DemoGrammar_VolumeAndOrderAreStable()
+        {
+            // The design gates "warning on by default" on measured volume over a real grammar
+            // (§7.3), and the human's ruling to suppress same-intent sets rests on that split.
+            // Pinned here so the evidence is reproducible from the branch and so a later change
+            // that makes this scan noisier cannot pass unnoticed — the earlier measurement was
+            // taken from a HAND TRANSCRIPTION of this grammar and was wrong because of it, so
+            // this reads the shipped definitions directly.
+            //
+            // It also pins emission ORDER, which nothing else does: the scan walks a first-seen
+            // key list precisely because Dictionary iteration order is unspecified, and without
+            // an assertion over a multi-set grammar that guarantee is untested.
+            var sets = VoxrCommandParser.FindSiblingSets(DemoGrammar.AllCommands());
+
+            int cross = 0;
+            var crossFrames = new List<string>();
+            foreach (var set in sets)
+            {
+                bool single = true;
+                for (int i = 1; i < set.Members.Length; i++)
+                    if (set.Members[i].Intent != set.Members[0].Intent)
+                    {
+                        single = false;
+                        break;
+                    }
+                if (single)
+                    continue;
+
+                cross++;
+                var values = new List<string>();
+                foreach (var m in set.Members)
+                    values.Add(m.Value);
+                crossFrames.Add(
+                    $"{set.Members[0].Intent}@{set.DiscriminatorIndex + 1}:"
+                        + string.Join("/", values)
+                );
+            }
+
+            Assert.AreEqual(
+                11,
+                sets.Count,
+                "total sets the relation admits in the shipped demo grammar"
+            );
+            Assert.AreEqual(5, cross, "…of which these are cross-intent, and so warn");
+            Assert.AreEqual(
+                6,
+                sets.Count - cross,
+                "…and these are same-intent synonym authoring, suppressed by the human's ruling"
+            );
+
+            // Registration order, not hash order. Every entry is a genuine wrong-intent hazard:
+            // cease/stop vs resume are opposite actions, as are enable and disable.
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "cease_fire@1:cease/resume",
+                    "cease_fire@1:stop/resume",
+                    "mode_weapons@1:weapons/navigation",
+                    "mode_weapons@3:weapons/navigation",
+                    "mode_all@1:enable/disable",
+                },
+                crossFrames,
+                "emission order must be stable across runs"
+            );
         }
 
         [Test]
@@ -3816,6 +3907,31 @@ namespace VoXR.Tests.Runtime
 
             Assert.IsNotNull(parser);
             LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingScan_IsEditorOnly()
+        {
+            // The whole "costs a player build nothing" claim rests on one attribute, and
+            // deleting it would break no other test — the scan would simply start running in
+            // built players, silently, where its output cannot be seen. Pinned by reflection
+            // the way the coverage-weight rename is.
+            var scan = typeof(VoxrCommandParser).GetMethod(
+                "WarnOnSiblingDiscriminator",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+            );
+
+            Assert.IsNotNull(scan, "the construction-time sibling scan");
+            var conditionals = scan.GetCustomAttributes(
+                typeof(System.Diagnostics.ConditionalAttribute),
+                inherit: false
+            );
+            Assert.AreEqual(1, conditionals.Length, "the scan must carry [Conditional]");
+            Assert.AreEqual(
+                "UNITY_EDITOR",
+                ((System.Diagnostics.ConditionalAttribute)conditionals[0]).ConditionString,
+                "so the call — and therefore the whole scan — is elided in a player build"
+            );
         }
 
         [Test]
