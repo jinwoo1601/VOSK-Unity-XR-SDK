@@ -344,7 +344,11 @@ deliberate trade-offs rather than oversights.
   - Mark natural trailing words optional (`?please`) to bring them into the
     grammar.
   - Lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0`
-    restores pre-v2.6 behaviour entirely — including the discarded-argument bug.
+    switches coverage off on *both* sides, so it reverts further than v2.6 —
+    back to pre-1.4.0 scoring, before the leading skipped-word charge existed —
+    and brings the discarded-argument bug back with it. Note the value is read
+    when the parser is built, so a change takes effect at the next
+    `RebuildParser` / `Configure` / `SetActiveSets` / `NotifySlotChanged`.
 
 ### Out-of-grammar words are only free when the decoder returns them as `[unk]`
 
@@ -471,26 +475,40 @@ deliberate trade-offs rather than oversights.
   - Avoid registering commands that are exact prefixes of others when low latency
     matters — e.g. give the shorter command a distinct extra keyword.
 
-### A dropped required literal hands the utterance to the bare sibling pattern
+### A dropped required literal hands the utterance to the bare sibling pattern — where coverage cannot charge for it
 
-- **Repro**: Register `["decelerate"]` and `["decelerate", "by", "{burn_level}"]` on
-  one command, then say "decelerate hard burn" (the "by" elided by the speaker, or
-  dropped by VOSK). The bare pattern fires at score 1.0 and `burn_level` is empty —
-  the command runs at its default level, with nothing reporting that a burn level
-  was heard and thrown away. Observed in-headset.
-- **Root cause**: Inherent to comparing siblings by score. The slot-filled pattern
-  loses the missing "by"'s credit while still counting it in the denominator
-  (2/3 = 0.67) while
-  the bare pattern matches perfectly (1/1 = 1.0), so the bare pattern wins on score
-  and sequential extraction finds nothing to do with the stranded "hard burn". No
-  threshold or penalty tuning reaches this case: a score normalised to 1.0 is the
-  ceiling, so nothing can outrank the bare pattern while it matches exactly. Short
-  unstressed function words are the most-dropped tokens in practice, which is what
-  makes the shape worth avoiding rather than tolerating.
+> **Narrowed in v2.6.** Coverage (#65 §5.2) closed the common form of this: with
+> `["decelerate"]` and `["decelerate", "by", "{burn_level}"]` registered,
+> "decelerate hard burn" now fires the slot-filled pattern at `2/3` = `0.67` with
+> the burn level extracted, where it used to fire the bare command at `1.0` and
+> discard it. What remains is the case below, which coverage cannot reach.
+
+- **Repro**: Take the pair above and additionally register any pattern that can
+  *begin* on the stranded value's first word — `["hard", "stop"]` will do. Say
+  "decelerate hard burn" with the "by" elided by the speaker or dropped by VOSK.
+  The bare pattern fires at score 1.0 and `burn_level` is empty — the command runs
+  at its default level, with nothing reporting that a burn level was heard and
+  thrown away. This is at the **default** `coverageWeight` of `1.0`. The original
+  form was observed in-headset; this residue is measured, not observed in the wild.
+- **Root cause**: Coverage charges a candidate for what it leaves unexplained, but
+  the trailing count is a *run* that stops at the first token which could begin
+  another match — the rule that keeps multi-command utterances intact. When the
+  stranded value's own first word is such a token, the run terminates at once, the
+  bare pattern is charged nothing, and it is back to matching perfectly at `1/1` =
+  `1.0` against the slot-filled `2/3` = `0.67`. No threshold or weight tuning
+  reaches it: a score normalised to 1.0 is the ceiling, so nothing can outrank the
+  bare pattern while it matches exactly. The same applies wherever the orphan test
+  charges nothing, including a grammar with a slot-initial pattern over a
+  permissive slot (see the entry above). Short unstressed function words are the
+  most-dropped tokens in practice, which is what makes the shape worth avoiding
+  rather than tolerating.
 - **Workaround**: Mark the droppable literal optional — `["decelerate", "?by",
   "{burn_level}"]`. An omitted optional leaves both sides of the score ratio, so the
   slot-filled pattern also scores 1.0 with or without the word, and wins as the
-  candidate covering more of the utterance. Removing the literal outright
+  candidate covering more of the utterance. This still works in the residual case,
+  where coverage alone does not — which is why the construction-time warning was
+  deliberately *not* narrowed when coverage shipped, even though the parser now has
+  the information to narrow it. Removing the literal outright
   (`["decelerate", "{burn_level}"]`) works too, at the cost of the phrasing.
   `VoxrCommandParser` logs a validation warning at construction naming the literal
   and the slot at risk. The scan follows what the parser itself compares, so it
