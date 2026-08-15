@@ -898,12 +898,16 @@ namespace VoXR.Tests.Runtime
         // Pins the candidate's score against the caller's hand-derived expectation, then asserts
         // the recogniser refuses to fire it.
         //
-        // The pin is the point. Without it a does-not-fire assertion FAILS OPEN: any change to
-        // the score denominator that pushed the candidate below minScore would leave the test
-        // green for the wrong reason — rejected on score, never reaching the completeness branch
-        // — with nothing to signal that it had gone vacuous. Per the #65 §7.3 discipline the
-        // expected scores are hand-derived and argued at each call site, never updated to
-        // whatever the code happens to emit.
+        // The two guards are the point, and they close different doors. Without them a
+        // does-not-fire assertion FAILS OPEN: a candidate that ended up below the gate would
+        // leave the test green for the wrong reason — rejected on score, never reaching the
+        // completeness branch — with nothing to signal that it had gone vacuous. The score pin
+        // catches the candidate moving (a change to the denominator); reading MinScore off the
+        // recogniser catches the gate moving underneath a candidate that did not. A hard-coded
+        // 0.60 would catch neither, being implied by the pin directly above it.
+        //
+        // Per the #65 §7.3 discipline the expected scores are hand-derived and argued at each
+        // call site, never updated to whatever the code happens to emit.
         void AssertIncompleteDoesNotFire(
             VoxrSlotDefinition[] slots,
             VoxrCommandDefinition[] commands,
@@ -924,9 +928,9 @@ namespace VoXR.Tests.Runtime
             );
             Assert.GreaterOrEqual(
                 probe[0].Command.Score,
-                0.6f,
-                "the candidate must clear the default minScore, or the refusal below proves "
-                    + "nothing about completeness"
+                _recogniser.MinScore,
+                "the candidate must clear the gate the recogniser is actually running, or the "
+                    + "refusal below proves nothing about completeness"
             );
             Assert.IsFalse(
                 probe[0].Command.HasSlot(strandedSlot),

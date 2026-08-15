@@ -178,8 +178,9 @@ namespace VoXR.Tests.Runtime
             );
             Assert.GreaterOrEqual(
                 pending.Value.Score,
-                0.6f,
-                "and it must clear the default minScore, or completeness is not what routed it"
+                _recogniser.MinScore,
+                "and it must clear the gate the recogniser is running, or completeness is not "
+                    + "what routed it"
             );
             Assert.AreEqual("missiles", pending.Value.GetSlot("weapon"));
             Assert.AreEqual("three", pending.Value.GetSlot("tube"));
@@ -242,7 +243,11 @@ namespace VoXR.Tests.Runtime
                 0.001f,
                 "the hand-derived score no longer holds — re-derive it and argue the new value"
             );
-            Assert.GreaterOrEqual(probe[0].Command.Score, 0.6f, "and it must clear minScore");
+            Assert.GreaterOrEqual(
+                probe[0].Command.Score,
+                _recogniser.MinScore,
+                "and it must clear the gate the recogniser is running"
+            );
             Assert.IsFalse(probe[0].Command.HasSlot("burn_level"), "with {burn_level} stranded");
 
             _recogniser.Configure(slots, commands);

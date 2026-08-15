@@ -912,6 +912,14 @@ namespace VoXR.Commands
         internal bool TestGrammarRebuildDeferred => _grammar.GrammarRebuildDeferred;
         internal float TestEffectiveBufferWindow => EffectiveBufferWindow;
 
+        // Read-only, and read by the completeness tests (issue #76) rather than copied as a
+        // literal. Those tests assert that a candidate CLEARS this gate, so that the refusal
+        // they then observe can only have come from the completeness term. Against a hard-coded
+        // 0.60 that assertion cannot fail: raising the serialized default would drop the
+        // candidates below the gate, reject them on score, and leave the tests passing without
+        // ever reaching the branch they exist to pin.
+        internal float MinScore => minScore;
+
         internal void TestForceTimeoutNow()
         {
             if (!_pending.HasPending) return;
