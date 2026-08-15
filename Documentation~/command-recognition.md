@@ -123,7 +123,7 @@ The parser logs a validation warning at construction naming the literal and the 
 - **Over a run of required literals, not just one.** Dropping any single word in `decelerate by the {burn_level}` strands the value just as dropping `by` alone does.
 - **Over optional forms.** `fire {?quantity} {weapon}` is not literally a prefix of `fire {weapon} at {target}`, but it is once its own optional is omitted -- which is exactly the form the parser matches when no quantity is spoken. Patterns are expanded before comparison, as the eager-flush prefix analysis already does.
 
-The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild and expansion is exponential. That costs recall on that pattern only.
+The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild an Editor session makes and expansion is exponential. That costs recall on that pattern only.
 
 ---
 

@@ -515,11 +515,17 @@ namespace VoXR.Commands
         // "Validation warnings re-emit on every active-set switch" limitation, which this
         // compounded). A warning that loud on grammars that now behave correctly is the kind
         // that gets globally suppressed, taking the residual case with it. The TRIGGER stays at
-        // full breadth: the remedy is the better authoring either way, it is the only thing
-        // that reaches the residue, and at coverageWeight 0 the hazard is not residual at all
-        // but reverts wholesale. What changes is only that this is authoring guidance now,
-        // delivered where authoring happens. The two passes beside it are untouched — they
-        // report outright authoring mistakes, not a shape that is usually fine.
+        // full breadth, for three reasons. The remedy is the better authoring either way and
+        // does reach the residue coverage alone does not — though it is not the only edit that
+        // does: removing the literal outright reaches it too, scoring the same 1.0 and taking
+        // the same span tie-break, at the cost of the phrasing. A narrowing here could consult
+        // only _startLiterals/_startSlots, which answer CanStartPattern; the orphan run
+        // actually terminates on the strictly wider IsAdmissibleStart (issue #82), so a
+        // construction-time trigger would go silent on every position the cheap test declines.
+        // And at coverageWeight 0 the hazard is not residual at all but reverts wholesale.
+        // What changes is only that this is authoring guidance now, delivered where authoring
+        // happens. The two passes beside it are untouched — they report outright authoring
+        // mistakes, not a shape that is usually fine.
         //
         // Conditional rather than #if so the call site and the helpers below stay one piece of
         // code; the tests that LogAssert.Expect this message therefore pin it in editor Play
