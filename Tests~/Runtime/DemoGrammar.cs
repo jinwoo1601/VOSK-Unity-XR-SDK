@@ -1,5 +1,5 @@
 // ============================================================================
-// Purpose:  Test copy of the demo command grammar for acoustic replay tests
+// Purpose:  Test copy of the demo command grammar, for acoustic replay and grammar analysis
 // Layer:    Tests.Runtime
 // Owns:     DemoGrammar (internal static class)
 // Depends:  VoxrSlotDefinition, VoxrCommandDefinition, VoxrCommandSet, VoxrCommandRecogniser
@@ -158,24 +158,45 @@ namespace VoXR.Tests.Runtime
             sets = new[] { weaponsSet, navigationSet, commonSet };
         }
 
+        // The sets this grammar activates, in the order it activates them. Both Configure and
+        // AllCommands read it, so the flatten below cannot drift from what the parser builds.
+        static readonly string[] ActiveSetNames = { "weapons", "navigation", "common" };
+
         internal static void Configure(VoxrCommandRecogniser commandRecogniser)
         {
             Build(out var slots, out var sets);
             commandRecogniser.Configure(slots: slots, sets: sets);
-            commandRecogniser.SetActiveSets("weapons", "navigation", "common");
+            commandRecogniser.SetActiveSets(ActiveSetNames);
         }
 
-        // Every command the demo grammar registers, flattened in the order a parser with all
-        // three sets active sees them. Exists so a test can measure the shipped grammar
-        // directly rather than re-transcribing it — a hand transcription of this grammar is
-        // how the issue #74 warning-volume measurement first got its numbers wrong.
+        // Every command the demo grammar registers, flattened the way the parser sees them.
+        // Exists so a test can measure the shipped grammar directly rather than re-transcribing
+        // it — a hand transcription of this grammar is how the issue #74 warning-volume
+        // measurement first got its numbers wrong.
+        //
+        // Flattened by ACTIVATION order, not by the order Build happens to declare the sets in:
+        // CommandSetManager.Activate concatenates in the order the names are passed, so walking
+        // the declaration array would only coincidentally agree, and reordering the activation
+        // list would leave a measurement pinned against a grammar no parser ever builds.
+        // The slots the demo grammar registers, for a test that needs to build a parser over
+        // this grammar rather than a recogniser.
+        internal static VoxrSlotDefinition[] AllSlots()
+        {
+            Build(out var slots, out _);
+            return slots;
+        }
+
         internal static VoxrCommandDefinition[] AllCommands()
         {
             Build(out _, out var sets);
 
-            var all = new List<VoxrCommandDefinition>();
+            var byName = new Dictionary<string, VoxrCommandSet>();
             foreach (var set in sets)
-                all.AddRange(set.Commands);
+                byName[set.Name] = set;
+
+            var all = new List<VoxrCommandDefinition>();
+            foreach (var name in ActiveSetNames)
+                all.AddRange(byName[name].Commands);
             return all.ToArray();
         }
     }

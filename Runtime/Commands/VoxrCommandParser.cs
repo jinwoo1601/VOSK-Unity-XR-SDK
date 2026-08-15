@@ -69,6 +69,12 @@ namespace VoXR.Commands
         const float OptionalLiteralScore = 0.5f;
         const float RequiredSlotMissPenalty = -1.0f;
 
+        // Mirrors VoxrCommandRecogniser's serialized default. Used only by the construction-
+        // time sibling scan, which has to judge whether a tie could clear the gate but is not
+        // handed the configured threshold. Kept in sync by
+        // SiblingWarning_ReachabilityGateTracksTheRecogniserDefault.
+        const float DefaultMinScore = 0.6f;
+
         // Deliberately zero (issue #65 §5.1), and kept as a named constant rather than
         // deleted so this set still reads as the whole scoring model in one place.
         //
@@ -803,6 +809,49 @@ namespace VoXR.Commands
         static bool IsRequiredLiteral(string element) =>
             !string.IsNullOrEmpty(element) && element[0] != '?' && ExtractSlotName(element) == null;
 
+        // Does this element credit MatchedRequired when it matches? Optional elements of either
+        // kind do not — TryMatchScored increments the counter only under `if (!isOptional)`,
+        // and MatchedRequired is not score bookkeeping but the DR-7 admission key.
+        static bool CreditsRequired(string element) =>
+            !IsOptionalLiteral(element) && !IsOptionalSlot(element);
+
+        // Whether anything OUTSIDE the discriminator would credit MatchedRequired for this
+        // form. If nothing does, the candidate misses one required element (the discriminator)
+        // and matches none, so `MissedRequired > MatchedRequired` refuses it in
+        // IsBetterCandidate before any comparison key is reached — it can never be the rival
+        // in a tie, whatever it scores.
+        //
+        // This is per FORM, not per set, because the two sides can differ here even when their
+        // normalized frames agree: {?ship} and {ship} are the same frame element and score the
+        // same, but only the required one credits MatchedRequired. Without this the scan warns
+        // that "the wrong intent can fire" about a pair where one side is refused outright and
+        // the other wins alone, or where both are refused and nothing fires at all.
+        static bool HasRequiredElementOutside(string[] form, int discriminator)
+        {
+            for (int i = 0; i < form.Length; i++)
+                if (i != discriminator && CreditsRequired(form[i]))
+                    return true;
+            return false;
+        }
+
+        // What a candidate scores once the discriminator is dropped. Every element keeps its
+        // usual weight — a matched slot credits MatchScore whether or not it is optional, and
+        // only an optional literal credits OptionalLiteralScore — so the frame's total weight
+        // is the denominator, and losing the discriminator costs exactly MatchScore off the
+        // numerator. Coverage is zero in the tying case: the transcript is what the frame
+        // matched, with nothing left over on either side.
+        static float ScoreAfterDroppingDiscriminator(string[] frame)
+        {
+            float denominator = MatchScore; // the discriminator's own weight, a required literal
+            for (int i = 0; i < frame.Length; i++)
+            {
+                if (frame[i] == null)
+                    continue;
+                denominator += IsOptionalLiteral(frame[i]) ? OptionalLiteralScore : MatchScore;
+            }
+            return (denominator - MatchScore) / denominator;
+        }
+
         // The sole definition of "sibling" (design DR-2): equal length, equal at every position
         // but one, a required literal in each at that position — at ANY position, not only the
         // last, since a medial discriminator is the more dangerous case and is unguarded on
@@ -868,6 +917,13 @@ namespace VoXR.Commands
                             if (!IsRequiredLiteral(form[d]))
                                 continue;
 
+                            // A form the admission rule would refuse is not a rival, so it is
+                            // not collected at all. Dropping it here rather than at emission
+                            // matters: a set can be left with one real member and one refused
+                            // one, which is not a tie and must not be reported as one.
+                            if (!HasRequiredElementOutside(form, d))
+                                continue;
+
                             key.Length = 0;
                             for (int i = 0; i < form.Length; i++)
                             {
@@ -904,17 +960,19 @@ namespace VoXR.Commands
                 if (members.Count < 2)
                     continue;
 
-                // A member is kept only if it brings BOTH a pattern and a discriminating value
-                // the set does not already have. The two tests catch different things:
+                // One member per discriminating value: two patterns reaching the same literal
+                // are duplicates of each other, not siblings, which is what keeps
+                // author-duplicated patterns out of the report. Greedy and first-wins, so the
+                // survivor is the earliest registered and the result is stable across runs.
                 //
-                //   same (command, pattern) — one pattern's own forms CAN differ at a required
-                //     literal once decoration is normalized away (["?a","a","b","?b","c"]
-                //     yields [a,a,b,c] and [a,b,b,c]), which would report it as its own sibling
-                //   same value — two patterns reaching the same literal are duplicates, not
-                //     siblings, which is what keeps author-duplicated patterns out of this
-                //
-                // Greedy and first-wins, so the surviving member of each is the earliest
-                // registered, and the result is stable across runs.
+                // A per-(command, pattern) guard used to sit beside this, against a pattern
+                // being its own sibling. It became unreachable when frame comparison stopped
+                // folding optional literals: two same-length forms of ONE pattern differ only
+                // in which optionals they include, and with the "?" preserved those positions
+                // never compare equal — so the shift that used to align a required literal
+                // against a different one cannot happen, and an optional position can never be
+                // the discriminator anyway. Removed rather than kept as insurance against a
+                // mechanism the code no longer has.
                 var kept = new List<SiblingMember>();
                 for (int i = 0; i < members.Count; i++)
                 {
@@ -922,15 +980,7 @@ namespace VoXR.Commands
                     for (int j = 0; j < kept.Count; j++)
                     {
                         if (
-                            (
-                                kept[j].CommandIndex == members[i].CommandIndex
-                                && kept[j].PatternIndex == members[i].PatternIndex
-                            )
-                            || string.Equals(
-                                kept[j].Value,
-                                members[i].Value,
-                                StringComparison.Ordinal
-                            )
+                            string.Equals(kept[j].Value, members[i].Value, StringComparison.Ordinal)
                         )
                         {
                             seen = true;
@@ -944,12 +994,6 @@ namespace VoXR.Commands
                 if (kept.Count < 2)
                     continue;
 
-                var set = new SiblingSet(
-                    order[o].Discriminator,
-                    order[o].BuildFrame(),
-                    kept.ToArray()
-                );
-
                 // One hazard can surface under several frames: a pattern pair carrying an
                 // optional element fills one bucket per expansion, with the same members each
                 // time. Collapse those here rather than in each consumer — a sibling set is a
@@ -960,11 +1004,30 @@ namespace VoXR.Commands
                 // discriminator's position within a form that silently dropped an optional,
                 // so an author counting elements in their own pattern would land on the wrong
                 // word.
-                int existing = IndexOfSameMembers(sets, set);
+                //
+                // The comparison runs on `kept` and the form's length, so the frame and the
+                // member array are built only for the set actually stored — on a grammar where
+                // one hazard surfaces under many frames, all but one of those allocations
+                // would otherwise be made and immediately dropped.
+                int existing = IndexOfSameMembers(sets, kept);
                 if (existing < 0)
-                    sets.Add(set);
-                else if (set.Frame.Length > sets[existing].Frame.Length)
-                    sets[existing] = set;
+                {
+                    sets.Add(
+                        new SiblingSet(
+                            order[o].Discriminator,
+                            order[o].BuildFrame(),
+                            kept.ToArray()
+                        )
+                    );
+                }
+                else if (order[o].Form.Length > sets[existing].Frame.Length)
+                {
+                    sets[existing] = new SiblingSet(
+                        order[o].Discriminator,
+                        order[o].BuildFrame(),
+                        kept.ToArray()
+                    );
+                }
             }
 
             return sets;
@@ -995,23 +1058,23 @@ namespace VoXR.Commands
             }
         }
 
-        static int IndexOfSameMembers(List<SiblingSet> sets, SiblingSet candidate)
+        static int IndexOfSameMembers(List<SiblingSet> sets, List<SiblingMember> candidate)
         {
             for (int s = 0; s < sets.Count; s++)
             {
                 var members = sets[s].Members;
-                if (members.Length != candidate.Members.Length)
+                if (members.Length != candidate.Count)
                     continue;
 
                 bool same = true;
                 for (int m = 0; m < members.Length; m++)
                 {
                     if (
-                        members[m].CommandIndex != candidate.Members[m].CommandIndex
-                        || members[m].PatternIndex != candidate.Members[m].PatternIndex
+                        members[m].CommandIndex != candidate[m].CommandIndex
+                        || members[m].PatternIndex != candidate[m].PatternIndex
                         || !string.Equals(
                             members[m].Value,
-                            candidate.Members[m].Value,
+                            candidate[m].Value,
                             StringComparison.Ordinal
                         )
                     )
@@ -1055,7 +1118,24 @@ namespace VoXR.Commands
                 // The filter is HERE and not in FindSiblingSets on purpose: the relation stays
                 // exactly as DR-1 defines it, so a later consumer that does care about a
                 // same-intent tie still sees one.
-                if (!IsSingleIntent(set))
+                // ...and only if the tie is REACHABLE. Losing one required element out of a
+                // frame worth D leaves (D-1)/D, so a two-element pattern drops to 0.5 — under
+                // the shipped minScore default, which rejects BOTH siblings. Nothing fires,
+                // rather than the wrong thing, and this repo already pins that twice
+                // (MissedLiteral_TwoElementPattern_StillRejected and its recogniser-level
+                // counterpart _DoesNotFire). Warning "the wrong intent can fire" there is
+                // false, and the remedy it offers is inert when no command fires at all.
+                //
+                // Judged against the DEFAULT, because the parser constructor is handed only
+                // (slots, commands, coverageWeight, additionalGrammarWords) and cannot see the
+                // recogniser's configured minScore. An author who lowers it below (D-1)/D
+                // makes these ties live and gets no warning — a real limitation, stated in
+                // KNOWN_LIMITATIONS rather than papered over. Erring the other way would put
+                // a knowingly false claim in front of every author who did not touch the knob.
+                if (
+                    !IsSingleIntent(set)
+                    && ScoreAfterDroppingDiscriminator(set.Frame) >= DefaultMinScore
+                )
                     UnityEngine.Debug.LogWarning(BuildSiblingWarning(commands, set));
 
                 // The collision report is NOT narrowed the same way, and the difference is
@@ -1096,7 +1176,10 @@ namespace VoXR.Commands
                 .ToString();
         }
 
-        static bool IsSingleIntent(SiblingSet set)
+        // internal so the warning-volume test measures the shipped filter instead of keeping
+        // its own copy of the rule — the split it pins is the evidence DR-7's default-on
+        // ruling rests on.
+        internal static bool IsSingleIntent(SiblingSet set)
         {
             for (int i = 1; i < set.Members.Length; i++)
                 if (
