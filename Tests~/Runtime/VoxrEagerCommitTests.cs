@@ -1248,5 +1248,38 @@ namespace VoXR.Tests.Runtime
                 "a command missing a required argument must never commit early, however it scores"
             );
         }
+
+        [Test]
+        public void TrailingCoverage_ChangesTheVerdict_ByDecidingWhichCandidateIsChecked()
+        {
+            // Documentation~/scoring.md §6 condition 3 used to claim the trailing term "can
+            // never be what decides an eager verdict", reasoning that a candidate passing the
+            // whole-buffer check has nothing trailing it. True of that candidate's own charge,
+            // but it misses that coverage runs in SELECTION — and selection picks which
+            // candidate the conditions are then applied to. Corrected under issue #83, and
+            // pinned here because the claim is not derivable from the conditions alone.
+            var slots = Slots(new VoxrSlotDefinition("burn_level", new[] { "hard burn" }));
+            var commands = Commands(
+                Cmd("decelerate", P("decelerate"), P("decelerate", "by", "{burn_level}"))
+            );
+
+            LogAssert.Expect(LogType.Warning, new Regex("required literal \"by\""));
+            var charged = new VoxrCommandParser(slots, commands, 1.0f);
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                charged.TryEagerCommit(Tok("decelerate hard burn"), null, 0.6f, 0.4f),
+                "coverage demotes the bare form, so the buffer-spanning pattern is the one checked"
+            );
+
+            LogAssert.Expect(LogType.Warning, new Regex("required literal \"by\""));
+            var uncharged = new VoxrCommandParser(slots, commands, 0f);
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                uncharged.TryEagerCommit(Tok("decelerate hard burn"), null, 0.6f, 0.4f),
+                "at weight 0 the bare form wins selection and fails the whole-buffer condition"
+            );
+        }
     }
 }

@@ -133,12 +133,14 @@ The one limit: a pattern carrying more than six optional elements is compared un
 
 Every match produces a normalised **score** (0.0--1.0) built from two halves: how well the transcript satisfied the pattern, and how much of the utterance the match left unexplained. The parser uses a sliding start to tolerate preamble, hesitations, and false starts, so a pattern can match anywhere in the transcript -- and what it walks past or leaves behind counts against it (see [Coverage](#coverage)).
 
-Two independent thresholds control what gets through:
+Two independent thresholds control what gets through, both set on the `VoxrCommandRecogniser` component **in the Inspector**:
 
-```csharp
-commandRecogniser.minScore = 0.6f;       // Reject low-quality pattern matches
-commandRecogniser.minConfidence = 0.4f;   // Reject low VOSK word confidence
 ```
+minScore        0.6    // Reject low-quality pattern matches
+minConfidence   0.4    // Reject low VOSK word confidence
+```
+
+They are serialized fields with no public setter, so there is no code path for changing them at runtime -- tune them on the component, and regression-test the change with the [Batch Test Runner](api/batch-test-runner.md), which does take both as constructor arguments.
 
 **Score** (`VoxrCommand.Score`) is computed by the parser based on how well the transcript satisfies the pattern, normalised against a *dynamic* denominator. Required tokens always count toward that denominator; optional tokens (`?word` literals and `{?slot}` slots) count only when they are actually spoken. An omitted optional therefore drops out of both sides of the ratio rather than diluting it, so a perfect match scores 1.0 whether or not its optional tokens were uttered — taking advantage of optionality is never penalized. A missed *required* token still pulls the score down, and so does anything the match left unexplained — see [Coverage](#coverage).
 

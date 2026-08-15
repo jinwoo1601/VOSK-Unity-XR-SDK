@@ -302,7 +302,7 @@ With `["fire"]` and `["fire", "at", "{target}"]` registered:
 
 ## 7. Worked examples
 
-Each trace ends with the entry it produces in the [session debug log](editor-testing.md#session-debug-log), abridged to the fields under discussion.
+Each trace ends with the entry it produces in the [session debug log](editor-testing.md#session-debug-log), abridged to the fields under discussion and with scores shown to two decimals. The real `score` field carries the full float — `2 / 3` is written as `0.6666667`, not `0.67` — so match on ranges rather than on an exact literal when you grep or assert against a log.
 
 ### A. A clean multi-slot command
 
@@ -342,7 +342,15 @@ Utterance: **"decelerate hard burn"** — the speaker said the burn level; VOSK 
 
 **This is the ordering that #65 inverted.** Until coverage entered selection, the bare pattern scored a flat `1.00` — it did match everything it claimed — and won, firing `decelerate` with an empty `slots` array while the "hard burn" the speaker actually said was silently dropped. No threshold reached it, because nothing normalised to `1.00` can be out-scored. Charging a candidate for what it leaves unexplained is what reverses the order, and it is the reason coverage had to move *above* the selection barrier rather than stay a filter on the winner.
 
-**`"?by"` is still the better grammar, and the parser still warns about this shape at construction.** Coverage closes the *common* case, not the whole hazard — see below. Make the literal optional and the omitted optional drops out of both sides of the ratio, so the slot-filled form scores `2 / 2` = `1.00` whether or not the word was spoken, a comfortable margin instead of `0.07` above the gate. Read [the cost of the swap](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) before applying it wholesale.
+**`"?by"` is still the better grammar, and the parser still warns about this shape at construction.** Coverage closes the *common* case, not the whole hazard — see below. Make the literal optional and the omitted optional drops out of both sides of the ratio, so the slot-filled form scores `2 / 2` = `1.00` whether or not the word was spoken, a comfortable margin instead of `0.07` above the gate:
+
+```json
+{ "intent": "decelerate", "pattern": "decelerate ?by {burn_level}",
+  "score": 1.0, "accepted": true,
+  "slots": [ { "name": "burn_level", "value": "hard burn", "startWord": 1, "endWord": 3 } ] }
+```
+
+Note the `?` survives into the logged `pattern` — it is the pattern as you declared it, not as it matched — so grep a session log for `decelerate ?by {burn_level}`, not for `decelerate by {burn_level}`. Read [the cost of the swap](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) before applying it wholesale.
 
 **The case coverage does not close.** The orphan run stops at the first token that could begin another match — so if the stranded value's *own first word* begins some pattern, the bare candidate is charged nothing and strands the value exactly as it did before #65. Register `["hard", "stop"]` alongside the pair above and "decelerate hard burn" goes back to firing bare `decelerate` at a full `1.00`, argument discarded, at the **default** `coverageWeight`:
 
