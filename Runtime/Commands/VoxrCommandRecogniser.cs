@@ -662,15 +662,45 @@ namespace VoXR.Commands
             // ---- Step 5: Arbitrate follow-up vs new command ----
             if (followUpResult.HasValue && !hasCompleteNewCommand)
             {
-                var completeRes = _pending.Complete(followUpResult.Value);
-                InterpretResolution(completeRes);
+                // A follow-up result is not necessarily a complete command (issue #77). The
+                // slot-fill walks the unfilled slots in order, stops at the first one it cannot
+                // fill, and returns as soon as ONE new slot is filled — so a pending with two or
+                // more unfilled required slots yields a command still missing an argument. Firing
+                // it here would fire exactly the shape #73 refuses on the flush path, on the very
+                // path #73 routes those commands to, and the re-score does not stand in for the
+                // test: ScoreFollowUp re-scores against the matched pattern, so a partly filled
+                // command can score alongside a complete one.
+                //
+                // Keeping the pending alive rather than discarding the fill is what makes this a
+                // refusal to fire rather than a refusal to progress: each utterance fills what it
+                // can and the command waits for the rest.
+                bool followUpIncomplete = IsIncomplete(followUpResult.Value);
+                var followUpRes = followUpIncomplete
+                    ? _pending.AdvanceSlotFill(followUpResult.Value, Time.time)
+                    : _pending.Complete(followUpResult.Value, Time.time);
+#if UNITY_EDITOR
+                // Read the re-armed pending BEFORE the resolution is interpreted. Interpreting it
+                // invokes OnCommandPending, whose subscribers may cancel, reconfigure, or disable
+                // the recogniser — any of which clears the pending and would make this read throw
+                // on a Nullable with no value. The rest of the method's diagnostics capture their
+                // locals ahead of the events for the same reason.
+                string followUpReason = followUpIncomplete
+                    ? "still pending (partial: unfilled "
+                        + $"[{string.Join(", ", _pending.Current.Value.UnfilledSlots)}])"
+                    : null;
+#endif
+                InterpretResolution(followUpRes);
 #if UNITY_EDITOR
                 LastMatchDiagnostics = new VoxrMatchDiagnostics(
                     text, diagWords,
                     new[] { new VoxrMatchAttempt(
                         followUpResult.Value.Intent, null, followUpResult.Value.Score,
                         minScore, followUpResult.Value.Confidence, minConfidence,
-                        null, null, true) },
+                            null,
+                            followUpReason,
+                            !followUpIncomplete
+                        ),
+                    },
                     Time.frameCount);
 #endif
                 return;
@@ -839,9 +869,10 @@ namespace VoXR.Commands
             Array.Clear(_acceptedBuf, 0, acceptedCount);
         }
 
-        // Whether a parsed command is missing one of its own required arguments (issue #73).
-        // The flush path's completeness condition, and the counterpart to the two TryEagerCommit
-        // already enforces (#66, #70).
+        // Whether a command is missing one of its own required arguments (issue #73). The flush
+        // path's completeness condition, and the counterpart to the two TryEagerCommit already
+        // enforces (#66, #70). Issue #77 added the third caller: the follow-up slot-fill exit,
+        // whose input is not a parse result at all but a pending command merged with a fill.
         //
         // An intent with no definition in the active sets is treated as complete: we cannot read
         // a pattern we do not have, and inventing a refusal there would silence commands for a

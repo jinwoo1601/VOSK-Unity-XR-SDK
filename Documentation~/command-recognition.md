@@ -383,6 +383,8 @@ var launchCmd = new VoxrCommandDefinition("launch_weapon",
 
 If the user says "launch missiles" without specifying a target, the command enters pending state and `OnCommandPending` fires. The system then listens for follow-up speech. If the user says "hotel one" within the `pendingTimeout` window, the target slot is filled and the command fires normally via `OnCommandConfirmed` and `OnCommandRecognised`.
 
+**Several missing slots take several utterances if they have to.** Follow-up speech fills the unfilled slots in pattern order and stops at the first one it cannot find, so an utterance that answers only part of what is missing leaves the command *still pending* — with what it just filled kept, and `OnCommandPending` fired again carrying the updated command. It fires only once no required slot is left. A prompt driven off `OnCommandPending` therefore sees each fill as it lands and can name what is still outstanding. Nothing is lost by answering one slot at a time, and each fill restarts the `pendingTimeout` window: `pendingTimeout` bounds how long the command waits for *you*, so answering buys another window rather than eating into a fixed one. What ends a stalled exchange is silence — the first window nobody answers. The same restart applies when the last slot lands on a command that also sets `requiresConfirmation`: the confirmation stage begins its own window.
+
 ```csharp
 commandRecogniser.OnCommandPending += cmd =>
     Debug.Log($"Waiting for: {cmd.Intent}");
@@ -408,6 +410,8 @@ After saying "self destruct", the command enters pending state. The user must sa
 
 Default confirm vocabulary: "confirm", "affirmative", "yes", "go ahead", "do it". Default cancel vocabulary: "cancel", "abort", "negative", "belay that", "never mind". Override these with the `confirmVocabulary` and `cancelVocabulary` Inspector arrays on `VoxrCommandRecogniser`.
 
+A confirm phrase is checked *before* anything else, so it also resolves a pending command that is waiting on slots rather than on confirmation — see below.
+
 ### Combined Partial + Confirmation
 
 A command with both `allowPartialMatch` and `requiresConfirmation` goes through two pending stages: first, follow-up speech fills missing slots; then, the user confirms before the command fires.
@@ -418,6 +422,28 @@ Configure `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` on `VoxrCom
 
 - **Cancel** (default) -- the pending command is discarded and `OnCommandCancelled` fires.
 - **FireAsIs** -- the pending command fires with whatever slots were filled, even if some are still missing.
+
+### The two ways an incomplete command still fires
+
+A command missing a required argument does not fire on the ordinary path: it is refused outright, or, with `allowPartialMatch`, held pending for slot-fill. Two opt-ins deliberately override that, and both hand your handler a command with arguments absent:
+
+- **Confirming a partial match.** Saying a confirm phrase while a command waits for slot-fill fires it as it stands. The confirm check runs before slot-fill, and it is taken at face value — the user has been shown what is missing (via `OnCommandPending`) and said go anyway.
+- **`FireAsIs` on timeout.** The name is the contract: whatever was filled when the window closed is what fires.
+
+**Both have the same precondition: `allowPartialMatch`.** Only a partial-match pending ever holds a command with a required slot still absent — a pending that is merely awaiting confirmation was complete when it entered, because the completeness rule refused it otherwise. So `pendingTimeoutBehavior = FireAsIs` on its own cannot fire an incomplete command; it needs a command that opted into partial matching to have one to fire.
+
+Set `allowPartialMatch` on a command and its handler **must** tolerate every required slot being absent — via a confirm phrase, which needs no second opt-in, or on timeout if `pendingTimeoutBehavior` is `FireAsIs`:
+
+```csharp
+commandRecogniser.OnCommandConfirmed += cmd =>
+{
+    // Do not assume a slot is present just because the pattern requires it.
+    if (!cmd.HasSlot("target")) { PromptForTarget(); return; }
+    Launch(cmd.GetSlot("target"));
+};
+```
+
+Test with `HasSlot`, not with the value: `GetSlot` returns `string.Empty` for a slot that was never filled, so a null check will not catch it.
 
 ### Preemption
 

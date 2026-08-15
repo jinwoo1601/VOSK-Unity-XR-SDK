@@ -1,7 +1,9 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using VoXR.Commands;
 
 namespace VoXR.Tests.Runtime
@@ -902,6 +904,355 @@ namespace VoXR.Tests.Runtime
 
             Assert.AreEqual(1, pendingCount, "a candidate with more evidence than gaps still arms");
             Assert.IsTrue(_recogniser.HasPendingCommand);
+        }
+
+        // -------- The follow-up exit and the two opt-in exits (issue #77) --------
+
+        // Every test below needs a pending with TWO unfilled required slots, which is what makes
+        // the follow-up exit's gap reachable at all: with one unfilled slot a follow-up either
+        // completes the command or fills nothing, so a result that is still incomplete never
+        // appears. Nothing else in the suite constructs this shape.
+        //
+        // "launch at on my mark" matches five required literals and strands both slots — five
+        // matched against two missed, which DR-7 admits. Incompleteness is what routes it to
+        // pending; it also happens to land below minScore, but that term is neither necessary
+        // nor sufficient here, so do not "fix" this fixture by adjusting its score.
+        void ConfigureTwoSlotPartial(bool requiresConfirm = false)
+        {
+            _recogniser.Configure(
+                new[]
+                {
+                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[] { "launch", "{weapon}", "at", "{target}", "on", "my", "mark" },
+                        },
+                        allowPartialMatch: true,
+                        requiresConfirmation: requiresConfirm
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+        }
+
+        void AssertBothArgumentsPending()
+        {
+            Assert.IsTrue(_recogniser.HasPendingCommand, "precondition: a pending command is live");
+            Assert.IsFalse(
+                _recogniser.PendingCommand.Value.HasSlot("weapon"),
+                "precondition: {weapon} is unfilled"
+            );
+            Assert.IsFalse(
+                _recogniser.PendingCommand.Value.HasSlot("target"),
+                "precondition: and so is {target} — two unfilled required slots, not one"
+            );
+        }
+
+        [Test]
+        public void FollowUp_FillingOnlyOneOfTwoRequiredSlots_StaysPending()
+        {
+            // Issue #77 case 1. TryFollowUpSlotFill walks the unfilled slots in order, breaks at
+            // the first it cannot fill, and returns a command as soon as ONE new slot is filled.
+            // With two unfilled it therefore hands Step 5 a command still missing an argument —
+            // and Step 5 fired it, which is precisely the shape #73 refuses on the flush path,
+            // reached by the path #73 routes those commands to.
+            ConfigureTwoSlotPartial();
+
+            // The whole payload, not just the intent: the re-fire's argument is what a prompt
+            // reads, and it is a separate surface from the handler state the assertions below
+            // check. Recording only the intent would let a regression that re-announced the
+            // STALE pre-fill command pass every assertion in this file.
+            var pendingPayloads = new List<VoxrCommand>();
+            _recogniser.OnCommandPending += pendingPayloads.Add;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+            VoxrCommand? confirmed = null;
+            _recogniser.OnCommandConfirmed += cmd => confirmed = cmd;
+            int cancelledCount = 0;
+            _recogniser.OnCommandCancelled += _ => cancelledCount++;
+
+            _recogniser.InjectText("launch at on my mark");
+            AssertBothArgumentsPending();
+            Assert.AreEqual(1, pendingPayloads.Count);
+
+            // Fills {weapon} and nothing else — {target} has no candidate in this utterance.
+            _recogniser.InjectText("missiles");
+
+            Assert.IsFalse(
+                recognised.HasValue,
+                "a command still missing an argument must not fire out of the slot-fill exit"
+            );
+            Assert.IsFalse(confirmed.HasValue);
+            Assert.AreEqual(0, cancelledCount, "and the half-finished command is not discarded");
+
+            // The refusal has to keep the fill, or it is a refusal to make progress: without this
+            // the test would pass just as well on a slot-fill that matched nothing at all.
+            Assert.IsTrue(_recogniser.HasPendingCommand, "the pending stays live");
+            Assert.AreEqual(
+                "missiles",
+                _recogniser.PendingCommand.Value.GetSlot("weapon"),
+                "carrying the slot this utterance did fill"
+            );
+            Assert.IsFalse(
+                _recogniser.PendingCommand.Value.HasSlot("target"),
+                "and still waiting on the one it did not"
+            );
+            Assert.AreEqual(
+                2,
+                pendingPayloads.Count,
+                "and it re-announces itself, so a prompt can show what is still missing"
+            );
+            Assert.AreEqual(
+                "missiles",
+                pendingPayloads[1].GetSlot("weapon"),
+                "the re-announcement carries the UPDATED command, not the pre-fill one — a "
+                    + "prompt reads this payload, so re-announcing the stale command would name "
+                    + "a slot the user has already supplied"
+            );
+            Assert.IsFalse(
+                pendingPayloads[1].HasSlot("target"),
+                "and still reports the slot that is genuinely outstanding"
+            );
+
+            // The remaining slot arrives in a third utterance, and only now does it fire.
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsTrue(confirmed.HasValue, "the completed command fires");
+            Assert.AreEqual("missiles", confirmed.Value.GetSlot("weapon"));
+            Assert.AreEqual(
+                "hotel one",
+                confirmed.Value.GetSlot("target"),
+                "with the slot filled two utterances earlier still attached"
+            );
+            Assert.IsTrue(recognised.HasValue);
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void FollowUp_AcrossTwoUtterances_StillReachesTheConfirmationGate()
+        {
+            // AdvanceSlotFill carries `Reason` over so the pending stays a PartialMatch. That
+            // field is load-bearing in exactly one place — Complete's re-entry guard
+            // `RequiresConfirmation && Reason == PartialMatch` — and nothing reached it before:
+            // every other test that fills a slot strands only ONE, so it goes straight to
+            // Complete without passing through AdvanceSlotFill. A regression writing
+            // AwaitingConfirmation here would leave the rest of this file green while firing a
+            // requiresConfirmation command with its confirmation gate skipped.
+            //
+            // This is also the path the fix repaired rather than merely guarded: before #77,
+            // Complete re-entered on the FIRST fill with UnfilledSlots emptied, which made every
+            // further fill a no-op and stranded {target} permanently.
+            ConfigureTwoSlotPartial(requiresConfirm: true);
+
+            var events = new List<string>();
+            _recogniser.OnCommandPending += cmd => events.Add($"pending:{cmd.Intent}");
+            _recogniser.OnCommandConfirmed += cmd => events.Add($"confirmed:{cmd.Intent}");
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            _recogniser.InjectText("launch at on my mark");
+            AssertBothArgumentsPending();
+
+            _recogniser.InjectText("missiles");
+            Assert.IsFalse(recognised.HasValue, "a partial fill does not fire");
+            Assert.AreEqual(
+                "missiles",
+                _recogniser.PendingCommand.Value.GetSlot("weapon"),
+                "and the second slot is still fillable — the pre-#77 bug emptied UnfilledSlots "
+                    + "here and stranded {target} for good"
+            );
+
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsFalse(
+                recognised.HasValue,
+                "the COMPLETING fill must not fire either — this command requires confirmation"
+            );
+            Assert.IsTrue(_recogniser.HasPendingCommand, "it re-enters pending for confirmation");
+            Assert.AreEqual(
+                "hotel one",
+                _recogniser.PendingCommand.Value.GetSlot("target"),
+                "carrying both slots into the confirmation stage"
+            );
+
+            _recogniser.InjectText("confirm");
+
+            Assert.IsTrue(recognised.HasValue, "and only the confirm phrase fires it");
+            Assert.AreEqual("missiles", recognised.Value.GetSlot("weapon"));
+            Assert.AreEqual("hotel one", recognised.Value.GetSlot("target"));
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "pending:launch_weapon", // entered, both slots absent
+                    "pending:launch_weapon", // re-announced after {weapon} filled
+                    "pending:launch_weapon", // re-entered for confirmation once complete
+                    "confirmed:launch_weapon",
+                },
+                events
+            );
+        }
+
+#if UNITY_EDITOR
+        [UnityTest]
+        public IEnumerator FollowUp_PartialFill_RestartsThePendingTimeoutWindow()
+        {
+            // pendingTimeout measures how long the command waits for the speaker, so a fill
+            // restarts it: the default 5 s otherwise has to cover every utterance of a multi-slot
+            // exchange, and a speaker answering one slot at a time would be cut off mid-answer.
+            // No test could observe this before — every timeout test goes through
+            // TestForceTimeoutNow, which overwrites CreatedTime outright before the only check
+            // that reads it. Read the field directly instead.
+            ConfigureTwoSlotPartial();
+
+            _recogniser.InjectText("launch at on my mark");
+            AssertBothArgumentsPending();
+            float createdOnEntry = _recogniser.EditorPendingCommand.Value.CreatedTime;
+
+            yield return null;
+
+            // Without this the test cannot tell "restarted" from "carried over" — both would read
+            // back the same value — so it would pass no matter which the code did.
+            Assert.Greater(
+                Time.time,
+                createdOnEntry,
+                "precondition: the clock advanced between entry and fill"
+            );
+
+            _recogniser.InjectText("missiles");
+
+            Assert.IsTrue(_recogniser.HasPendingCommand, "precondition: the fill kept it alive");
+            Assert.Greater(
+                _recogniser.EditorPendingCommand.Value.CreatedTime,
+                createdOnEntry,
+                "answering buys another window — what bounds the pending is silence, not the "
+                    + "elapsed time since it was first armed"
+            );
+        }
+
+        [UnityTest]
+        public IEnumerator CompletingFill_RestartsTheWindowForConfirmation()
+        {
+            // The same rule on the other re-entry. A command that reaches its confirmation stage
+            // by being filled slot-by-slot must not arrive there with less time to confirm than
+            // one that was complete when it was first heard.
+            ConfigureTwoSlotPartial(requiresConfirm: true);
+
+            _recogniser.InjectText("launch at on my mark");
+            _recogniser.InjectText("missiles");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "precondition: still filling");
+            float createdOnFill = _recogniser.EditorPendingCommand.Value.CreatedTime;
+
+            yield return null;
+
+            Assert.Greater(
+                Time.time,
+                createdOnFill,
+                "precondition: the clock advanced before the completing fill"
+            );
+
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsTrue(
+                _recogniser.HasPendingCommand,
+                "precondition: complete now, so it re-entered pending for confirmation"
+            );
+            Assert.Greater(
+                _recogniser.EditorPendingCommand.Value.CreatedTime,
+                createdOnFill,
+                "confirmation is a fresh question and gets a fresh window"
+            );
+        }
+#endif
+
+        [Test]
+        public void ConfirmVocabulary_OnAPartialMatchPending_FiresAsIs_ByDesign()
+        {
+            // Issue #77 case 2, ruled deliberate and documented in
+            // Documentation~/command-recognition.md rather than fixed. A confirm phrase resolves
+            // the pending at Step 1, before any completeness test, so it fires the command with
+            // whatever is filled — here nothing at all. Pinned because the ruling is the only
+            // thing separating it from case 1 above: opting into allowPartialMatch is what
+            // authorises it, and a handler for such a command must tolerate absent arguments.
+            ConfigureTwoSlotPartial();
+
+            _recogniser.InjectText("launch at on my mark");
+            AssertBothArgumentsPending();
+
+            VoxrCommand? confirmed = null;
+            _recogniser.OnCommandConfirmed += cmd => confirmed = cmd;
+
+            _recogniser.InjectText("confirm");
+
+            Assert.IsTrue(confirmed.HasValue, "confirming a partial match fires it as-is");
+            Assert.IsFalse(confirmed.Value.HasSlot("weapon"), "with {weapon} absent");
+            Assert.IsFalse(confirmed.Value.HasSlot("target"), "and {target} absent");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void TimeoutFireAsIs_OnATwoSlotPartialMatchPending_FiresAsIs_ByDesign()
+        {
+            // Issue #77 case 3, ruled deliberate for the same reason and documented alongside it.
+            // PartialMatch_TimeoutFireAsIs_FiresWithPartialSlots already covers one unfilled slot;
+            // this pins the shape the issue named as untested, where the command reaches the
+            // handler missing every argument it has.
+            ConfigureTwoSlotPartial();
+            _recogniser.PendingTimeoutBehavior = VoxrPendingTimeoutBehavior.FireAsIs;
+
+            _recogniser.InjectText("launch at on my mark");
+            AssertBothArgumentsPending();
+
+            VoxrCommand? confirmed = null;
+            _recogniser.OnCommandConfirmed += cmd => confirmed = cmd;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            ForceTimeoutNow();
+
+            Assert.IsTrue(confirmed.HasValue, "FireAsIs fires it as-is");
+            Assert.IsTrue(recognised.HasValue);
+            Assert.IsFalse(confirmed.Value.HasSlot("weapon"), "with {weapon} absent");
+            Assert.IsFalse(confirmed.Value.HasSlot("target"), "and {target} absent");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void Timeout_DefaultCancel_OnAPartlyFilledPending_Cancels()
+        {
+            // The other side of the #77 fix. Keeping the pending alive means an unanswered
+            // slot-fill now reaches the timeout instead of firing on the follow-up, so the
+            // default behaviour has to be the one that discards it — the #73 stance that firing
+            // nothing beats firing a command whose argument the handler never receives.
+            ConfigureTwoSlotPartial();
+
+            _recogniser.InjectText("launch at on my mark");
+            _recogniser.InjectText("missiles");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+
+            VoxrCommand? cancelled = null;
+            _recogniser.OnCommandCancelled += cmd => cancelled = cmd;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            ForceTimeoutNow();
+
+            Assert.IsTrue(cancelled.HasValue, "the partly filled command is discarded");
+            Assert.AreEqual(
+                "missiles",
+                cancelled.Value.GetSlot("weapon"),
+                "and reports what it had got as far as filling"
+            );
+            Assert.IsFalse(recognised.HasValue, "nothing fires");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
         }
 
         // -------- Helpers --------

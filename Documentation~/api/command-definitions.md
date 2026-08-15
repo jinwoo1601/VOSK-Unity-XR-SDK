@@ -14,7 +14,7 @@ Declares a command pattern with an intent name and one or more token arrays.
 |-------|------|-------------|
 | `Intent` | `string` | The intent name (e.g. `"launch_weapon"`) |
 | `Patterns` | `string[][]` | One or more token arrays. Each token is a literal word, `{slotName}`, or `{?slotName}` (optional). |
-| `AllowPartialMatch` | `bool` | When true, a match with unfilled required slots enters pending state instead of being rejected, allowing follow-up speech to fill the gaps. Default: `false`. |
+| `AllowPartialMatch` | `bool` | When true, a match with unfilled required slots enters pending state instead of being rejected, allowing follow-up speech to fill the gaps — one slot per utterance if that is how they arrive. It is also the precondition for [both ways an incomplete command still fires](../command-recognition.md#the-two-ways-an-incomplete-command-still-fires) — a confirm phrase, or `FireAsIs` on timeout — so this command's handler must tolerate every required slot being absent. Default: `false`. |
 | `RequiresConfirmation` | `bool` | When true, a fully-matched command enters pending state awaiting explicit confirmation before firing. Default: `false`. |
 
 ### Examples

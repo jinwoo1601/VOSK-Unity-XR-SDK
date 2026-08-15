@@ -436,7 +436,7 @@ Four paths short-circuit before the parse and publish a **single synthetic attem
 |----------------|---------------|
 | `no match` | The parser extracted nothing. `intent` is empty too, and `aggregateConfidence` is `0` — *not* the `-1` sentinel, which only ever comes from a real matched span. |
 | `cancelled via vocabulary` | Follow-up speech cancelled a pending command. The confirm case is the same entry with `accepted: true` and an empty `rejectReason`. |
-| *(empty, `accepted: true`)* | Follow-up speech filled a pending command's missing slot. |
+| *(empty, `accepted: true`)* — or `still pending (partial: unfilled [...])` | Follow-up speech filled a pending command's missing slot. Empty reason with `accepted: true` means no required slot is left and the command fired. When the utterance filled some but not all of what was still missing, the same entry carries `accepted: false` and `still pending (partial: unfilled [...])` instead: the fill was kept, the command did not fire, and the pending is still live. |
 | `timeout — cancelled` | A pending command timed out and was discarded. `inputText` is the *original* command's transcript, and `words` is empty — this entry is not an utterance at all. Under `FireAsIs` the same entry carries `accepted: true` and an empty `rejectReason`. |
 
 | Field | What it is | Section |
