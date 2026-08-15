@@ -204,6 +204,103 @@ namespace VoXR.Tests.Editor
             Assert.IsTrue(result.Passed, result.FailureReason);
         }
 
+        // ─── Flush-path completeness (issues #73, #76) ──────────────────
+        //
+        // PassesThresholds refuses a command with an unfilled required slot independently of
+        // score, in step with the recogniser's own Step 7 gate — without it the harness would
+        // report PASS for an utterance the runtime refuses, certifying a grammar against
+        // behaviour the user will never see. That branch shipped in PR #75 with no coverage.
+        //
+        // The grammar is local rather than the shared fixture because on the shared
+        // five-element pattern a single stranded slot scores exactly 0.60, and a case pinned to
+        // the gate value cannot distinguish "rejected as incomplete" from "rejected on score"
+        // if the denominator ever moves (issue #76). Eight required elements — nothing optional,
+        // so the denominator is the pattern length outright — with seven matched and {target}
+        // stranded gives (7 x 1 - 1) / 8 = 0.75 instead.
+        const string IncompleteAboveGate = "launch all missiles from tube three at";
+
+        static VoxrBatchTestRunner CreateLongFormRunner() =>
+            new VoxrBatchTestRunner(
+                new[]
+                {
+                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+                    new VoxrSlotDefinition("quantity", new[] { "all", "one", "two" }),
+                    new VoxrSlotDefinition("tube", new[] { "one", "two", "three" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[]
+                        {
+                            new[]
+                            {
+                                "launch",
+                                "{quantity}",
+                                "{weapon}",
+                                "from",
+                                "tube",
+                                "{tube}",
+                                "at",
+                                "{target}",
+                            },
+                        }
+                    ),
+                }
+            );
+
+        [Test]
+        public void Run_IncompleteCommandAboveGate_RejectedAsIncomplete()
+        {
+            var runner = CreateLongFormRunner();
+            var result = runner.Run(
+                new VoxrTestCase
+                {
+                    input = IncompleteAboveGate,
+                    expectedIntent = "launch_weapon",
+                    description = "Clears minScore but leaves {target} unfilled",
+                }
+            );
+
+            Assert.AreEqual(
+                6f / 8f,
+                result.Score,
+                0.001f,
+                "the hand-derived score no longer holds — re-derive it and argue the new value, "
+                    + "because a candidate that fell below minScore would be rejected for a "
+                    + "reason that has nothing to do with completeness"
+            );
+            Assert.IsFalse(result.Passed, "an incomplete command must not be certified");
+            StringAssert.Contains("required slot unfilled", result.FailureReason);
+            StringAssert.DoesNotContain(
+                "minScore",
+                result.FailureReason,
+                "and the reported reason must be the one that actually rejected it"
+            );
+        }
+
+        [Test]
+        public void Run_ExpectedRejection_IncompleteCommandAboveGate_Passes()
+        {
+            // The other side of the same branch: a grammar author pinning the runtime's refusal
+            // as the expected outcome gets a PASS, so the harness can be used to hold the
+            // behaviour in place rather than only to notice it.
+            var runner = CreateLongFormRunner();
+            var result = runner.Run(
+                new VoxrTestCase
+                {
+                    input = IncompleteAboveGate,
+                    expectedIntent = null,
+                    description = "Incomplete above the gate is expected to be refused",
+                }
+            );
+
+            Assert.IsTrue(result.Passed, result.FailureReason);
+            Assert.IsNull(result.ActualIntent, "nothing may be accepted");
+            Assert.AreEqual(6f / 8f, result.Score, 0.001f, "and it really did clear minScore");
+        }
+
         [Test]
         public void Run_ExpectedAcceptance_ButConfidenceRejects_Fails()
         {
