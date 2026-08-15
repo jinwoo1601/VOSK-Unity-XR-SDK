@@ -365,7 +365,7 @@ Note the `?` survives into the logged `pattern` — it is the pattern as you dec
   "score": 1.0, "accepted": true, "slots": [] }
 ```
 
-This is why the construction-time warning was not narrowed when coverage shipped: `?by` fixes both the common case and this residue, and coverage alone fixes only the first. The same applies wherever [the orphan test](#what-counts-as-orphaned) charges nothing — including a grammar with a slot-initial pattern over a permissive slot.
+This is why the construction-time warning was not narrowed when coverage shipped: `?by` fixes both the common case and this residue, and coverage alone fixes only the first. The same applies wherever [the orphan test](#what-counts-as-orphaned) charges nothing — including a grammar with a slot-initial pattern over a permissive slot. It is logged in the **Editor only**: keeping the trigger wide is what preserves the residue, and keeping it out of player builds is what stops that breadth earning it a blanket suppression.
 
 **Reading that entry:** a `0.67` on a three-element pattern whose slots *did* extract is the signature of exactly one missing required literal — `(N−1)/N` — with nothing left unexplained. If the number is lower than that arithmetic predicts, the difference is coverage: count the tokens outside the match.
 
