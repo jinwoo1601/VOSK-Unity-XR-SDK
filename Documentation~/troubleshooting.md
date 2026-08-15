@@ -80,6 +80,18 @@ A score near `0.50` with slots that *did* extract is the signature of exactly on
 
 Lowering `minScore` is still the wrong fix (it lets genuinely partial matches through everywhere else). For the two-element case, lengthen the pattern or accept the ambiguity. See [Short patterns are disproportionately fragile](scoring.md#short-patterns-are-disproportionately-fragile).
 
+### The wrong command fires, consistently, and its score looks healthy
+
+Two *different* intents whose patterns differ at exactly one required word cannot be told apart once the recogniser drops it. `switch to weapons` and `switch to navigation` both reduce to `switch to`, both score `(1 + 1 + 0) / 3` = `0.67`, and both consume the same span with the same literal count — so selection runs out of keys and falls through to its last, **registration order**. Whichever was declared first fires, every time, however clearly the speaker said the other.
+
+The healthy-looking score is the tell: nothing went wrong with the match. The word that would have decided is the word that went missing, so no threshold or penalty reaches this.
+
+**Check the Editor console at construction.** The parser warns about this shape by name, listing the intents, the patterns as you wrote them, and the element they differ at. Two cases it deliberately stays quiet about: patterns of the *same* intent (the same command dispatches either way), and pairs too short for the tie to clear the default `minScore` — a two-element pair scores `0.5`, and *both* siblings are rejected, so you get silence rather than a wrong command. If you have lowered `minScore` below `0.6`, the second exclusion no longer holds and you may hit a live tie the warning never reported; `KNOWN_LIMITATIONS.md` carries that case.
+
+A discriminating word in the **middle** of the pattern is worse than one at the end: the eager-flush gate refuses a pattern still owing its last word, but a medial miss resets that check, so `set {ship} mode on` heard as "set alpha on" commits *early* with the wrong sibling.
+
+Fix by diverging by more than one word, or give the more destructive of the pair `requiresConfirmation`. Where both phrasings must exist verbatim, register the safer one first. See [Do not separate two commands by a single word](command-recognition.md#do-not-separate-two-commands-by-a-single-word).
+
 ### A command reports nothing at all, though it clearly part-matched
 
 Distinct from a score rejection: there is no scored attempt in the log either, because the candidate never became one. A pattern that **missed more of its required elements than it matched** is refused admission before selection, whatever it would have scored -- so a very sparse partial match produces no result rather than a low-scoring one.
