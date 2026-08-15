@@ -1440,6 +1440,85 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void IsAdmissibleStart_SkipsTheProbeWhenCoverageIsDisabled()
+        {
+            // At coverageWeight 0 every orphan count is multiplied by zero, so the probe sweep
+            // cannot reach any score and is pure waste — and on the eager path that waste is
+            // per partial result, not per utterance. Both halves are pinned here because the
+            // short-circuit makes the TABLE weight-dependent even though behaviour is not.
+            var tokens = "cease fire launch missiles target hotel one".Split(' ');
+
+            var weighted = CreateParser();
+            weighted.BuildCoverageTables(tokens);
+            Assert.AreEqual(
+                0,
+                weighted.OrphanedAfter(3),
+                "at the default weight the probe admits \"missiles\""
+            );
+
+            var unweighted = new VoxrCommandParser(MakeSlots(), MakeCommands(), 0f);
+            unweighted.BuildCoverageTables(tokens);
+            Assert.IsFalse(unweighted.IsAdmissibleStart(tokens, 3), "the sweep is skipped");
+            Assert.AreEqual(
+                4,
+                unweighted.OrphanedAfter(3),
+                "so the table falls back to CanStartPattern's narrower answer"
+            );
+
+            // ...and none of that is observable through scoring, which is the point.
+            var weightedResults = weighted.Parse("cease fire launch missiles target hotel one");
+            var unweightedResults = unweighted.Parse("cease fire launch missiles target hotel one");
+
+            Assert.AreEqual(weightedResults.Length, unweightedResults.Length);
+            for (int i = 0; i < weightedResults.Length; i++)
+            {
+                Assert.AreEqual(
+                    weightedResults[i].Command.Intent,
+                    unweightedResults[i].Command.Intent
+                );
+                Assert.AreEqual(
+                    weightedResults[i].Command.Score,
+                    unweightedResults[i].Command.Score,
+                    0.001f
+                );
+            }
+        }
+
+        [Test]
+        public void NumberSequenceProbe_DoesNotLeakItsPlaceholderIntoARealMatch()
+        {
+            // The probe walks whole patterns, so it matches NumberSequence slots whose joined
+            // value it then throws away. It therefore asks TryMatchNumberSequence to skip
+            // building that string — the allocation CanStartPattern avoids by construction.
+            // The stand-in it gets back must never survive into a parsed command.
+            var parser = new VoxrCommandParser(
+                new[] { VoxrSlotDefinition.NumberSequence("heading", minWords: 1, maxWords: 3) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_heading",
+                        new[] { new[] { "orient", "heading", "{heading}" } }
+                    ),
+                    new VoxrCommandDefinition("halt", new[] { new[] { "halt" } }),
+                }
+            );
+
+            var tokens = "orient heading two seven zero".Split(' ');
+
+            // Index 2 is where the probe runs the number matcher: no pattern starts with the
+            // slot, so the cheap test declines and the sweep walks set_heading from "two".
+            Assert.IsFalse(parser.IsAdmissibleStart(tokens, 2));
+
+            var result = ParseOne(parser, "orient heading two seven zero");
+            Assert.AreEqual("two seven zero", result.Command.GetSlot("heading"));
+
+            // And again where a preceding command makes the probe run before the real match.
+            var chained = parser.Parse("halt orient heading two seven zero");
+            Assert.AreEqual(2, chained.Length);
+            Assert.AreEqual("two seven zero", chained[1].Command.GetSlot("heading"));
+        }
+
+        [Test]
         public void IsAdmissibleStart_LeavesOneAnchoringLiteralEnoughToTameAPermissiveSlot()
         {
             // KNOWN_LIMITATIONS.md tells authors that a slot-initial pattern over an

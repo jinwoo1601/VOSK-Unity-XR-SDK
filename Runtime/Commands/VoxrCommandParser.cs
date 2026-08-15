@@ -171,8 +171,7 @@ namespace VoXR.Commands
         // Pre-allocated slot match buffers — avoids per-call List allocations in TryMatchScored/Parse.
         readonly int _maxSlotsPerPattern;
         readonly VoxrSlotMatch[] _matchSlotBuf;   // TryMatchScored writes here
-        readonly VoxrSlotMatch[] _bestSlotBuf;    // copy-on-best in Parse
-        int _matchSlotCount;                      // set by TryMatchScored
+        readonly VoxrSlotMatch[] _bestSlotBuf; // copy-on-best in Parse
 #if UNITY_EDITOR
         readonly int[] _matchSlotStartBuf;
         readonly int[] _matchSlotEndBuf;
@@ -1117,6 +1116,10 @@ namespace VoXR.Commands
             // missed more of its required elements than it matched is not a candidate. It is
             // deliberately a COUNT, not a score threshold — no knob, nothing to configure, and
             // independent of the coverage term that will later enter the score.
+            //
+            // IsAdmissibleStart applies a STRICTER count (missed < matched) for a different
+            // question — whether a token may terminate another command's orphan run. The two
+            // are deliberately one notch apart; see the reasoning there before aligning them.
             if (candidate.MissedRequired > candidate.MatchedRequired)
                 return false;
             if (bestScore <= 0f)
@@ -1202,7 +1205,11 @@ namespace VoXR.Commands
                     int consumed;
                     if (_slots[slotIdx].Type == VoxrSlotType.NumberSequence)
                         matchedValue = TryMatchNumberSequence(tokens, tokenIdx,
-                            _slots[slotIdx].MinWords, _slots[slotIdx].MaxWords, out consumed);
+                            _slots[slotIdx].MinWords,
+                            _slots[slotIdx].MaxWords,
+                            out consumed,
+                            valueNeeded: !forStartProbe
+                        );
                     else
                         matchedValue = TryMatchSlot(tokens, tokenIdx, slotIdx, out consumed);
 
@@ -1276,8 +1283,6 @@ namespace VoXR.Commands
                     }
                 }
             }
-
-            _matchSlotCount = slotCount;
 
             // Coverage (issue #65 §5.2), computed HERE — before the caller compares
             // candidates — which is the whole of the change. The leading term used to be
@@ -1402,12 +1407,20 @@ namespace VoXR.Commands
             return count;
         }
 
+        // Non-null stand-in for a matched number sequence whose joined value nobody will read.
+        // Only the start probe passes valueNeeded: false, and it discards every slot it
+        // matches — so this exists to keep "did it match" truthful without the allocation.
+        // Named rather than blank so that if it ever does leak into a VoxrCommand it is
+        // greppable instead of looking like a legitimately empty slot.
+        const string UnreadSlotValue = "<probe>";
+
         string TryMatchNumberSequence(
             string[] tokens,
             int startIdx,
             int minWords,
             int maxWords,
-            out int consumed
+            out int consumed,
+            bool valueNeeded = true
         )
         {
             consumed = 0;
@@ -1420,6 +1433,14 @@ namespace VoXR.Commands
 
             if (count == 1)
                 return tokens[matchStart];
+
+            // Every decision above — match or no match, and how much was consumed — is already
+            // made, and none of it reads the joined string. So the probe can stop here and skip
+            // the only allocation on this path. CanStartPattern avoids it by calling
+            // CountNumberSequenceWords directly; the probe cannot, because it needs the whole
+            // pattern walked, so it opts out here instead.
+            if (!valueNeeded)
+                return UnreadSlotValue;
 
             _numberSb.Clear();
             for (int i = 0; i < count; i++)
@@ -1666,6 +1687,17 @@ namespace VoXR.Commands
         {
             if (CanStartPattern(tokens, idx))
                 return true;
+
+            // At weight 0 coverage is identically zero, so no orphan count can reach any score
+            // and the sweep below is pure waste — on TryEagerCommit that is waste per partial
+            // result, not per utterance. Falling back to the cheap predicate keeps parse
+            // results bit-identical (0 x anything is 0) while skipping it.
+            //
+            // This does mean _orphanRun holds the narrower CanStartPattern answer on a weight-0
+            // parser. Nothing can observe that through scoring; it is visible only to a test
+            // reading OrphanedAfter directly, which is why there is one pinning both halves.
+            if (_coverageWeight <= 0f)
+                return false;
 
             for (int ci = 0; ci < _commands.Length; ci++)
             {
