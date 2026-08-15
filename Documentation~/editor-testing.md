@@ -137,7 +137,7 @@ Regression-test command definitions after changing thresholds, aliases, or slot 
 
 Open **Window > VoXR > Batch Test Runner**. Assign slot/command assets and a `VoxrTestSuiteAsset`, then click **Run All**. Results appear in a table with per-row expansion for diagnostics. Export results as CSV for diffing across runs.
 
-**Min Score**, **Min Confidence**, and **Coverage Weight** mirror the fields of the same name on `VoxrCommandRecogniser` and are passed to the runner as they stand. Set them to the values your recogniser uses, or batch results will not predict what the runtime does.
+**Min Score**, **Min Confidence**, and **Coverage Weight** mirror the fields of the same name on `VoxrCommandRecogniser` and are passed to the runner as they stand. Set them to the values your recogniser uses, or batch results will not track what the runtime does.
 
 ### Programmatic API
 

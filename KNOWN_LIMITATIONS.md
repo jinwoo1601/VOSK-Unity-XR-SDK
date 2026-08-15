@@ -364,7 +364,7 @@ deliberate trade-offs rather than oversights.
   commoner.
 - **Workaround**: treat batch and free-speech scores as a lower bound on the
   grammar-constrained score, not as equal to it. `Documentation~/editor-testing.md`'s
-  claim that batch results "predict runtime behaviour" is weaker for grammars whose
+  claim that batch results "track runtime behaviour" is weaker for grammars whose
   users add natural trailing words.
 
 ### A slot-initial pattern weakens trailing coverage for the whole grammar
