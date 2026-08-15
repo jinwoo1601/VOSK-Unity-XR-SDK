@@ -1169,7 +1169,7 @@ namespace VoXR.Tests.Runtime
         public void TryEagerCommit_AdmissionRefusesASparseCandidate_ReturnsNone()
         {
             // DR-7 is a refusal reason at this gate too — TryEagerCommit and ParseInternal
-            // share IsBetterCandidate, so the admission rule applies before any of the
+            // share CompareCandidate, so the admission rule applies before any of the
             // conditions this method documents. Nothing else covers that inheritance.
             //
             // "launch mark" against a five-literal pattern matches 2 and misses 3, so DR-7

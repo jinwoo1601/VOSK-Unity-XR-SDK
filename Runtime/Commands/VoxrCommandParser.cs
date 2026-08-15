@@ -539,7 +539,7 @@ namespace VoXR.Commands
         //
         // The scan mirrors what ParseInternal actually compares, which is why it is this wide:
         //   - ACROSS COMMANDS, not just within one. Selection runs over every pattern of every
-        //     command through a single IsBetterCandidate, so splitting the two phrasings across
+        //     command through a single CompareCandidate, so splitting the two phrasings across
         //     two intents reproduces the hazard exactly.
         //   - Over a RUN of required literals, not a single one. Dropping any one word in
         //     "decelerate by the {burn_level}" strands the value just as "by" alone does.
@@ -818,7 +818,7 @@ namespace VoXR.Commands
         // Whether anything OUTSIDE the discriminator would credit MatchedRequired for this
         // form. If nothing does, the candidate misses one required element (the discriminator)
         // and matches none, so `MissedRequired > MatchedRequired` refuses it in
-        // IsBetterCandidate before any comparison key is reached — it can never be the rival
+        // CompareCandidate before any comparison key is reached — it can never be the rival
         // in a tie, whatever it scores.
         //
         // This is per FORM, not per set, because the two sides can differ here even when their
@@ -1327,14 +1327,14 @@ namespace VoXR.Commands
                             );
 
                             if (
-                                IsBetterCandidate(
+                                CompareCandidate(
                                     matchResult,
                                     startIdx,
                                     bestScore,
                                     bestStartIdx,
                                     bestConsumedEndIdx,
                                     bestLiteralCount
-                                )
+                                ) == CandidateOrder.Better
                             )
                             {
                                 bestScore = matchResult.Score;
@@ -1563,7 +1563,10 @@ namespace VoXR.Commands
             AddPhrase(entries, words);
         }
 
-        struct MatchResult
+        // internal rather than private so CompareCandidate below can be internal: C# forbids a
+        // member more accessible than its parameter types. Nothing outside this file constructs
+        // one except the comparator's own tests.
+        internal struct MatchResult
         {
             public float Score;
             public int LiteralCount;
@@ -1625,10 +1628,35 @@ namespace VoXR.Commands
             public int MissedRequired;
         }
 
-        // Candidate ordering, shared by ParseInternal and TryEagerCommit so the eager
-        // verdict always names the pattern the subsequent flush will fire. Earliest start
-        // wins, then highest score, then the longer consumed span, then literal count,
-        // with registration order as the final deterministic fallback.
+        // How a candidate ranks against the current incumbent. Three states rather than the
+        // bool this used to return: "not better" conflated a clear loss with an exact tie, and
+        // an exact tie is not a ranking at all — it is the point where every key is exhausted
+        // and registration order decides (issue #74, design DR-3).
+        //
+        // Better is returned in exactly the cases the old bool returned true, so selection is
+        // bit-identical; Tied is carved out of what used to be false.
+        //
+        // The alternative — probing for equality at the call site — was rejected because it
+        // duplicates a key list that has already changed twice (#41 added span, #65 added the
+        // admission rule), and with both paths tie-aware it would have had to be maintained in
+        // two places. A key added here and forgotten there is a silent divergence.
+        internal enum CandidateOrder
+        {
+            Worse,
+            Tied,
+            Better,
+        }
+
+        // Candidate ordering, shared by ParseInternal and TryEagerCommit so the eager verdict
+        // never names a pattern the flush would not fire. Earliest start wins, then highest
+        // score, then the longer consumed span, then literal count, with registration order as
+        // the final deterministic fallback.
+        //
+        // That invariant read "the eager verdict always names the pattern the subsequent flush
+        // will fire" until issue #74's DR-5 had TryEagerCommit REFUSE on a sibling tie. The old
+        // wording assumed the eager path always names something; the restatement covers a
+        // refusal, which names nothing — exactly as the #66 and #70 conditions there already
+        // did. Restated deliberately, not broken (design §5.8).
         //
         // The span term is issue #41: a tailed pattern and its bare sibling
         // ("intercept track {track} {burn_level}" / "intercept track {track}") both score
@@ -1642,7 +1670,7 @@ namespace VoXR.Commands
         // count: it therefore also settles equal-score candidates whose literal counts
         // differ, which literal count used to decide on its own. That is a real behaviour
         // change beyond the order-dependent ties, not just a fallback for them.
-        static bool IsBetterCandidate(
+        internal static CandidateOrder CompareCandidate(
             in MatchResult candidate,
             int startIdx,
             float bestScore,
@@ -1652,7 +1680,7 @@ namespace VoXR.Commands
         )
         {
             if (candidate.Score <= 0f)
-                return false;
+                return CandidateOrder.Worse;
 
             // Admission: more evidence FOR the candidate than against it (issue #65, DR-7).
             //
@@ -1684,16 +1712,33 @@ namespace VoXR.Commands
             // question — whether a token may terminate another command's orphan run. The two
             // are deliberately one notch apart; see the reasoning there before aligning them.
             if (candidate.MissedRequired > candidate.MatchedRequired)
-                return false;
+                return CandidateOrder.Worse;
+
+            // No incumbent yet, NOT a tie with a worthless one. bestScore starts at
+            // float.MinValue in both loops and is written only from the adopt block, which the
+            // Score <= 0f floor above guards — so a real incumbent always carries a positive
+            // score and this test can only mean "nothing to compare against". Returning Tied
+            // here would record a rival that does not exist.
             if (bestScore <= 0f)
-                return true;
+                return CandidateOrder.Better;
+
             if (startIdx != bestStartIdx)
-                return startIdx < bestStartIdx;
+                return startIdx < bestStartIdx ? CandidateOrder.Better : CandidateOrder.Worse;
             if (candidate.Score != bestScore)
-                return candidate.Score > bestScore;
+                return candidate.Score > bestScore ? CandidateOrder.Better : CandidateOrder.Worse;
             if (candidate.ConsumedEndIdx != bestConsumedEndIdx)
-                return candidate.ConsumedEndIdx > bestConsumedEndIdx;
-            return candidate.LiteralCount > bestLiteralCount;
+                return candidate.ConsumedEndIdx > bestConsumedEndIdx
+                    ? CandidateOrder.Better
+                    : CandidateOrder.Worse;
+            if (candidate.LiteralCount != bestLiteralCount)
+                return candidate.LiteralCount > bestLiteralCount
+                    ? CandidateOrder.Better
+                    : CandidateOrder.Worse;
+
+            // Every key compared equal. The old bool ended at a strict > here and returned
+            // false, indistinguishable from a loss, so the incumbent silently kept the win on
+            // registration order and the tie was never recorded anywhere.
+            return CandidateOrder.Tied;
         }
 
 #if UNITY_EDITOR
@@ -1732,7 +1777,7 @@ namespace VoXR.Commands
             int literalCount = 0;
             int slotCount = 0;
             // Evidence for and against, counted over REQUIRED elements only (DR-7). These
-            // feed the admission rule in IsBetterCandidate, not the score.
+            // feed the admission rule in CompareCandidate, not the score.
             int matchedRequired = 0;
             int missedRequired = 0;
             bool missedRequiredSlot = false;
@@ -1855,7 +1900,7 @@ namespace VoXR.Commands
             // to 1.0 can beat it. See DefaultCoverageWeight for what the weight means.
             //
             // Adding to the denominator cannot change the sign of a negative rawScore, so the
-            // Score <= 0f floors above and in IsBetterCandidate behave exactly as before; and
+            // Score <= 0f floors above and in CompareCandidate behave exactly as before; and
             // since rawScore <= denominator always holds, a strictly larger denominator keeps
             // the score inside [0, 1].
             //
@@ -2211,7 +2256,7 @@ namespace VoXR.Commands
         //
         // That threshold is the whole of what keeps this from being the "crude widening" the
         // design refused, and it is deliberately one notch STRONGER than DR-7's admission rule
-        // (`missed <= matched`, IsBetterCandidate:1120). DR-7 asks "is this a candidate at
+        // (`missed <= matched`, CompareCandidate's admission rule). DR-7 asks "is this a candidate at
         // all?" — a question answered for a candidate that may still lose its round and never
         // fire. Terminating another command's orphan run is a bigger claim: it moves score off
         // a candidate that IS firing, so it takes strictly more evidence for than against.
@@ -2534,14 +2579,14 @@ namespace VoXR.Commands
                         var matchResult = TryMatchScored(tokens, startIdx, patterns[pi], 0);
 
                         if (
-                            IsBetterCandidate(
+                            CompareCandidate(
                                 matchResult,
                                 startIdx,
                                 bestScore,
                                 bestStartIdx,
                                 bestConsumedEndIdx,
                                 bestLiteralCount
-                            )
+                            ) == CandidateOrder.Better
                         )
                         {
                             bestScore = matchResult.Score;
@@ -2562,7 +2607,7 @@ namespace VoXR.Commands
                 return EagerCommitVerdict.None;
 
             // Note one condition that is NOT listed below because it has already run: the
-            // admission rule in IsBetterCandidate (issue #65, DR-7) refuses any candidate
+            // admission rule in CompareCandidate (issue #65, DR-7) refuses any candidate
             // whose missed required elements outnumber its matched ones, so nothing that
             // sparse ever reaches these checks or the score gate above. The eager scan
             // inherits it by sharing the comparator with ParseInternal.
