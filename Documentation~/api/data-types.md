@@ -86,6 +86,8 @@ Determines what happens when a pending command's timeout expires.
 | `Cancel` | The pending command is cancelled and discarded. `OnCommandCancelled` fires. |
 | `FireAsIs` | The pending command fires as-is with whatever slots were filled. `OnCommandConfirmed` and `OnCommandRecognised` fire. |
 
+`FireAsIs` is one of the two [deliberate exceptions](../command-recognition.md#the-two-ways-an-incomplete-command-still-fires) to the rule that a command missing a required argument does not fire. Handlers for a command whose recogniser uses it must tolerate every required slot being absent.
+
 ## See Also
 
 - [VoxrSpeechRecogniser](speech-recogniser.md) -- produces `VoxrResult` via `OnResult`

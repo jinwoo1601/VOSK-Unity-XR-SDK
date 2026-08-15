@@ -177,6 +177,32 @@ namespace VoXR.Commands
                 pending.Command.MatchedPatternIndex);
         }
 
+        // A follow-up that filled some — but not all — of the still-unfilled required slots.
+        // TryFollowUpSlotFill stops at the first slot it cannot fill and returns as soon as one
+        // new slot is filled, so on a pending with two or more unfilled required slots its result
+        // can still be missing an argument (issue #77). That is progress toward the command, not
+        // the command: re-arm the pending on what is filled now, so the next utterance continues
+        // from here instead of starting over.
+        //
+        // CreatedTime carries over unchanged, so the pending keeps the single lifetime it was
+        // entered with rather than being extended by each fill — the same choice Complete makes
+        // when it re-enters for confirmation.
+        internal PendingResolution AdvanceSlotFill(VoxrCommand partiallyFilled)
+        {
+            var pending = _pendingCommand.Value;
+
+            _pendingCommand = new VoxrPendingCommand
+            {
+                Command = partiallyFilled,
+                Definition = pending.Definition,
+                UnfilledSlots = ComputeUnfilledSlots(partiallyFilled, pending.Definition),
+                Reason = pending.Reason,
+                CreatedTime = pending.CreatedTime,
+            };
+
+            return PendingResolution.ReEntered(partiallyFilled);
+        }
+
         internal PendingResolution Complete(VoxrCommand completed)
         {
             var pending = _pendingCommand.Value;
