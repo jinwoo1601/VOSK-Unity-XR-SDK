@@ -1103,13 +1103,14 @@ namespace VoXR.Tests.Runtime
 
 #if UNITY_EDITOR
         [UnityTest]
-        public IEnumerator FollowUp_PartialFill_DoesNotExtendThePendingTimeoutWindow()
+        public IEnumerator FollowUp_PartialFill_RestartsThePendingTimeoutWindow()
         {
-            // The documented promise: "the whole exchange runs against the single pendingTimeout
-            // window that started when the command first entered pending — filling a slot does
-            // not extend it." No test could observe it before, because every timeout test goes
-            // through TestForceTimeoutNow, which overwrites CreatedTime outright before the only
-            // check that reads it. Read the field directly instead.
+            // pendingTimeout measures how long the command waits for the speaker, so a fill
+            // restarts it: the default 5 s otherwise has to cover every utterance of a multi-slot
+            // exchange, and a speaker answering one slot at a time would be cut off mid-answer.
+            // No test could observe this before — every timeout test goes through
+            // TestForceTimeoutNow, which overwrites CreatedTime outright before the only check
+            // that reads it. Read the field directly instead.
             ConfigureTwoSlotPartial();
 
             _recogniser.InjectText("launch at on my mark");
@@ -1118,7 +1119,7 @@ namespace VoXR.Tests.Runtime
 
             yield return null;
 
-            // Without this the test cannot tell "preserved" from "refreshed" — both would read
+            // Without this the test cannot tell "restarted" from "carried over" — both would read
             // back the same value — so it would pass no matter which the code did.
             Assert.Greater(
                 Time.time,
@@ -1129,10 +1130,45 @@ namespace VoXR.Tests.Runtime
             _recogniser.InjectText("missiles");
 
             Assert.IsTrue(_recogniser.HasPendingCommand, "precondition: the fill kept it alive");
-            Assert.AreEqual(
-                createdOnEntry,
+            Assert.Greater(
                 _recogniser.EditorPendingCommand.Value.CreatedTime,
-                "a fill is progress, not a reprieve: the deadline stays where entry set it"
+                createdOnEntry,
+                "answering buys another window — what bounds the pending is silence, not the "
+                    + "elapsed time since it was first armed"
+            );
+        }
+
+        [UnityTest]
+        public IEnumerator CompletingFill_RestartsTheWindowForConfirmation()
+        {
+            // The same rule on the other re-entry. A command that reaches its confirmation stage
+            // by being filled slot-by-slot must not arrive there with less time to confirm than
+            // one that was complete when it was first heard.
+            ConfigureTwoSlotPartial(requiresConfirm: true);
+
+            _recogniser.InjectText("launch at on my mark");
+            _recogniser.InjectText("missiles");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "precondition: still filling");
+            float createdOnFill = _recogniser.EditorPendingCommand.Value.CreatedTime;
+
+            yield return null;
+
+            Assert.Greater(
+                Time.time,
+                createdOnFill,
+                "precondition: the clock advanced before the completing fill"
+            );
+
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsTrue(
+                _recogniser.HasPendingCommand,
+                "precondition: complete now, so it re-entered pending for confirmation"
+            );
+            Assert.Greater(
+                _recogniser.EditorPendingCommand.Value.CreatedTime,
+                createdOnFill,
+                "confirmation is a fresh question and gets a fresh window"
             );
         }
 #endif

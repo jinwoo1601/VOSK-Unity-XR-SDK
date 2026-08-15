@@ -184,10 +184,13 @@ namespace VoXR.Commands
         // the command: re-arm the pending on what is filled now, so the next utterance continues
         // from here instead of starting over.
         //
-        // CreatedTime carries over unchanged, so the pending keeps the single lifetime it was
-        // entered with rather than being extended by each fill — the same choice Complete makes
-        // when it re-enters for confirmation.
-        internal PendingResolution AdvanceSlotFill(VoxrCommand partiallyFilled)
+        // The timeout clock restarts on the fill. pendingTimeout measures how long the command
+        // waits for the speaker, and a speaker who just answered is not the one it exists to give
+        // up on — an absolute window from entry would cut off a conversation mid-answer, since the
+        // default 5 s has to cover every utterance of a multi-slot exchange plus a bufferWindow
+        // each. What still bounds the pending is silence: each fill buys one more window, and the
+        // first one nobody answers ends it.
+        internal PendingResolution AdvanceSlotFill(VoxrCommand partiallyFilled, float currentTime)
         {
             var pending = _pendingCommand.Value;
 
@@ -197,13 +200,13 @@ namespace VoXR.Commands
                 Definition = pending.Definition,
                 UnfilledSlots = ComputeUnfilledSlots(partiallyFilled, pending.Definition),
                 Reason = pending.Reason,
-                CreatedTime = pending.CreatedTime,
+                CreatedTime = currentTime,
             };
 
             return PendingResolution.ReEntered(partiallyFilled);
         }
 
-        internal PendingResolution Complete(VoxrCommand completed)
+        internal PendingResolution Complete(VoxrCommand completed, float currentTime)
         {
             var pending = _pendingCommand.Value;
             _pendingCommand = null;
@@ -219,7 +222,10 @@ namespace VoXR.Commands
                     Definition = pending.Definition,
                     UnfilledSlots = Array.Empty<string>(),
                     Reason = VoxrPendingReason.AwaitingConfirmation,
-                    CreatedTime = pending.CreatedTime,
+                    // Restarts for the same reason the fill path does: confirmation is a fresh
+                    // question, and the speaker who just finished filling the slots should not
+                    // have less time to answer it than one whose command arrived complete.
+                    CreatedTime = currentTime,
                 };
                 return PendingResolution.ReEntered(completed);
             }

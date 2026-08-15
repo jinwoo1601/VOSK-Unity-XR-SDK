@@ -676,8 +676,8 @@ namespace VoXR.Commands
                 // can and the command waits for the rest.
                 bool followUpIncomplete = IsIncomplete(followUpResult.Value);
                 var followUpRes = followUpIncomplete
-                    ? _pending.AdvanceSlotFill(followUpResult.Value)
-                    : _pending.Complete(followUpResult.Value);
+                    ? _pending.AdvanceSlotFill(followUpResult.Value, Time.time)
+                    : _pending.Complete(followUpResult.Value, Time.time);
 #if UNITY_EDITOR
                 // Read the re-armed pending BEFORE the resolution is interpreted. Interpreting it
                 // invokes OnCommandPending, whose subscribers may cancel, reconfigure, or disable

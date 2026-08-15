@@ -20,7 +20,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 | `slotAssets` | `VoxrSlotAsset[]` | -- | Slot definitions for Inspector authoring |
 | `commandSetAssets` | `VoxrCommandSetAsset[]` | -- | Command set definitions for Inspector authoring |
 | `initialActiveSetNames` | `string[]` | -- | Which sets to activate on startup when using Inspector authoring |
-| `pendingTimeout` | `float` | `5.0` | Maximum seconds a pending command waits for follow-up speech before timing out |
+| `pendingTimeout` | `float` | `5.0` | Maximum seconds a pending command waits for follow-up speech before timing out. The window restarts each time follow-up speech fills a required slot, and again when a filled command re-enters pending for confirmation — so it bounds *silence*, not the whole exchange |
 | `pendingTimeoutBehavior` | `VoxrPendingTimeoutBehavior` | `Cancel` | What happens on timeout: `Cancel` discards the command, `FireAsIs` fires it with whatever slots were filled. `FireAsIs` can only deliver an *incomplete* command when that command also sets `allowPartialMatch` — see [the two deliberate exceptions](../command-recognition.md#the-two-ways-an-incomplete-command-still-fires) |
 | `confirmVocabulary` | `string[]` | -- | Phrases that confirm a pending command. Empty = defaults ("confirm", "affirmative", "yes", "go ahead", "do it"). |
 | `cancelVocabulary` | `string[]` | -- | Phrases that cancel a pending command. Empty = defaults ("cancel", "abort", "negative", "belay that", "never mind"). |
