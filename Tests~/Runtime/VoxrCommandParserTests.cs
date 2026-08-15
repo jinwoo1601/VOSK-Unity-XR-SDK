@@ -1179,14 +1179,33 @@ namespace VoXR.Tests.Runtime
             // so cease_fire — which consumes through token 2 — is charged nothing for the
             // five tokens after it, and the multi-command utterance survives. Charging them
             // would take it from 2/2 to 2/7.
+            //
+            // Indices 3 and 4 were 4 and 3 before issue #82: they are starts now because the
+            // terminator asks the MATCHER, and the matcher reaches them by missing leading
+            // elements it never heard. Both remain starts for a reason the run cares about —
+            // a real candidate begins there — while "hotel" at index 5 does not, so the run
+            // the rule exists to express is still visible at the tail.
             var parser = CreateParser();
             var tokens = "cease fire launch missiles target hotel one".Split(' ');
 
             parser.BuildCoverageTables(tokens);
 
             Assert.AreEqual(0, parser.OrphanedAfter(2), "\"launch\" begins a pattern");
-            Assert.AreEqual(4, parser.OrphanedAfter(3), "missiles target hotel one");
-            Assert.AreEqual(3, parser.OrphanedAfter(4));
+            Assert.AreEqual(
+                0,
+                parser.OrphanedAfter(3),
+                "\"missiles\": shoot {weapon} matches there, missing only its literal"
+            );
+            Assert.AreEqual(
+                0,
+                parser.OrphanedAfter(4),
+                "\"target\": the launch pattern matches its last two elements there"
+            );
+            Assert.AreEqual(
+                2,
+                parser.OrphanedAfter(5),
+                "\"hotel\" alone fills no slot and no pattern reaches it: hotel, one"
+            );
             Assert.AreEqual(1, parser.OrphanedAfter(6));
             Assert.AreEqual(0, parser.OrphanedAfter(7), "past the end");
         }
@@ -1299,6 +1318,113 @@ namespace VoXR.Tests.Runtime
                 "only one digit left, which cannot satisfy minWords 2"
             );
             Assert.IsFalse(parser.CanStartPattern(tokens, 3));
+        }
+
+        // --- The orphan run's terminator asks the matcher (issue #82) ---
+        //
+        // CanStartPattern answers "could a pattern's first matchable element match here?".
+        // The matcher answers a wider question, because it tries every pattern at every
+        // index and so begins patterns whose leading elements were dropped. IsAdmissibleStart
+        // closes that gap; these pin both halves of it — that it opens the case it was
+        // written for, and that it does NOT open the case the design refused.
+
+        [Test]
+        public void IsAdmissibleStart_OpensAPositionOnlyReachableByMissingLeadingElements()
+        {
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+                    new VoxrCommandDefinition(
+                        "approach_target",
+                        new[] { new[] { "approach", "target", "{target}" } }
+                    ),
+                }
+            );
+
+            var tokens = "cease fire target hotel one".Split(' ');
+
+            Assert.IsFalse(
+                parser.CanStartPattern(tokens, 2),
+                "no pattern's FIRST element is \"target\""
+            );
+            Assert.IsTrue(
+                parser.IsAdmissibleStart(tokens, 2),
+                "but approach target {target} matches there, missing only \"approach\""
+            );
+        }
+
+        [Test]
+        public void IsAdmissibleStart_RefusesAPatternReachedOnlyByMissingMoreThanItMatches()
+        {
+            // The anti-collapse guard, and the reason this is an ADMISSIBILITY probe rather
+            // than a widening. "hard burn" is a slot value, so a crude "could any pattern
+            // match anything here" test would call index 1 a start, charge the bare pattern
+            // nothing, and hand the utterance straight back to it — un-fixing #42 grammar-wide.
+            // DR-7 refuses that candidate: reaching {burn_level} costs it both literals, so it
+            // has more evidence against it than for it and is no more a start here than it is
+            // a candidate there.
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("burn_level", new[] { "hard burn" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition("decelerate", new[] { new[] { "decelerate" } }),
+                    new VoxrCommandDefinition(
+                        "decelerate_by",
+                        new[] { new[] { "decelerate", "by", "{burn_level}" } }
+                    ),
+                }
+            );
+
+            var tokens = "decelerate hard burn".Split(' ');
+
+            Assert.IsFalse(parser.CanStartPattern(tokens, 1));
+            Assert.IsFalse(
+                parser.IsAdmissibleStart(tokens, 1),
+                "reaching {burn_level} from here misses both required literals"
+            );
+
+            parser.BuildCoverageTables(tokens);
+            Assert.AreEqual(2, parser.OrphanedAfter(1), "\"hard burn\" is still charged");
+
+            // And end-to-end: the #42 inversion still holds at the default weight.
+            var result = ParseOne(parser, "decelerate hard burn");
+            Assert.AreEqual("decelerate_by", result.Command.Intent);
+            Assert.AreEqual("hard burn", result.Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void IsAdmissibleStart_NeverOverrulesCanStartPattern()
+        {
+            // F11's protected property, in the form this method could have broken it: the
+            // probe only ever ADDS claims. A pattern that begins at a token keeps terminating
+            // the run there whatever DR-7 would say about the candidate anchored on it, so
+            // coverage never becomes a function of another candidate's verdict.
+            var parser = CreateParser();
+
+            foreach (
+                var text in new[]
+                {
+                    "cease fire launch missiles target hotel one",
+                    "target disengage please",
+                    "shoot missiles target hotel one",
+                    "close distance cqb target alpha three",
+                }
+            )
+            {
+                var tokens = text.Split(' ');
+                for (int i = 0; i < tokens.Length; i++)
+                {
+                    if (parser.CanStartPattern(tokens, i))
+                    {
+                        Assert.IsTrue(
+                            parser.IsAdmissibleStart(tokens, i),
+                            $"\"{text}\" token {i} (\"{tokens[i]}\")"
+                        );
+                    }
+                }
+            }
         }
 
         // --- [unk] handling on the trailing side (issue #65 §5.2) ---
@@ -2128,16 +2254,17 @@ namespace VoXR.Tests.Runtime
         // page fails a test rather than a reader.
 
         [Test]
-        public void Coverage_SequentialExtraction_ChargesTheFirstCommandForASecondThatLostItsWord()
+        public void Coverage_SequentialExtraction_SparesTheFirstCommandWhenASecondLosesItsWord()
         {
-            // The other half of the test above, and scoring.md §7 D. The orphan run stops at
-            // the first token that could BEGIN a pattern, but the matcher can begin anywhere
-            // by MISSING its leading elements. So when the second command loses its own first
-            // word, the first is charged for tokens a later round then goes on to explain:
-            // cease_fire falls 1.00 -> 2/(2+3) = 0.40 and stops clearing minScore, while
-            // approach_target still fires at 2/3 = 0.67. The command spoken cleanly is the one
-            // rejected. Accepted as a known limitation, so this pins the documented behaviour
-            // rather than asserting it is right.
+            // The other half of the test above, and scoring.md §7 D. The orphan run stops
+            // wherever the MATCHER could begin, and the matcher begins a pattern whose leading
+            // elements were dropped: nothing STARTS with "target", but
+            // `approach target {target}` matches from it, missing one required element against
+            // two matched, so the run terminates there and cease_fire keeps 2/2 = 1.00.
+            //
+            // Until issue #82 the run tested only what patterns start with, so cease_fire was
+            // charged 2/(2+3) = 0.40 for three tokens the very next extraction round explained
+            // — the command spoken cleanly was the one rejected while the damaged one fired.
             var slots = new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) };
             var commands = new[]
             {
@@ -2154,10 +2281,10 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(2, results.Length);
             Assert.AreEqual("cease_fire", results[0].Command.Intent);
             Assert.AreEqual(
-                2f / 5f,
+                1.0f,
                 results[0].Command.Score,
                 0.001f,
-                "charged for \"target hotel one\" — no pattern begins at \"target\""
+                "not charged: approach target {target} is matchable from \"target\""
             );
             Assert.AreEqual("approach_target", results[1].Command.Intent);
             Assert.AreEqual(2f / 3f, results[1].Command.Score, 0.001f);

@@ -102,7 +102,7 @@ That relocation is the entire point. A bare pattern matching its one word perfec
 
 ### What counts as orphaned
 
-A trailing token is orphaned only if **no active pattern could begin a match at it**, and counting stops at the first token that could. Without that test coverage would destroy multi-command utterances, charging the first command for the second one's words:
+A trailing token is orphaned only if **no active pattern can begin a match at it**, and counting stops at the first token where one can. Without that test coverage would destroy multi-command utterances, charging the first command for the second one's words:
 
 | Utterance | Candidate | Consumed | Trailing | Orphaned | Score |
 |-----------|-----------|----------|----------|---------|-------|
@@ -110,9 +110,13 @@ A trailing token is orphaned only if **no active pattern could begin a match at 
 | `decelerate hard burn` | `decelerate by {burn_level}`, "by" dropped | 3 tokens | — | 0 | `2 / 3` = **0.67** |
 | `cease fire launch missiles target hotel one` | `cease fire` | 2 tokens | `launch …` — **begins a pattern** | 0 | `2 / 2` = **1.00** |
 
-The test reads the registered patterns alone — never which candidates happened to survive admission — and it is deliberately **conservative**: where it is unsure whether a pattern could start at a token, it answers yes and charges nothing. The failure modes are not symmetric. Over-charging destroys sequential extraction; under-charging merely leaves a score where it already was.
+**"Can begin a match" means what the matcher does, not what the pattern starts with.** Selection tries every pattern at every token, so a pattern whose leading elements the decoder dropped begins wherever its surviving ones do — and a token some pattern explains that way was never an orphan. The test therefore runs the matcher at each token and asks whether any pattern yields an *admissible* candidate there, admissible in the same sense §3 uses: it matched at least as many of its required elements as it missed.
 
-Three consequences of that conservatism, all of them grammar-wide — the start set is one table shared by every candidate, so widening it anywhere weakens trailing coverage everywhere:
+That admission rule is what keeps the test from degenerating. Without it the run would terminate on any token that appears anywhere in the grammar — including the slot value a bare pattern strands — which would revert the protection in [worked example B](#b-coverage-picks-the-pattern-that-explains-more) for every grammar at once. A pattern that reaches a token only by missing more than it matched is not a candidate there, and does not stop the count.
+
+The test reads the registered patterns alone — never which candidates happened to survive admission in a real round — and it is otherwise deliberately **conservative**: where it is unsure whether a pattern could start at a token, it answers yes and charges nothing. The failure modes are not symmetric. Over-charging destroys sequential extraction; under-charging merely leaves a score where it already was.
+
+Three consequences of that conservatism, all of them grammar-wide — the start test is shared by every candidate, so widening it anywhere weakens trailing coverage everywhere:
 
 - **It reads the decoder's word list, not only the pattern set.** Confirm/cancel follow-up vocabulary is in the grammar, so the decoder returns "yes" as a real token rather than `[unk]`. Since a follow-up can legitimately begin there, "disengage, yes" is not charged for the "yes".
 - **A slot-initial pattern over a permissive slot weakens trailing coverage.** If a pattern can begin with an open-ended `NumberSequence`, nearly every token becomes a possible start and almost nothing is charged anywhere in that grammar. See [Known Limitations](../KNOWN_LIMITATIONS.md).
@@ -139,7 +143,7 @@ Only the literal `[unk]` token is exempt, and that is what a *grammar-constraine
 
 On the **leading** side, tokens consumed by a previously extracted command are not charged against the next one: the count is taken from where the round began, so chained commands do not penalise each other.
 
-The **trailing** side works differently, and the difference is worth knowing. It has no notion of a round at all — the orphan run is a property of the utterance and the grammar, measured forward from the candidate's consumed span. Usually that lands in the same place, because the next command's first word terminates the run. But the orphan test asks whether a pattern could *begin* at a token, while the matcher can begin anywhere by *missing* its leading elements — so where a later round explains tokens by missing its way into them, the earlier command is charged for tokens that did not go unexplained after all. [Worked example D](#d-two-commands-in-one-breath-and-one-of-them-loses-a-word) is that case, and it is a [known limitation](../KNOWN_LIMITATIONS.md).
+The **trailing** side works differently, and the difference is worth knowing. It has no notion of a round at all — the orphan run is a property of the utterance and the grammar, measured forward from the candidate's consumed span. It lands in the same place because the start test and the matcher ask the same question: a token a later round will explain by missing its way into it terminates the run now, so the earlier command is not charged for it. [Worked example D](#d-two-commands-in-one-breath-and-one-of-them-loses-a-word) is that case.
 
 ### Setting the weight
 
@@ -352,7 +356,7 @@ Utterance: **"decelerate hard burn"** — the speaker said the burn level; VOSK 
 
 Note the `?` survives into the logged `pattern` — it is the pattern as you declared it, not as it matched — so grep a session log for `decelerate ?by {burn_level}`, not for `decelerate by {burn_level}`. Read [the cost of the swap](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) before applying it wholesale.
 
-**The case coverage does not close.** The orphan run stops at the first token that could begin another match — so if the stranded value's *own first word* begins some pattern, the bare candidate is charged nothing and strands the value exactly as it did before #65. Register `["hard", "stop"]` alongside the pair above and "decelerate hard burn" goes back to firing bare `decelerate` at a full `1.00`, argument discarded, at the **default** `coverageWeight`:
+**The case coverage does not close.** The orphan run stops at the first token another match can begin at — so if the stranded value's *own first word* begins some pattern, the bare candidate is charged nothing and strands the value exactly as it did before #65. Register `["hard", "stop"]` alongside the pair above and "decelerate hard burn" goes back to firing bare `decelerate` at a full `1.00`, argument discarded, at the **default** `coverageWeight`:
 
 ```json
 { "intent": "decelerate", "pattern": "decelerate",
@@ -408,21 +412,20 @@ Grammar: `cease_fire` = `["cease", "fire"]`, `approach_target` = `["approach", "
 
 Utterance: **"cease fire target hotel one"** — the speaker said both commands; VOSK dropped the second one's "approach".
 
-1. **Round 1.** `cease fire` matches at token 0 and consumes two tokens. What follows is `target hotel one`, and in this grammar nothing begins a match at "target" — `approach_target` starts with "approach" — so the orphan run does not terminate and all three tokens are charged: `2 / (2 + 3)` = **0.40**. It still wins the round on key 1, then fails the gate.
-2. **Round 2.** The search restarts at token 2, so the leading term re-bases and nothing before it is charged again. `approach target {target}` misses its `approach` literal but matches the rest and consumes to the end: `2 / 3` = **0.67**. It fires.
+1. **Round 1.** `cease fire` matches at token 0 and consumes two tokens. What follows is `target hotel one`. No pattern *starts with* "target" — `approach_target` starts with "approach" — but `approach target {target}` does match there, missing only that literal, and matching two of its three required elements against one miss makes it admissible. So the orphan run terminates at "target", nothing is charged, and `cease fire` scores `2 / 2` = **1.00**.
+2. **Round 2.** The search restarts at token 2, so the leading term re-bases and nothing before it is charged again. `approach target {target}` misses its `approach` literal but matches the rest and consumes to the end: `2 / 3` = **0.67**. It fires too.
 
 ```json
 { "intent": "cease_fire", "pattern": "cease fire",
-  "score": 0.4, "minScore": 0.6, "accepted": false,
-  "rejectReason": "score 0.40 < minScore 0.60" }
+  "score": 1.0, "accepted": true }
 { "intent": "approach_target", "pattern": "approach target {target}",
   "score": 0.67, "accepted": true,
   "slots": [ { "name": "target", "value": "hotel one", "startWord": 3, "endWord": 5 } ] }
 ```
 
-**Reading those entries:** the command that *lost* a word fired, and the one spoken perfectly did not. That inversion is the signature of this case — the first command is charged for tokens a *later* round then goes on to explain. The orphan test asks whether a pattern could **begin** at a token, but the matcher can begin anywhere by missing its leading elements, and the two disagree exactly here.
+**Reading those entries:** both commands fire, and the damaged one carries the lower score — which is the shape to expect. The command spoken cleanly is not charged for the other's words, because the token the second command *would* be matched from is the token the first one's orphan run stops at. Say the second command in full and both fire at `1.00`.
 
-Say the second command in full and both fire at `1.00`: "approach" begins a pattern, so `cease_fire`'s orphan run terminates immediately and it is charged nothing. Measured over 699 utterances this shape accounts for 11 intent changes and 1 count change; it loses a command, and never fires a wrong one. There is no user-level workaround — see [Known Limitations](../KNOWN_LIMITATIONS.md).
+This is the case the start test has to ask the matcher to get right. Testing only what patterns *start with* charged `cease_fire` for all three trailing tokens — `2 / (2 + 3)` = `0.40`, below the gate — so the command that lost a word fired and the one spoken perfectly did not. Measured over 699 utterances, that shape accounted for 11 intent changes and 1 count change before it was closed.
 
 ---
 

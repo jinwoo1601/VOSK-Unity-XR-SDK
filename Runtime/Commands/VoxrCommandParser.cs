@@ -1145,7 +1145,16 @@ namespace VoXR.Commands
         // term reads it: the words charged are those between the round's origin and where
         // this candidate starts, so a second command in a multi-command utterance is never
         // charged for the tokens the first one consumed.
-        MatchResult TryMatchScored(string[] tokens, int startIdx, string[] pattern, int searchStart)
+        //
+        // forStartProbe is IsAdmissibleStart calling in from inside BuildCoverageTables, before
+        // the coverage tables it would read exist. See the coverage block at the bottom.
+        MatchResult TryMatchScored(
+            string[] tokens,
+            int startIdx,
+            string[] pattern,
+            int searchStart,
+            bool forStartProbe = false
+        )
         {
             int tokenIdx = startIdx;
             float rawScore = 0f;
@@ -1286,13 +1295,24 @@ namespace VoXR.Commands
             // candidate whose own next required element failed at this position owns the token
             // it mis-predicted and may not claim some other pattern could have begun there.
             // Both tables are built once per utterance, so coverage is three array reads.
-            AssertCoverageTablesMatch(tokens);
+            //
+            // The start probe is the one caller that runs BEFORE those tables exist — it is
+            // what builds them — so it takes no coverage term at all. That costs the probe
+            // nothing it needs: it reads only rawScore's sign and the two required-element
+            // counts, and coverage can only ENLARGE the denominator, so it can never flip a
+            // score from positive to non-positive. Skipping it here is what keeps the probe
+            // from reading a half-filled table for its own answer.
+            float coverage = 0f;
+            if (!forStartProbe)
+            {
+                AssertCoverageTablesMatch(tokens);
 
-            float coverage =
-                (
-                    SkippedBefore(searchStart, startIdx)
-                    + OrphanedAfter(consumedEndIdx, requiredAfterLastMatch > 0)
-                ) * _coverageWeight;
+                coverage =
+                    (
+                        SkippedBefore(searchStart, startIdx)
+                        + OrphanedAfter(consumedEndIdx, requiredAfterLastMatch > 0)
+                    ) * _coverageWeight;
+            }
 
             float normalizedScore = denominator > 0f ? rawScore / (denominator + coverage) : 0f;
 
@@ -1510,6 +1530,11 @@ namespace VoXR.Commands
             // noise token shield every real orphan behind it, so "decelerate [unk] hard burn"
             // must cost exactly what "decelerate hard burn" costs.
             //
+            // The start test is IsAdmissibleStart, not CanStartPattern: the run must stop
+            // wherever the MATCHER could begin, and the matcher begins patterns whose leading
+            // elements were dropped (issue #82). CanStartPattern is still the cheap first half
+            // of that answer.
+            //
             // _forcedOrphanRun is the same quantity under Amendment A3, for a candidate whose
             // own next required element failed at this position: the first non-[unk] token is
             // charged outright instead of being tested against the start predicate, and the
@@ -1539,7 +1564,7 @@ namespace VoXR.Commands
                     continue;
                 }
 
-                _orphanRun[i] = CanStartPattern(tokens, i) ? 0 : 1 + _orphanRun[i + 1];
+                _orphanRun[i] = IsAdmissibleStart(tokens, i) ? 0 : 1 + _orphanRun[i + 1];
                 _forcedOrphanRun[i] = 1 + _orphanRun[i + 1];
             }
         }
@@ -1582,6 +1607,66 @@ namespace VoXR.Commands
         internal int OrphanedAfter(int consumedEndIdx, bool ownsTheNextToken = false)
         {
             return ownsTheNextToken ? _forcedOrphanRun[consumedEndIdx] : _orphanRun[consumedEndIdx];
+        }
+
+        // Could the MATCHER begin a match at tokens[idx]? This is the orphan run's terminator,
+        // and it exists because CanStartPattern below answers a strictly narrower question than
+        // the one the run needs to ask (issue #82).
+        //
+        // CanStartPattern asks whether a pattern's FIRST matchable element matches here.
+        // ParseInternal asks no such thing: it tries every pattern at every non-[unk] index, so
+        // a pattern whose leading elements VOSK dropped begins wherever its surviving elements
+        // do — which is the single most common decoder failure and the reason coverage exists.
+        // The two disagreed, and the disagreement charged one command for the next command's
+        // tokens: in "cease fire target hotel one", "target" begins no pattern as a first
+        // element, yet `approach target {target}` does match there and a later extraction round
+        // does fire it, so cease_fire paid 0.4 for words that were never orphans.
+        //
+        // So the run asks the matcher instead. A position is a start when some active pattern,
+        // started there, yields an ADMISSIBLE candidate — admissible in exactly IsBetterCandidate's
+        // sense: a positive score, and no more missed required elements than matched ones.
+        //
+        // That admission rule is the whole of what keeps this from being the "crude widening"
+        // the design refused. Widening to "any token any pattern could match anywhere" makes
+        // "hard burn" terminate a run and reverts #42 grammar-wide; DR-7 refuses precisely the
+        // candidates that widening would have admitted — a pattern that reaches a trailing slot
+        // only by missing everything ahead of it has more evidence against it than for it, and
+        // is no more a start here than it is a candidate there.
+        //
+        // Two properties worth stating, because F11 is argued against this method:
+        //   - It only ever ADDS claims. CanStartPattern is consulted first and is never
+        //     overruled, so a pattern that begins here keeps terminating the run whatever DR-7
+        //     would say about the candidate — which is the half of F11 that
+        //     Coverage_ResidualHazard_WhenTheStrandedValueBeginsAPattern pins.
+        //   - The answer is a function of (grammar, tokens, idx) alone. It reads no other
+        //     candidate's verdict, no searchStart, and nothing from the selection round, so
+        //     coverage does not become a function of DR-7's verdicts — the property F11 was
+        //     narrowed to protect after the #78 review.
+        //
+        // Cost is one extraction round's work per utterance, paid once here rather than per
+        // candidate, and only at positions the cheap test already declined.
+        //
+        // Callers must not pass an [unk] index; BuildCoverageTables settles those first.
+        internal bool IsAdmissibleStart(string[] tokens, int idx)
+        {
+            if (CanStartPattern(tokens, idx))
+                return true;
+
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                var patterns = _commands[ci].Patterns;
+                for (int pi = 0; pi < patterns.Length; pi++)
+                {
+                    // searchStart is idx so the leading term would be zero anyway; the probe
+                    // suppresses the whole coverage term regardless.
+                    var probe = TryMatchScored(tokens, idx, patterns[pi], idx, forStartProbe: true);
+
+                    if (probe.Score > 0f && probe.MissedRequired <= probe.MatchedRequired)
+                        return true;
+                }
+            }
+
+            return false;
         }
 
         // Could any registered active pattern begin a match at tokens[idx]? Deliberately
