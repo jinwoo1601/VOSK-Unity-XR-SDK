@@ -161,7 +161,7 @@ For full documentation, see the [documentation index](Documentation~/index.md).
 
 - [Getting Started](Documentation~/getting-started.md) -- installation, model setup, quick start, lifecycle
 - [Command Recognition](Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring, pending commands
-- [Matching and Scoring](Documentation~/scoring.md) -- score formula, penalties, selection order, the two gates, eager-flush verdicts
+- [Matching and Scoring](Documentation~/scoring.md) -- score formula and miss costs, coverage, selection order, the two gates, eager-flush verdicts
 - [Command Sets](Documentation~/command-sets.md) -- named sets, runtime mode switching
 - [Inspector Authoring](Documentation~/inspector-authoring.md) -- zero-code ScriptableObject setup
 - [Editor Testing](Documentation~/editor-testing.md) -- debug window, session debug log, live mic, text injection, batch runner

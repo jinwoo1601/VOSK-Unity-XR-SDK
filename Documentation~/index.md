@@ -11,7 +11,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 ## Guides
 
-- [Matching and Scoring](scoring.md) -- The score formula, penalties, selection order, the two gates, eager-flush verdicts, and how to read a session log
+- [Matching and Scoring](scoring.md) -- The score formula and its miss costs, coverage, selection order, the two gates, eager-flush verdicts, and how to read a session log
 - [Command Sets](command-sets.md) -- Runtime mode switching with named command groups and grammar management
 - [Inspector Authoring](inspector-authoring.md) -- Zero-code setup using ScriptableObject assets in the Unity Inspector
 - [Editor Testing](editor-testing.md) -- Debug window, session debug log, live microphone, text injection, and batch test runner

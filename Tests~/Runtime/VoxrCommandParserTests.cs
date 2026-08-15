@@ -2118,6 +2118,248 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("hotel one", results[1].Command.GetSlot("target"));
         }
 
+        // --- Numbers Documentation~/scoring.md publishes (issue #83) ---
+        //
+        // The page traces worked examples end to end and quotes exact scores. Nothing pinned
+        // them before: the winner's score reaches VoxrCommand.Score, but a worked example
+        // also walks the LOSING candidates, and TryMatchScored is private. So a scorer change
+        // could leave this suite green while silently falsifying the reference — which is the
+        // drift issue #83 was filed to clean up in the first place. These tests exist so the
+        // page fails a test rather than a reader.
+
+        [Test]
+        public void Coverage_SequentialExtraction_ChargesTheFirstCommandForASecondThatLostItsWord()
+        {
+            // The other half of the test above, and scoring.md §7 D. The orphan run stops at
+            // the first token that could BEGIN a pattern, but the matcher can begin anywhere
+            // by MISSING its leading elements. So when the second command loses its own first
+            // word, the first is charged for tokens a later round then goes on to explain:
+            // cease_fire falls 1.00 -> 2/(2+3) = 0.40 and stops clearing minScore, while
+            // approach_target still fires at 2/3 = 0.67. The command spoken cleanly is the one
+            // rejected. Accepted as a known limitation, so this pins the documented behaviour
+            // rather than asserting it is right.
+            var slots = new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+                new VoxrCommandDefinition(
+                    "approach_target",
+                    new[] { new[] { "approach", "target", "{target}" } }
+                ),
+            };
+            var parser = new VoxrCommandParser(slots, commands);
+
+            var results = parser.Parse("cease fire target hotel one");
+
+            Assert.AreEqual(2, results.Length);
+            Assert.AreEqual("cease_fire", results[0].Command.Intent);
+            Assert.AreEqual(
+                2f / 5f,
+                results[0].Command.Score,
+                0.001f,
+                "charged for \"target hotel one\" — no pattern begins at \"target\""
+            );
+            Assert.AreEqual("approach_target", results[1].Command.Intent);
+            Assert.AreEqual(2f / 3f, results[1].Command.Score, 0.001f);
+            Assert.AreEqual("hotel one", results[1].Command.GetSlot("target"));
+
+            // Control: spoken in full, "approach" terminates the run and both keep 1.00.
+            var control = parser.Parse("cease fire approach target hotel one");
+
+            Assert.AreEqual(2, control.Length);
+            Assert.AreEqual(1.0f, control[0].Command.Score, 0.001f);
+            Assert.AreEqual(1.0f, control[1].Command.Score, 0.001f);
+        }
+
+        [Test]
+        public void Coverage_LosingCandidateTerms_MatchWhatTheWorkedExamplesPublish()
+        {
+            // scoring.md §7 A publishes two losing-candidate scores for
+            // "launch missiles target hotel one" — start 1 at 3/(4+1) = 0.60 and start 2 at
+            // 1/(4+2) = 0.17 — and §3 publishes the bare intercept form at 3/(3+2) = 0.60.
+            // None is reachable through VoxrCommand.Score, so the coverage TERMS they rest on
+            // are pinned directly through the same probes the admission test uses. The
+            // fidelity halves are fixed by the element tables above.
+            var launchParser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("weapon", new[] { "missiles" }),
+                    new VoxrSlotDefinition("target", new[] { "hotel one" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_weapon",
+                        new[] { new[] { "launch", "{weapon}", "target", "{target}" } }
+                    ),
+                }
+            );
+            var launchTokens = new[] { "launch", "missiles", "target", "hotel", "one" };
+            launchParser.BuildCoverageTables(launchTokens);
+
+            Assert.AreEqual(1, launchParser.SkippedBefore(0, 1), "§7 A start 1 skips \"launch\"");
+            Assert.AreEqual(2, launchParser.SkippedBefore(0, 2), "§7 A start 2 skips two tokens");
+            Assert.AreEqual(0, launchParser.OrphanedAfter(5), "the winner consumes to the end");
+            Assert.AreEqual(
+                1.0f,
+                launchParser.Parse("launch missiles target hotel one")[0].Command.Score,
+                0.001f
+            );
+
+            // §3: the bare form abandons "hard burn", and nothing in THIS grammar begins a
+            // match there — which is what moves the #41 pair from a span tie-break to a score
+            // difference. Where a standalone command does begin on the tail, coverage charges
+            // nothing and the span key still decides; that case is the SpanTieBreak_* tests.
+            var interceptParser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("track", new[] { "hotel one" }),
+                    new VoxrSlotDefinition("burn_level", new[] { "hard burn" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "intercept",
+                        new[]
+                        {
+                            new[] { "intercept", "track", "{track}" },
+                            new[] { "intercept", "track", "{track}", "{burn_level}" },
+                        }
+                    ),
+                }
+            );
+            var interceptTokens = new[] { "intercept", "track", "hotel", "one", "hard", "burn" };
+            interceptParser.BuildCoverageTables(interceptTokens);
+
+            Assert.AreEqual(
+                2,
+                interceptParser.OrphanedAfter(4),
+                "\"hard burn\" begins no pattern here, so the bare form pays for both tokens"
+            );
+
+            var interceptResults = interceptParser.Parse("intercept track hotel one hard burn");
+
+            Assert.AreEqual(1, interceptResults.Length, "one command, not a split order");
+            Assert.AreEqual(1.0f, interceptResults[0].Command.Score, 0.001f);
+            Assert.AreEqual("hard burn", interceptResults[0].Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void Coverage_LeavesTheStrandedArgumentHazard_WhenTheValueBeginsAPattern()
+        {
+            // scoring.md §7 B and command-recognition.md both state that coverage closes the
+            // #42 discarded-argument hazard only in its COMMON case. The residue: the orphan
+            // run terminates at the first token that could begin a match, so when the stranded
+            // value's own first word begins one, the bare candidate is charged nothing and
+            // strands the value exactly as it did before #65 — at the DEFAULT weight. This is
+            // why WarnOnDroppableRequiredLiteral was not narrowed when coverage shipped, and
+            // the docs now say so, so the claim needs a pin.
+            var slots = new[] { new VoxrSlotDefinition("burn_level", new[] { "hard burn" }) };
+            var bare = new[] { "decelerate" };
+            var filled = new[] { "decelerate", "by", "{burn_level}" };
+
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"by\""));
+            var control = new VoxrCommandParser(
+                slots,
+                new[] { new VoxrCommandDefinition("decelerate", new[] { bare, filled }) }
+            );
+
+            var controlResults = control.Parse("decelerate hard burn");
+
+            Assert.AreEqual(2f / 3f, controlResults[0].Command.Score, 0.001f);
+            Assert.AreEqual("hard burn", controlResults[0].Command.GetSlot("burn_level"));
+
+            // Register anything that starts on "hard" and the charge disappears.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("required literal \"by\""));
+            var withHardStop = new VoxrCommandParser(
+                slots,
+                new[]
+                {
+                    new VoxrCommandDefinition("decelerate", new[] { bare, filled }),
+                    new VoxrCommandDefinition("hard_stop", new[] { new[] { "hard", "stop" } }),
+                }
+            );
+
+            var residual = withHardStop.Parse("decelerate hard burn");
+
+            Assert.AreEqual("decelerate", residual[0].Command.Intent);
+            Assert.AreEqual(
+                1.0f,
+                residual[0].Command.Score,
+                0.001f,
+                "the bare form pays nothing, so it wins exactly as it did before #65"
+            );
+            Assert.IsFalse(
+                residual[0].Command.HasSlot("burn_level"),
+                "and the spoken burn level is discarded — the #42 hazard in full"
+            );
+
+            // The remedy still reaches the residue, which is why the warning stands.
+            var optional = new VoxrCommandParser(
+                slots,
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "decelerate",
+                        new[] { bare, new[] { "decelerate", "?by", "{burn_level}" } }
+                    ),
+                    new VoxrCommandDefinition("hard_stop", new[] { new[] { "hard", "stop" } }),
+                }
+            );
+
+            var fixedResults = optional.Parse("decelerate hard burn");
+
+            Assert.AreEqual(1.0f, fixedResults[0].Command.Score, 0.001f);
+            Assert.AreEqual("hard burn", fixedResults[0].Command.GetSlot("burn_level"));
+        }
+
+        [Test]
+        public void Coverage_ALeadingOptionalLiteral_BecomesAPatternStartForTheWholeGrammar()
+        {
+            // The start-set walk continues past a pattern's leading OPTIONAL elements and
+            // stops at the first required one, because an omitted optional lets the element
+            // behind it legitimately begin the match. So ["?please","fire"] puts BOTH words
+            // into one grammar-wide set, and a stray "please" then terminates the orphan run
+            // for every candidate — including commands that never mentioned it. scoring.md §2
+            // lists this as the third consequence of the conservative start test.
+            var disengage = new VoxrCommandDefinition(
+                "cease_fire",
+                new[] { new[] { "disengage" } }
+            );
+
+            var withoutOptional = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[] { disengage, new VoxrCommandDefinition("fire", new[] { new[] { "fire" } }) }
+            );
+
+            Assert.AreEqual(
+                1f / 3f,
+                withoutOptional.Parse("disengage please now")[0].Command.Score,
+                0.001f,
+                "\"please now\" begins nothing, so both tokens are charged"
+            );
+
+            var withOptional = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    disengage,
+                    new VoxrCommandDefinition("fire", new[] { new[] { "?please", "fire" } }),
+                }
+            );
+
+            Assert.IsTrue(
+                withOptional.CanStartPattern(new[] { "please" }, 0),
+                "the optional's stripped form joins the start set"
+            );
+            Assert.AreEqual(
+                1.0f,
+                withOptional.Parse("disengage please now")[0].Command.Score,
+                0.001f,
+                "so an unrelated command's leading optional un-charges cease_fire's tail"
+            );
+        }
+
         [Test]
         public void Coverage_WeightZero_RevertsBothSidesTogether()
         {

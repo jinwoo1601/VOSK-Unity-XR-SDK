@@ -8,8 +8,12 @@ Pure C# runner for regression-testing command definitions. No MonoBehaviour depe
 
 | Constructor | Description |
 |-------------|-------------|
-| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence)` | All commands active as a flat list. |
-| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence)` | Named command sets with explicit active set selection. |
+| `VoxrBatchTestRunner(slots, commands, minScore, minConfidence, coverageWeight)` | All commands active as a flat list. |
+| `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence, coverageWeight)` | Named command sets with explicit active set selection. |
+
+All three thresholds are optional and default to the recogniser's own (`minScore` `0.6`, `minConfidence` `0.4`, `coverageWeight` `1.0`). Pass the values your `VoxrCommandRecogniser` uses if you have tuned them, so batch results track runtime behaviour. `coverageWeight` was named `skippedWordPenalty` before #65 — a **named**-argument caller must update; positional callers are unaffected.
+
+> **Batch scores are a lower bound, not the runtime score.** [Coverage](../scoring.md#2-coverage) exempts the literal `[unk]` token, which is what a grammar-constrained decoder returns for a word outside its vocabulary. This runner receives real text instead, so a trailing word the decoder would have hidden arrives verbatim and is charged: "cease fire please" scores `2 / (2 + 1)` = `0.67` here against `1.00` through the live decoder. Expect batch scores at or below what the same utterance gets at runtime, and treat a batch regression on a grammar whose users add natural filler with that in mind.
 
 ## Methods
 

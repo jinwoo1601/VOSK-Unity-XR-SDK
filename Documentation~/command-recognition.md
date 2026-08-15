@@ -91,7 +91,7 @@ Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character w
 If a command has a bare pattern *and* a sibling that extends it with one required literal followed by a slot, mark that literal optional:
 
 ```csharp
-// Hazardous -- a dropped "by" discards the burn level the speaker did say
+// Warned about -- a dropped "by" leaves the slot-filled form barely above the gate
 new VoxrCommandDefinition("decelerate", new[] {
     new[] { "decelerate" },
     new[] { "decelerate", "by", "{burn_level}" },
@@ -104,9 +104,11 @@ new VoxrCommandDefinition("decelerate", new[] {
 })
 ```
 
-Short unstressed function words (`by`, `at`, `to`, `mark`) are the tokens VOSK drops most, and speakers elide them too. When one goes missing, the slot-filled pattern loses that element's credit while still counting it in its denominator, so it drops below the bare pattern, which still matches perfectly -- the bare pattern wins, and the slot value that was recognised is discarded with nothing to signal it. "decelerate hard burn" executes a default-level decelerate. No threshold tuning reaches this, and reducing the miss cost does not either -- the drop now scores `2/3` = 0.67 rather than 0.50, but the bare pattern still scores a clean 1.0, and nothing normalised to 1.0 can beat it. This is a *selection* hazard, not a gate one.
+Short unstressed function words (`by`, `at`, `to`, `mark`) are the tokens VOSK drops most, and speakers elide them too. When one goes missing, the slot-filled pattern loses that element's credit while still counting it in its denominator, so it falls to `2/3` = 0.67 while the bare pattern still matches everything it claims.
 
-With the literal optional, an omitted optional drops out of both sides of the ratio, so the slot-filled pattern also scores 1.0 whether or not the word was spoken -- and being the candidate that covers more of the utterance, it wins. Both phrasings then extract the slot, and a bare "decelerate" still matches the bare pattern.
+**Until #65 that decided it.** The bare pattern scored a flat 1.0, won selection, and the slot value the speaker *did* say was discarded with nothing to signal it -- "decelerate hard burn" executed a default-level decelerate. No threshold tuning reached it, since nothing normalised to 1.0 can be out-scored. [Coverage](#coverage) closes the common case: the bare pattern is now charged for the "hard burn" it leaves unexplained, scores `1/(1+2)` = 0.33, and loses to the 0.67. The command fires **with** its argument.
+
+**The warning stands, and the swap is still worth making** -- what changed is the cost of ignoring it, not the advice. Three reasons: `0.67` clears the default `minScore` by only `0.07`, so anything else going wrong in the same utterance puts it back under the gate; setting `coverageWeight` to `0` brings the old selection behaviour back; and coverage does **not** reach the case where the stranded value's own first word begins some other pattern, because the orphan run terminates there and the bare form is charged nothing -- register `["hard", "stop"]` here and the bug returns in full at the default weight. With the literal optional, an omitted optional drops out of both sides of the ratio, so the slot-filled pattern scores 1.0 whether or not the word was spoken and wins outright -- in the residual case too. Both phrasings then extract the slot, and a bare "decelerate" still matches the bare pattern.
 
 **The swap is not free.** Two costs, both worth knowing before you apply it wholesale:
 
@@ -129,39 +131,47 @@ The one limit: a pattern carrying more than six optional elements is compared un
 
 > This section is the working summary. For the full model — the per-element score table, the selection and tie-break order, the eager-flush verdict rules, and worked examples traced through to their session-log entries — see [Matching and Scoring](scoring.md).
 
-Every match produces a normalised **score** (0.0--1.0) that indicates how well the transcript covers the pattern. The parser uses a sliding start to tolerate preamble, hesitations, and false starts -- the score reflects the quality of the best-positioned match, discounted by how much of the utterance the start had to skip (see [Skipped-word penalty](#skipped-word-penalty)).
+Every match produces a normalised **score** (0.0--1.0) built from two halves: how well the transcript satisfied the pattern, and how much of the utterance the match left unexplained. The parser uses a sliding start to tolerate preamble, hesitations, and false starts, so a pattern can match anywhere in the transcript -- and what it walks past or leaves behind counts against it (see [Coverage](#coverage)).
 
-Two independent thresholds control what gets through:
+Two independent thresholds control what gets through, both set on the `VoxrCommandRecogniser` component **in the Inspector**:
 
-```csharp
-commandRecogniser.minScore = 0.6f;       // Reject low-quality pattern matches
-commandRecogniser.minConfidence = 0.4f;   // Reject low VOSK word confidence
+```
+minScore        0.6    // Reject low-quality pattern matches
+minConfidence   0.4    // Reject low VOSK word confidence
 ```
 
-**Score** (`VoxrCommand.Score`) is computed by the parser based on how well the transcript satisfies the pattern, normalised against a *dynamic* denominator. Required tokens always count toward that denominator; optional tokens (`?word` literals and `{?slot}` slots) count only when they are actually spoken. An omitted optional therefore drops out of both sides of the ratio rather than diluting it, so a perfect match scores 1.0 whether or not its optional tokens were uttered — taking advantage of optionality is never penalized. A missed *required* token still pulls the score down.
+They are serialized fields with no public setter, so there is no code path for changing them at runtime -- tune them on the component, and regression-test the change with the [Batch Test Runner](api/batch-test-runner.md), which does take both as constructor arguments.
+
+**Score** (`VoxrCommand.Score`) is computed by the parser based on how well the transcript satisfies the pattern, normalised against a *dynamic* denominator. Required tokens always count toward that denominator; optional tokens (`?word` literals and `{?slot}` slots) count only when they are actually spoken. An omitted optional therefore drops out of both sides of the ratio rather than diluting it, so a perfect match scores 1.0 whether or not its optional tokens were uttered — taking advantage of optionality is never penalized. A missed *required* token still pulls the score down, and so does anything the match left unexplained — see [Coverage](#coverage).
 
 **Confidence** (`VoxrCommand.Confidence`) is the minimum per-word VOSK acoustic confidence across matched tokens. This reflects how certain VOSK was about the words it heard. A value of `-1` means no word-level data was available *for the matched span* (usually injected text, which carries none), which bypasses the `minConfidence` check entirely -- the command is accepted or rejected on score alone. See [the two gates](scoring.md#minconfidence-default-04) for the second, less obvious way `-1` arises and for how a repeated word resolves.
 
-### Skipped-word penalty
+### Coverage
 
-The sliding start can begin a match anywhere in the utterance, and the words it walks past used to cost nothing. That let any stray sentence whose *tail* happened to resemble a short pattern execute it at a full 1.0 — "thrusters port", misheard as "thrusters report", would skip the unmatched "thrusters" and fire a one-word `report` command.
+The sliding start can begin a match anywhere in the utterance, and a pattern stops when its elements run out. A command is therefore scored on how much of the utterance it **explains**, not only on how neatly it matched the part it chose: `coverageWeight` (default `1.0`, named `skippedWordPenalty` before #65) adds every in-grammar token the match leaves unexplained to the score denominator — both those the start walked past to reach the match and those left over after it.
 
-> **Changed in #65 §5.2.** The weight now also charges in-grammar tokens left over *after* a match, not only those skipped before it, and it is applied during candidate selection rather than to the winner afterwards — so it can change which pattern wins. The prose in this section still describes the leading half only; the full model is rewritten in the scoring-docs pass that follows this release. `KNOWN_LIMITATIONS.md` carries the behaviour changes in the meantime.
-
-`coverageWeight` (default `1.0`, named `skippedWordPenalty` before #65) adds each skipped in-grammar word to the score denominator, so the score becomes the fraction of the utterance the pattern actually covers:
+Without the leading half, any stray sentence whose *tail* happened to resemble a short pattern would execute it at a full 1.0 — "thrusters port", misheard as "thrusters report", would skip the unmatched "thrusters" and fire a one-word `report` command.
 
 | Utterance | Matched pattern | Score |
 |-----------|-----------------|-------|
 | `disengage` | `["disengage"]` | `1 / 1` = 1.0 |
 | `target disengage` | `["disengage"]` | `1 / (1 + 1)` = 0.5 -- rejected at the default `minScore` |
+| `disengage target` | `["disengage"]` | `1 / (1 + 1)` = 0.5 -- the trailing side, charged the same |
 | `launch launch all missiles target hotel one` | 5-element `launch_weapon` form | `5 / (5 + 1)` = 0.83 -- still accepted |
 
-The penalty is proportional, so it only bites patterns short enough to be swallowed whole by a stray utterance; longer commands still absorb a false start. Two things are never charged:
+The charge is proportional, so it only bites patterns short enough to be swallowed whole by a longer utterance; longer commands still absorb a false start.
 
-- **`[unk]` tokens.** Out-of-grammar preamble and hesitation are exactly what the sliding start is for, so filler VOSK could not resolve stays free.
+**It is applied while candidates are compared, not to the winner afterwards.** So it decides *which pattern wins* — and that is what stops a bare pattern out-ranking a slot-filled sibling that explained more of what was said (see [the function-word hazard](#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) above).
+
+Three things go uncharged (the third with one exception, noted below):
+
+- **`[unk]` tokens.** Out-of-grammar preamble and hesitation are exactly what the sliding start is for, so filler VOSK could not resolve stays free — and it is transparent rather than a run terminator, so one noise token cannot hide the real leftovers behind it. Only the literal `[unk]` is exempt, which is why `freeSpeechMode`, `InjectText`, and the batch runner charge trailing filler that the grammar-constrained decoder would have hidden.
 - **Words before a previous match ended.** Counting restarts after each extracted command, so chained commands in one utterance ("cease fire resume fire") do not penalise each other.
+- **Trailing tokens that could begin another match.** Counting stops at the first token some active pattern could start on, which is what keeps multi-command utterances intact: "cease fire launch missiles target hotel one" scores `cease_fire` at a full `2 / 2`, not `2 / 7`. The exception is a token the candidate's own next required element just tried and failed to match, which is always charged — see [the full rule](scoring.md#what-counts-as-orphaned).
 
-Set `coverageWeight` to `0` to restore the pre-#31 behaviour — note this also switches off the #42 protection added in #65. Raise it above `1.0` to demand that a command be an even larger share of what was said.
+Set `coverageWeight` to `0` to restore the pre-#31 behaviour — note this also switches off the #42 protection added in #65, so a bare pattern can once more win over its slot-filled sibling. Raise it above `1.0` to demand that a command be an even larger share of what was said.
+
+Existing grammars re-score on upgrade, with no compatibility mode. The visible change is that a short command trailed by words the grammar cannot place may stop firing where it used to — see [Known Limitations](../KNOWN_LIMITATIONS.md) for the measured cases and the authoring responses. The full rule, including the orphan test above and the exception that keeps it from rewarding a worse match, is in [Matching and Scoring](scoring.md#2-coverage).
 
 When tuning thresholds:
 - Start with the defaults (`minScore=0.6`, `minConfidence=0.4`) and adjust based on testing.
@@ -521,7 +531,7 @@ Use grammar mode (the default) for all command-driven features. Only enable free
 
 ## See Also
 
-- [Matching and Scoring](scoring.md) -- The score formula, penalties, selection order, gates, and eager-flush verdicts in full
+- [Matching and Scoring](scoring.md) -- The score formula, coverage, selection order, gates, and eager-flush verdicts in full
 - [Command Sets](command-sets.md) -- Group commands into switchable named sets for mode-specific grammars
 - [Number Parser](api/number-parser.md) -- Convert a `NumberSequence` slot's spoken words into an integer
 - [Inspector Authoring](inspector-authoring.md) -- Define commands and slots with ScriptableObject assets instead of code

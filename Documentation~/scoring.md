@@ -21,10 +21,12 @@ Everything here describes `VoxrCommandParser`, which is deterministic: the same 
 
 ## 1. The score formula
 
-Each element of the pattern contributes to a numerator (**raw score**) and a **denominator**. The score is their ratio:
+A score answers two questions at once: **how well did this candidate match what it claimed**, and **how much of the utterance did it leave unexplained**. This section is the first half; [§2](#2-coverage) adds the second, and the two share one ratio.
+
+Each element of the pattern contributes to a numerator (**raw score**) and a **denominator**:
 
 ```
-score = rawScore / denominator          (0 when denominator is 0)
+rawScore / denominator                  (0 when denominator is 0)
 ```
 
 | Element | Outcome | Raw score | Denominator |
@@ -44,7 +46,7 @@ Three properties follow, and each one matters when you read a score:
 - **A missed required literal is charged once.** It withholds its credit but keeps its place in the denominator, so one dropped function word costs `1/N` of the ceiling on an `N`-element pattern. It used to be charged *twice* — the withheld credit plus a `−0.5` penalty, i.e. `1.5/N` — which is what made short patterns so fragile. A missed required **slot** is still charged twice, and deliberately: an absent argument is not a dropped function word.
 - **A matched optional literal is worth half a required one.** Making a literal optional therefore changes the arithmetic of every *imperfect* match of that pattern, not just the ones that drop the word. See [the cost of `?by`](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot).
 
-A candidate whose score is `0` or negative is discarded and never competes. So is one that **missed more of its required elements than it matched**, whatever it scored — see [admission](#admission-what-counts-as-a-candidate-at-all).
+A candidate whose score is `0` or negative is discarded and never competes. So is one that **missed more of its required elements than it matched**, whatever it scored — see [admission](#admission-what-counts-as-a-candidate-at-all). Coverage only ever *adds* to the denominator, so it cannot move a candidate across either floor: both behave identically with coverage on or off.
 
 ### Admission: what counts as a candidate at all
 
@@ -67,7 +69,7 @@ A miss costs a fixed `1.0` of credit but the denominator is not fixed, so the sa
 | `launch {weapon} target {target} on my mark` (7 elements) | "launch missiles hotel one on my mark" | `(6 × 1 + 0) / 7` = `6 / 7` | **0.86** | accepted |
 | `cease fire` (2 elements) | "fire" | `(0 + 1) / 2` = `1 / 2` | **0.50** | rejected |
 
-Both of the first two dropped exactly one required literal, and in both the slots were recognised and extracted. Both now clear the gate — a single dropped function word no longer silences a pattern of three or more elements.
+In all three the pattern accounts for the whole utterance, so [§2](#2-coverage) adds nothing and the ratio above *is* the score. Both of the first two dropped exactly one required literal, and in both the slots were recognised and extracted. Both now clear the gate — a single dropped function word no longer silences a pattern of three or more elements.
 
 **Two elements is the floor.** `cease fire` heard as "fire" is half the evidence, and half the evidence is genuinely ambiguous — with a `fire` command registered it is a different command entirely — so the cost stays proportional to length rather than being abolished.
 
@@ -75,31 +77,78 @@ The authoring lesson is unchanged and still worth following: do not make a short
 
 ---
 
-## 2. The skipped-word penalty
+## 2. Coverage
 
-> **Changed in #65 §5.2.** The weight now also charges in-grammar tokens left over *after* a match, not only those skipped before it, and it is applied during candidate selection rather than to the winner afterwards — so it can change which pattern wins. The prose in this section still describes the leading half only; the full model is rewritten in the scoring-docs pass that follows this release. `KNOWN_LIMITATIONS.md` carries the behaviour changes in the meantime.
-
-The parser slides its start point through the utterance, so a pattern can match anywhere in it. `coverageWeight` (default `1.0`, named `skippedWordPenalty` before #65) charges for the in-grammar words that sliding start walked past:
+A pattern need not begin where the utterance begins or run to where it ends: the parser slides its start point through the transcript, and a match stops when the pattern's elements run out. **Coverage** charges a candidate for the in-grammar tokens it leaves unexplained, on *both* sides of the match:
 
 ```
-finalScore = rawScore / (denominator + skippedWords × coverageWeight)
+score = rawScore / (denominator + (skippedBefore + orphanedAfter) × coverageWeight)
 ```
 
-Four rules govern it, and all four are load-bearing:
+| Term | What it counts |
+|------|----------------|
+| `skippedBefore` | Recognised tokens between where this extraction round began and where the candidate starts. |
+| `orphanedAfter` | Recognised tokens after the candidate's consumed span, stopping at the first one that could begin another match. |
 
-- **It is applied after selection, not during it.** Candidates are compared on their unpenalised scores; the penalty is then applied to the winner alone. So the penalty *filters* through `minScore` — it never changes which pattern wins.
-- **`[unk]` is never charged.** Out-of-grammar preamble and hesitation are exactly what the sliding start is for, so filler VOSK could not resolve stays free.
-- **Counting restarts at each extraction round.** Words consumed by a previously extracted command are not charged against the next one, so chained commands in one utterance do not penalise each other.
-- **It is proportional.** It only bites patterns short enough to be swallowed whole by a stray utterance.
+`coverageWeight` (default `1.0`, named `skippedWordPenalty` before #65) scales both. At `1.0` the score is close to *the fraction of the utterance this candidate accounts for* — close, not equal, because of the orphan rule below.
 
-| Utterance | Winner | Unpenalised | Skipped | Final |
-|-----------|--------|-------------|---------|-------|
-| `report` | `["report"]` | 1.00 | 0 | **1.00** |
-| `thrusters report` | `["report"]` | 1.00 | 1 | `1 / (1 + 1)` = **0.50** — rejected |
-| `[unk] [unk] report` | `["report"]` | 1.00 | 0 (`[unk]` is free) | **1.00** |
-| `launch launch missiles target hotel one` | 4-element `launch_weapon` | 1.00 | 1 | `4 / (4 + 1)` = **0.80** |
+The effect is proportional to pattern length, so it bites hardest on the patterns short enough to be swallowed whole by a longer utterance. A one-element pattern found past one skipped word scores `1 / (1 + 1)` = `0.50` and fails the default gate; a five-element pattern reached past the same word scores `5 / 6` = `0.83` and still fires.
 
-Set it to `0` to restore the pre-1.4.0 behaviour where skipped words cost nothing; raise it above `1.0` to demand a command be an even larger share of what was said.
+### Coverage is applied before candidates are compared
+
+This is the property to internalise, and the half that changed in #65. The leading term used to be applied to the winner *alone, after* selection, deliberately so that it could not reorder anything — it filtered through `minScore` and nothing else. Coverage now enters the score selection ranks on, so **it decides which pattern wins**.
+
+That relocation is the entire point. A bare pattern matching its one word perfectly used to score a flat `1.0`, and nothing normalised to `1.0` can be beaten at any weight — so no amount of tuning could stop it out-ranking the slot-filled sibling that explained more of what the speaker said. It now scores `1.0` only when the rest of the utterance is genuinely someone else's business. See [worked example B](#b-coverage-picks-the-pattern-that-explains-more).
+
+### What counts as orphaned
+
+A trailing token is orphaned only if **no active pattern could begin a match at it**, and counting stops at the first token that could. Without that test coverage would destroy multi-command utterances, charging the first command for the second one's words:
+
+| Utterance | Candidate | Consumed | Trailing | Orphaned | Score |
+|-----------|-----------|----------|----------|---------|-------|
+| `decelerate hard burn` | `decelerate` | 1 token | `hard burn` — begins no pattern | 2 | `1 / (1 + 2)` = **0.33** |
+| `decelerate hard burn` | `decelerate by {burn_level}`, "by" dropped | 3 tokens | — | 0 | `2 / 3` = **0.67** |
+| `cease fire launch missiles target hotel one` | `cease fire` | 2 tokens | `launch …` — **begins a pattern** | 0 | `2 / 2` = **1.00** |
+
+The test reads the registered patterns alone — never which candidates happened to survive admission — and it is deliberately **conservative**: where it is unsure whether a pattern could start at a token, it answers yes and charges nothing. The failure modes are not symmetric. Over-charging destroys sequential extraction; under-charging merely leaves a score where it already was.
+
+Three consequences of that conservatism, all of them grammar-wide — the start set is one table shared by every candidate, so widening it anywhere weakens trailing coverage everywhere:
+
+- **It reads the decoder's word list, not only the pattern set.** Confirm/cancel follow-up vocabulary is in the grammar, so the decoder returns "yes" as a real token rather than `[unk]`. Since a follow-up can legitimately begin there, "disengage, yes" is not charged for the "yes".
+- **A slot-initial pattern over a permissive slot weakens trailing coverage.** If a pattern can begin with an open-ended `NumberSequence`, nearly every token becomes a possible start and almost nothing is charged anywhere in that grammar. See [Known Limitations](../KNOWN_LIMITATIONS.md).
+- **A pattern's *leading optional* elements are pattern starts too.** The walk that collects start tokens continues past each optional element and stops at the first required one — because an omitted optional lets the element behind it legitimately begin the match. So `["?please", "fire"]` puts **both** "please" and "fire" into the start set, and a stray "please" then terminates the orphan run for every candidate in the grammar. Worth knowing before you bring filler words in as optionals: put them where they are actually spoken, and prefer the **end** of a pattern to the front.
+
+**One exception, at the run's first position only.** Where the candidate's *own* next required element failed to match at that token, the token is charged rather than tested against the predicate. A candidate that has just mis-predicted a token may not then claim that some *other* pattern could have begun there.
+
+Without the exception a candidate is rewarded for matching **less**. Register `["switch", "to", "weapons"]`, `["switch", "to", "navigation"]` and `["weapons", "mode"]`, and say "switch to weapons target hotel". Had the first orphan been tested rather than charged:
+
+| Candidate | Its final element | Where its consumed span stops | Orphaned | Would score |
+|-----------|-------------------|-------------------------------|----------|-------------|
+| `switch to navigation` | **missed** | before `weapons` — which begins `weapons mode`, terminating the run at once | 0 | `2 / 3` = `0.67` |
+| `switch to weapons` | **matched** | past `weapons`, so it pays for `target hotel` | 2 | `3 / (3 + 2)` = `0.60` |
+
+The wrong command would win by `0.067`. Because the token *is* charged, `switch to navigation` pays for the "weapons" it mis-predicted as well as what follows, scoring `2 / (3 + 3)` = `0.33` — and `mode_weapons`, the command actually spoken, wins at `0.60`. Counting then continues normally from the token after the charged one. Measured threshold for the flip this closes: safe at one leftover token, wrong at two.
+
+### `[unk]` is never charged, and never blocks
+
+Out-of-grammar preamble and hesitation are exactly what the sliding start is for, so filler the decoder could not resolve stays free on both sides. `[unk]` is also **transparent** rather than a run terminator — one noise token cannot shield every real orphan behind it, so "decelerate `[unk]` hard burn" costs exactly what "decelerate hard burn" costs.
+
+Only the literal `[unk]` token is exempt, and that is what a *grammar-constrained* decoder returns for a word outside its vocabulary. `freeSpeechMode`, `InjectText`, and the [Batch Test Runner](api/batch-test-runner.md) deliver real text instead, so a word the decoder would have hidden arrives verbatim and is charged: "cease fire please" scores `2 / (2 + 1)` = `0.67` on those paths against `1.00` through the live grammar-constrained decoder. Treat a batch score as a **lower bound** on the runtime score rather than as equal to it.
+
+### Counting restarts at each extraction round
+
+On the **leading** side, tokens consumed by a previously extracted command are not charged against the next one: the count is taken from where the round began, so chained commands do not penalise each other.
+
+The **trailing** side works differently, and the difference is worth knowing. It has no notion of a round at all — the orphan run is a property of the utterance and the grammar, measured forward from the candidate's consumed span. Usually that lands in the same place, because the next command's first word terminates the run. But the orphan test asks whether a pattern could *begin* at a token, while the matcher can begin anywhere by *missing* its leading elements — so where a later round explains tokens by missing its way into them, the earlier command is charged for tokens that did not go unexplained after all. [Worked example D](#d-two-commands-in-one-breath-and-one-of-them-loses-a-word) is that case, and it is a [known limitation](../KNOWN_LIMITATIONS.md).
+
+### Setting the weight
+
+| Value | Effect |
+|-------|--------|
+| `1.0` (default) | Each unexplained token costs one denominator slot. |
+| Above `1.0` | Demands that a command be an even larger share of what was said. |
+| `0` | Coverage off — pre-1.4.0 scoring, where nothing outside the match costs anything. **This also switches off the protection above**, so a bare pattern can once more out-rank its slot-filled sibling and discard the argument the speaker did say. |
+| Negative, NaN, or infinity | Treated as `0`. |
 
 ---
 
@@ -108,14 +157,16 @@ Set it to `0` to restore the pre-1.4.0 behaviour where skipped words cost nothin
 Every candidate that clears [admission](#admission-what-counts-as-a-candidate-at-all) competes. They are ordered by these keys, in this order:
 
 1. **Earliest start token wins.** A candidate that begins earlier beats one that begins later *regardless of score* — a leading match is never displaced by a better-scoring one further along.
-2. **Then highest score** (before the skipped-word penalty).
+2. **Then highest score** — the full score, [coverage](#2-coverage) included.
 3. **Then the longer consumed span** — how far the last element that *actually matched something* reached. Trailing `[unk]` the pattern merely skipped does not count, so a candidate cannot win by absorbing noise.
 4. **Then the most matched literals.**
 5. **Then registration order** — the first-declared command wins, and within a command the first-listed pattern. This is a deterministic fallback, not a design surface; do not build behaviour on it.
 
-Key 3 is why a pattern with a tail beats its bare sibling. With `intercept track {track}` declared *before* `intercept track {track} {burn_level}`, "intercept track hotel one hard burn" scores `1.0` on both with equal literal counts — but the longer one consumed 6 tokens against the bare one's 4, so it wins and extracts both slots. Without that key, the bare pattern would win on declaration order and sequential extraction would then match the orphaned `hard burn` as a *second* command, splitting one order in two.
+Keys 2 and 3 both express "this candidate explains more of the utterance", and since #65 the score carries most of that load. With `intercept track {track}` declared *before* `intercept track {track} {burn_level}`, "intercept track hotel one hard burn" is now settled on **key 2**: the bare pattern leaves `hard burn` unexplained and scores `3 / (3 + 2)` = `0.60`, against the longer form's `4 / 4` = `1.00`. Before coverage entered selection both scored a flat `1.0` with equal literal counts, and **key 3** was the only thing separating them — the longer one consumed 6 tokens against the bare one's 4.
 
-Note that key 3 sits **above** literal count, so it also settles equal-score candidates whose literal counts differ.
+Key 3 therefore matters where coverage cannot see a difference: at `coverageWeight = 0`, or where the trailing tokens *could* begin another match and so are not charged to either candidate. In both, it still prevents the outcome it was added for — the bare pattern winning on declaration order, after which sequential extraction matches the leftover `hard burn` as a *second* command and splits one order in two. Note it sits **above** literal count, so it also settles equal-score candidates whose literal counts differ.
+
+**Key 1 bounds what coverage can do.** Because earliest start outranks score outright, coverage can only reorder candidates that *begin at the same token*; a better-scoring candidate starting later is never promoted over a demoted one starting earlier. Sequential extraction normally recovers it on the next round, and fails only when the winner's consumed span covers the start the better candidate needed. Swept over 699 utterances: 29 candidates were blocked this way and 28 were recovered by a later round — see [Known Limitations](../KNOWN_LIMITATIONS.md) for the one that was not.
 
 **`TryEagerCommit` uses this same ordering**, so an eager verdict always names the command the subsequent flush will actually fire.
 
@@ -131,11 +182,13 @@ One utterance can yield several commands. After a winner is chosen, the search r
   -> launch_weapon(weapon=missiles, target=hotel one)  score 1.00
 ```
 
+Both score a clean `1.00`, and it is the orphan test that keeps them there: `cease fire` is not charged for the five tokens it leaves behind, because `launch` begins a pattern of its own. Charging every trailing token would score it `2 / 7` = `0.29` and reject it, which is why [coverage](#what-counts-as-orphaned) stops counting at the first token that could start a match.
+
 Extraction stops when no candidate is [admitted](#admission-what-counts-as-a-candidate-at-all) — which means either nothing scored above `0` or nothing matched at least as many required elements as it missed — when a match would consume no tokens, or when the result buffer (one slot per active command) is full.
 
 Two consequences for pattern authoring:
 
-- **A pattern that is a prefix of another can steal its head.** If the shorter one wins a round, the remainder of the utterance is offered to the next round — where it may match a *different* command instead of being read as the tail it was meant to be. The span tie-break (key 3 above) prevents this for the equal-score case; it does not help when the longer form is scoring lower for another reason.
+- **A pattern that is a prefix of another can steal its head.** If the shorter one wins a round, the remainder of the utterance is offered to the next round — where it may match a *different* command instead of being read as the tail it was meant to be. Two keys guard against it, over complementary cases. Coverage (key 2) charges the shorter pattern for the tail it abandons — but only while no active pattern could begin a match there. Where one could, coverage charges nothing and the span tie-break (key 3) settles it instead, for candidates that score equally. Neither helps when the longer form is scoring lower for some other reason.
 - **Each command is scored and gated independently.** One command in an utterance can fire while another from the same utterance is rejected.
 
 ---
@@ -146,7 +199,7 @@ The winner of each round faces two independent thresholds. Both live on `VoxrCom
 
 ### `minScore` (default `0.6`)
 
-Compared against the final score from §1 + §2. Rejects partial and garbled matches.
+Compared against the full score — [fidelity](#1-the-score-formula) and [coverage](#2-coverage) together. Rejects partial and garbled matches, and matches that account for too little of what was said.
 
 If the command definition sets `allowPartialMatch`, a sub-threshold match with unfilled required slots enters the [pending state](command-recognition.md#pending-commands) instead of being rejected outright.
 
@@ -224,9 +277,9 @@ When `eagerFlushOnCompleteMatch` is enabled, each VOSK result triggers one specu
 
 A verdict above `None` requires **all** of:
 
-1. The winner's score ≥ `minScore` — computed *without* the skipped-word penalty, which is sound only because of condition 2.
-2. The match starts at the first **recognised** token. A leading `[unk]` run is skipped for free — nothing arriving later extends an utterance leftward, so out-of-grammar preamble ("Helm, ...") does not block a commit. A leading word VOSK *did* resolve does block it, because the flush would then charge it under §2 and could score below `minScore`.
-3. The match reaches the **end** of the buffer. Anything left over — recognised or `[unk]` — is treated as an in-progress tail.
+1. The winner's score ≥ `minScore` — the same number the flush path would compute. The scan mirrors an extraction round starting at token 0, so it charges [coverage](#2-coverage) identically and the two can no longer disagree about a buffer they both see.
+2. The match starts at the first **recognised** token. A leading `[unk]` run is skipped for free — nothing arriving later extends an utterance leftward, so out-of-grammar preamble ("Helm, ...") does not block a commit. A leading word VOSK *did* resolve does block it, and what that buys is completeness rather than agreement: a run of recognised words the match did not consume means the buffer holds more than this one command, and committing would fire on part of it.
+3. The match reaches the **end** of the buffer. Anything left over — recognised or `[unk]` — is treated as an in-progress tail. Note what this implies for condition 1: whichever candidate ends up being checked here has nothing trailing it, so its *own* trailing charge is always zero. That does **not** make the trailing term irrelevant to the verdict — it still runs in selection, and selection picks the candidate these conditions are then applied to. On the buffer "decelerate hard burn", coverage demotes bare `decelerate` and hands the check to the buffer-spanning `decelerate by {burn_level}`, which commits; at `coverageWeight = 0` the bare form wins selection instead, fails this condition, and the verdict is `None`.
 4. Every **required slot** in the winning pattern actually matched. Condition 3 does not imply this: a missed slot consumes no *recognised* token, so it never moves the end of the match past anything the pattern matched — and where it does carry the end over a trailing `[unk]` run, that only makes condition 3 pass more readily. Either way a pattern can appear to span the buffer while still missing an argument. Required *literals* are exempt from **this** condition — a dropped function word still leaves every argument present — but see condition 5.
 5. **No required element sits after the last element that actually matched.** Condition 3 cannot express this either, and for the same reason: a miss consumes nothing, so a pattern whose *trailing* elements were never spoken ends up looking exactly like one that genuinely finished at the buffer end. A **medial** miss is fine and still commits — "launch all missiles hotel one" drops the "target" literal but fills every slot and still lands its last element on the buffer's final token, so nothing arriving next was owed to it. A **terminal** one is not: with `["switch", "to", "weapons"]` and `["switch", "to", "navigation"]` registered, the buffer "switch to" matches both at `(1 + 1 + 0) / 3` = `0.67`, and the winner is decided by registration order — so committing there fires the *wrong* command, not merely an early one.
 6. Confidence ≥ `minConfidence`, or `-1`.
@@ -238,7 +291,7 @@ With `["fire"]` and `["fire", "at", "{target}"]` registered:
 | Buffer | Verdict | Why |
 |--------|---------|-----|
 | `fire` | `HoldExtendable` | complete, but a prefix of `fire at {target}` |
-| `fire at` | `None` | bare `fire` wins selection (`1.00` vs `0.33`) but leaves `at` unconsumed |
+| `fire at` | `None` | bare `fire` still wins selection (`0.50` vs `0.33`) but leaves `at` unconsumed — and at `0.50` it now fails condition 1 as well |
 | `fire at hotel one` | `Commit` | complete, terminal, spans the buffer |
 | `[unk] fire at hotel one` | `Commit` | leading `[unk]` is skipped for free |
 | `fire at hotel one [unk]` | `None` | trailing leftover = possible in-progress tail |
@@ -249,7 +302,7 @@ With `["fire"]` and `["fire", "at", "{target}"]` registered:
 
 ## 7. Worked examples
 
-Each trace ends with the entry it produces in the [session debug log](editor-testing.md#session-debug-log), abridged to the fields under discussion.
+Each trace ends with the entry it produces in the [session debug log](editor-testing.md#session-debug-log), abridged to the fields under discussion and with scores shown to two decimals. The real `score` field carries the full float — `2 / 3` is written as `0.6666667`, not `0.67` — so match on ranges rather than on an exact literal when you grep or assert against a log.
 
 ### A. A clean multi-slot command
 
@@ -257,11 +310,10 @@ Grammar: `launch_weapon` = `["launch", "{weapon}", "target", "{target}"]`, with 
 
 Utterance: **"launch missiles target hotel one"** — 5 tokens.
 
-1. **Candidates.** The pattern is tried at every start token. Start 0 matches all four elements: `4 / 4` = `1.00`. Start 1 misses the `launch` literal but still matches the other three: `3 / 4` = `0.75`. Start 2 misses both `launch` and `{weapon}` — two matched against two missed, so it is still admitted, at `(0 − 1 + 1 + 1) / 4` = `0.25`.
-2. **Selection.** Start 0 is earliest — it wins on key 1 alone.
-3. **Coverage.** The winner starts at the search origin and consumes to the end, so nothing is left unexplained on either side. Score stays `1.00`.
-4. **Confidence.** The minimum per-word confidence over tokens 0–4.
-5. **Gates.** `1.00 ≥ 0.6`; confidence compared against `0.4`.
+1. **Candidates.** The pattern is tried at every start token, and each is scored with coverage already included. Start 0 matches all four elements and leaves nothing unexplained on either side: `4 / 4` = `1.00`. Start 1 misses the `launch` literal *and* has to skip past it to begin, so that one token costs twice — once in the denominator, once in coverage: `3 / (4 + 1)` = `0.60`. Start 2 misses both `launch` and `{weapon}` — two matched against two missed, so it is still admitted — and skips two tokens to get there: `(0 − 1 + 1 + 1) / (4 + 2)` = `0.17`.
+2. **Selection.** Start 0 is earliest, so it wins on key 1 alone; here it is also the highest-scoring.
+3. **Confidence.** The minimum per-word confidence over tokens 0–4.
+4. **Gates.** `1.00 ≥ 0.6`; confidence compared against `0.4`.
 
 ```json
 { "intent": "launch_weapon", "pattern": "launch {weapon} target {target}",
@@ -270,30 +322,17 @@ Utterance: **"launch missiles target hotel one"** — 5 tokens.
              { "name": "target", "value": "hotel one", "startWord": 3, "endWord": 5 } ] }
 ```
 
-### B. A dropped function word sinks a short pattern
+### B. Coverage picks the pattern that explains more
 
 Grammar: `decelerate` = `["decelerate"]` **and** `["decelerate", "by", "{burn_level}"]`.
 
 Utterance: **"decelerate hard burn"** — the speaker said the burn level; VOSK dropped "by".
 
-1. **Candidates.** The bare pattern at start 0: `1 / 1` = `1.00`. The slot-filled pattern at start 0: `by` is missed (no credit, denominator +1) while `decelerate` and `{burn_level}` match, giving `2 / 3` = `0.67`.
-2. **Selection.** Both start at token 0, so key 1 ties and key 2 decides: `1.00` beats `0.67`. **The bare pattern wins.**
-3. **Result.** `decelerate` fires with **no slots**. The `hard burn` the speaker actually said is discarded, and nothing in the log says a slot was lost — the accepted entry simply has an empty `slots` array.
-
-```json
-{ "intent": "decelerate", "pattern": "decelerate",
-  "score": 1.0, "accepted": true, "slots": [] }
-```
-
-No threshold reaches this: the bare pattern scores a clean `1.00`, which nothing normalised to `1.00` can beat. Raising the drop's score from `0.50` to `0.67` does not help either — this hazard is about *selection*, not the gate. The fix is `"?by"`, which makes the slot-filled form score `2 / 2` = `1.00` too and win on consumed span (key 3). Then:
-
-```json
-{ "intent": "decelerate", "pattern": "decelerate ?by {burn_level}",
-  "score": 1.0, "accepted": true,
-  "slots": [ { "name": "burn_level", "value": "hard burn", "startWord": 1, "endWord": 3 } ] }
-```
-
-If instead the intent has *only* the slot-filled pattern, there is no bare sibling to win — the `0.67` candidate is the winner, and now **clears** the gate:
+1. **Candidates.** Both start at token 0.
+   - The **bare** pattern matches its one element perfectly, but consumes only that token. `hard` and `burn` begin no pattern in this grammar, so both are orphaned: `1 / (1 + 2)` = **0.33**.
+   - The **slot-filled** pattern misses `by` (no credit, denominator +1) while `decelerate` and `{burn_level}` match, and it consumes to the end, so coverage adds nothing: `2 / 3` = **0.67**.
+2. **Selection.** Key 1 ties, so key 2 decides: `0.67` beats `0.33`. **The slot-filled pattern wins.**
+3. **Gates.** `0.67 ≥ 0.6`. The command fires **with** its argument.
 
 ```json
 { "intent": "decelerate", "pattern": "decelerate by {burn_level}",
@@ -301,7 +340,42 @@ If instead the intent has *only* the slot-filled pattern, there is no bare sibli
   "slots": [ { "name": "burn_level", "value": "hard burn", "startWord": 1, "endWord": 3 } ] }
 ```
 
-**Reading that entry:** a `0.67` on a three-element pattern whose slots *did* extract is the signature of exactly one missing required literal — `(N−1)/N`. Compare `score` against the pattern's element count before reaching for `minScore`.
+**This is the ordering that #65 inverted.** Until coverage entered selection, the bare pattern scored a flat `1.00` — it did match everything it claimed — and won, firing `decelerate` with an empty `slots` array while the "hard burn" the speaker actually said was silently dropped. No threshold reached it, because nothing normalised to `1.00` can be out-scored. Charging a candidate for what it leaves unexplained is what reverses the order, and it is the reason coverage had to move *above* the selection barrier rather than stay a filter on the winner.
+
+**`"?by"` is still the better grammar, and the parser still warns about this shape at construction.** Coverage closes the *common* case, not the whole hazard — see below. Make the literal optional and the omitted optional drops out of both sides of the ratio, so the slot-filled form scores `2 / 2` = `1.00` whether or not the word was spoken, a comfortable margin instead of `0.07` above the gate:
+
+```json
+{ "intent": "decelerate", "pattern": "decelerate ?by {burn_level}",
+  "score": 1.0, "accepted": true,
+  "slots": [ { "name": "burn_level", "value": "hard burn", "startWord": 1, "endWord": 3 } ] }
+```
+
+Note the `?` survives into the logged `pattern` — it is the pattern as you declared it, not as it matched — so grep a session log for `decelerate ?by {burn_level}`, not for `decelerate by {burn_level}`. Read [the cost of the swap](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) before applying it wholesale.
+
+**The case coverage does not close.** The orphan run stops at the first token that could begin another match — so if the stranded value's *own first word* begins some pattern, the bare candidate is charged nothing and strands the value exactly as it did before #65. Register `["hard", "stop"]` alongside the pair above and "decelerate hard burn" goes back to firing bare `decelerate` at a full `1.00`, argument discarded, at the **default** `coverageWeight`:
+
+```json
+{ "intent": "decelerate", "pattern": "decelerate",
+  "score": 1.0, "accepted": true, "slots": [] }
+```
+
+This is why the construction-time warning was not narrowed when coverage shipped: `?by` fixes both the common case and this residue, and coverage alone fixes only the first. The same applies wherever [the orphan test](#what-counts-as-orphaned) charges nothing — including a grammar with a slot-initial pattern over a permissive slot.
+
+**Reading that entry:** a `0.67` on a three-element pattern whose slots *did* extract is the signature of exactly one missing required literal — `(N−1)/N` — with nothing left unexplained. If the number is lower than that arithmetic predicts, the difference is coverage: count the tokens outside the match.
+
+### B2. The same demotion with nowhere to land
+
+Same utterance, but the intent registers **only** `["decelerate"]` — no slot-filled sibling.
+
+Nothing changes about the bare pattern's score: it still explains one token of three and still scores `1 / (1 + 2)` = **0.33**. What changes is that no better candidate exists to win instead, so the demoted one is the winner of the round and simply fails the gate:
+
+```json
+{ "intent": "decelerate", "pattern": "decelerate",
+  "score": 0.33, "minScore": 0.6,
+  "accepted": false, "rejectReason": "score 0.33 < minScore 0.60", "slots": [] }
+```
+
+Before #65 this fired. It is the main behaviour change coverage brings to grammars that were working — a command is now judged on how much of the utterance it accounts for, and that judgement applies whether or not a fuller phrasing exists to take its place. Measured over 699 utterances, 17 stopped clearing `minScore` this way and none started firing wrongly. The intended authoring response is to register the fuller phrasing, or bring the natural trailing words into the grammar as optional literals (`?please`); the blunt escapes are a lower `minScore` or a `coverageWeight` below `1.0`. See [Known Limitations](../KNOWN_LIMITATIONS.md).
 
 ### C. One weak word vetoes a perfect match
 
@@ -309,7 +383,7 @@ Grammar: `set_heading` = `["orient", "heading", "{heading}"]`, `heading` a 3-wor
 
 Utterance: **"orient heading two seven zero"**, with per-word confidences `0.94 / 0.39 / 0.50 / 0.91 / 0.97`.
 
-1. **Score.** Every element matches: `3 / 3` = `1.00`. Nothing skipped.
+1. **Score.** Every element matches: `3 / 3` = `1.00`. Nothing skipped before it, nothing left unexplained after it.
 2. **Confidence.** The minimum over the matched span — `0.39`, from the literal "heading".
 3. **Gates.** Score passes. `0.39 < 0.40` fails.
 
@@ -327,6 +401,28 @@ Note the slot's own `confidence` (`0.5`, the minimum over tokens 2–4) is *high
 **Reading that entry:** a perfect score with a sub-threshold confidence is never a pattern problem. Check the `words` array for the culprit, and do not assume it is the obvious candidate — the digits are fine here, and "two" is sitting at the ≈0.50 ceiling that is a [known limitation](../KNOWN_LIMITATIONS.md) but still clears the gate. It is the ordinary literal "heading" that vetoed the command, because the gate takes the *minimum*.
 
 That ≈0.50 floor on "two" is also why `minConfidence` defaults to `0.4` rather than higher: at `0.5` every `NumberSequence` command containing "two" would be rejected outright. Lowering it below `0.4` trades against noise-triggered false matches.
+
+### D. Two commands in one breath, and one of them loses a word
+
+Grammar: `cease_fire` = `["cease", "fire"]`, `approach_target` = `["approach", "target", "{target}"]`.
+
+Utterance: **"cease fire target hotel one"** — the speaker said both commands; VOSK dropped the second one's "approach".
+
+1. **Round 1.** `cease fire` matches at token 0 and consumes two tokens. What follows is `target hotel one`, and in this grammar nothing begins a match at "target" — `approach_target` starts with "approach" — so the orphan run does not terminate and all three tokens are charged: `2 / (2 + 3)` = **0.40**. It still wins the round on key 1, then fails the gate.
+2. **Round 2.** The search restarts at token 2, so the leading term re-bases and nothing before it is charged again. `approach target {target}` misses its `approach` literal but matches the rest and consumes to the end: `2 / 3` = **0.67**. It fires.
+
+```json
+{ "intent": "cease_fire", "pattern": "cease fire",
+  "score": 0.4, "minScore": 0.6, "accepted": false,
+  "rejectReason": "score 0.40 < minScore 0.60" }
+{ "intent": "approach_target", "pattern": "approach target {target}",
+  "score": 0.67, "accepted": true,
+  "slots": [ { "name": "target", "value": "hotel one", "startWord": 3, "endWord": 5 } ] }
+```
+
+**Reading those entries:** the command that *lost* a word fired, and the one spoken perfectly did not. That inversion is the signature of this case — the first command is charged for tokens a *later* round then goes on to explain. The orphan test asks whether a pattern could **begin** at a token, but the matcher can begin anywhere by missing its leading elements, and the two disagree exactly here.
+
+Say the second command in full and both fire at `1.00`: "approach" begins a pattern, so `cease_fire`'s orphan run terminates immediately and it is charged nothing. Measured over 699 utterances this shape accounts for 11 intent changes and 1 count change; it loses a command, and never fires a wrong one. There is no user-level workaround — see [Known Limitations](../KNOWN_LIMITATIONS.md).
 
 ---
 
@@ -348,21 +444,24 @@ Four paths short-circuit before the parse and publish a **single synthetic attem
 | `inputText` | The buffered transcript that was parsed | — |
 | `words[].confidence` | Per-word VOSK confidence — the inputs to the minimum | §5 |
 | `attempts[].pattern` | The winning pattern, space-joined | §3 |
-| `attempts[].score` | Final score, **after** the skipped-word penalty | §1, §2 |
+| `attempts[].score` | The full score — fidelity **and** coverage, the same number selection ranked on | §1, §2 |
 | `attempts[].minScore` | The gate it was compared against | §5 |
 | `attempts[].aggregateConfidence` | Minimum per-word confidence over the matched span; `-1` = no data | §5 |
 | `attempts[].rejectReason` | Empty when accepted; otherwise what stopped it — a gate, a post-gate filter, or one of the pipeline events below | §5 |
 | `attempts[].slots[].startWord/endWord` | Half-open token range into the whitespace-split `inputText` | — |
 
-Three diagnoses cover most of what sends you to the log — two rejections and one command that fired but did the wrong thing:
+The diagnoses below cover most of what sends you to the log. The first question to ask of any surprising `score` is whether the pattern's own elements account for it: work out `matched / elements` for the pattern that won, and if the reported number is lower, the difference is coverage — count the recognised tokens lying outside the match.
 
 | Symptom | Diagnosis |
 |---------|-----------|
-| `score` ≈ 0.67 on a three-element pattern, slots extracted | One dropped required literal (§1) — now above the gate, so it fires. |
+| `score` ≈ 0.67 on a three-element pattern, slots extracted | One dropped required literal, nothing left unexplained (§1) — above the gate, so it fires. |
 | `score` ≈ 0.5 on a **two**-element pattern | One dropped required literal, and two elements is the floor: half the evidence stays rejected (§1). |
+| `score` well below `matched / elements`, on a short pattern | Coverage (§2). The match left recognised tokens unexplained before or after it — most often natural trailing words the grammar does not contain. |
+| A command that fired before the upgrade and no longer does | Same cause, and the expected shape of the #65 change (§7 B2). Register the fuller phrasing, mark the trailing words optional, or lower `coverageWeight`. |
+| The command that *lost* a word fired; the one spoken cleanly was rejected at ≈0.40 | Two commands in one utterance, the second missing its leading word (§7 D). |
 | no result at all for a pattern that clearly part-matched | The candidate missed more required elements than it matched and was refused [admission](#admission-what-counts-as-a-candidate-at-all) (§3). |
 | `score` = 1.0 but `aggregateConfidence` below the gate | One acoustically weak word (§5). Check `words`; consider a slot alias. |
-| Accepted with an empty `slots` array where you expected a value | A bare sibling pattern out-scored the slot-filled one (§7 B). |
+| Accepted with an empty `slots` array where you expected a value | A bare sibling pattern out-ranked the slot-filled one. Coverage closes the common case (§7 B). If you still see it, the stranded value's first word probably begins another pattern, so coverage charged the bare form nothing — or `coverageWeight` is `0`. |
 
 ---
 
