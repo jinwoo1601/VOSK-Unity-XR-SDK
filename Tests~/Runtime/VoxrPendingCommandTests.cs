@@ -112,13 +112,20 @@ namespace VoXR.Tests.Runtime
             // Issue #73's routing half. The pending path is entered from BELOW minScore, so a
             // slot-missing candidate that cleared the gate never reached it — allowPartialMatch
             // was silently inapplicable to exactly the commands that scored well enough to fire
-            // incomplete. This one scores (1 + 1 + 1 + 1 - 1) / 5 = 0.60, right on the gate.
+            // incomplete.
+            //
+            // The candidate sits clear of the gate rather than on it (issue #76): eight required
+            // elements, seven matched and the trailing {target} stranded, so (7 x 1 - 1) / 8 =
+            // 0.75. On the gate value itself the routing assertion would fail open — a scoring
+            // change that dropped the candidate below minScore would still route it to pending,
+            // for the ordinary below-gate reason, and prove nothing about completeness.
             _recogniser.Configure(
                 new[]
                 {
                     new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
                     new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
                     new VoxrSlotDefinition("quantity", new[] { "all", "one", "two" }),
+                    new VoxrSlotDefinition("tube", new[] { "one", "two", "three" }),
                 },
                 new[]
                 {
@@ -126,7 +133,17 @@ namespace VoXR.Tests.Runtime
                         "launch_weapon",
                         new[]
                         {
-                            new[] { "launch", "{?quantity}", "{weapon}", "target", "{target}" },
+                            new[]
+                            {
+                                "launch",
+                                "{quantity}",
+                                "{weapon}",
+                                "from",
+                                "tube",
+                                "{tube}",
+                                "at",
+                                "{target}",
+                            },
                         },
                         allowPartialMatch: true
                     ),
@@ -141,7 +158,7 @@ namespace VoXR.Tests.Runtime
             VoxrCommand? recognised = null;
             _recogniser.OnCommandRecognised += cmd => recognised = cmd;
 
-            _recogniser.InjectText("launch all missiles target");
+            _recogniser.InjectText("launch all missiles from tube three at");
 
             Assert.IsFalse(
                 recognised.HasValue,
@@ -151,7 +168,21 @@ namespace VoXR.Tests.Runtime
                 pending.HasValue,
                 "it goes to slot-fill, which is where it always belonged"
             );
+            // The pending command carries the parse score through untouched, so this pins the
+            // hand-derived 0.75 without a second parser: it is the candidate that was routed.
+            Assert.AreEqual(
+                6f / 8f,
+                pending.Value.Score,
+                0.001f,
+                "the hand-derived score no longer holds — re-derive it and argue the new value"
+            );
+            Assert.GreaterOrEqual(
+                pending.Value.Score,
+                0.6f,
+                "and it must clear the default minScore, or completeness is not what routed it"
+            );
             Assert.AreEqual("missiles", pending.Value.GetSlot("weapon"));
+            Assert.AreEqual("three", pending.Value.GetSlot("tube"));
             Assert.IsTrue(_recogniser.HasPendingCommand);
 
             _recogniser.InjectText("hotel one");
@@ -171,26 +202,50 @@ namespace VoXR.Tests.Runtime
             // set_burn deliberately does NOT opt into partial matching, so the incomplete second
             // utterance is rejected rather than entering pending itself — which is what isolates
             // this to the cancellation and keeps it from passing for the wrong reason.
-            _recogniser.Configure(
-                new[]
-                {
-                    new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
-                    new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
-                    new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" }),
-                },
-                new[]
-                {
-                    new VoxrCommandDefinition(
-                        "launch_weapon",
-                        new[] { new[] { "launch", "{weapon}", "target", "{target}" } },
-                        allowPartialMatch: true
-                    ),
-                    new VoxrCommandDefinition(
-                        "set_burn",
-                        new[] { new[] { "set", "burn", "to", "{burn_level}", "now" } }
-                    ),
-                }
+            //
+            // Its pattern is eight elements rather than five (issue #76) so the incomplete
+            // candidate lands clear of the gate at (7 x 1 - 1) / 8 = 0.75. On the gate value
+            // itself this test fails open: a scoring change that pushed the candidate below
+            // minScore would still leave the pending command alive — rejected on score, never
+            // reaching the completeness term that Step 4 exists to apply.
+            var slots = new[]
+            {
+                new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+                new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                new VoxrSlotDefinition("burn_level", new[] { "coast", "hard burn" }),
+            };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "launch_weapon",
+                    new[] { new[] { "launch", "{weapon}", "target", "{target}" } },
+                    allowPartialMatch: true
+                ),
+                new VoxrCommandDefinition(
+                    "set_burn",
+                    new[]
+                    {
+                        new[] { "helm", "set", "burn", "to", "{burn_level}", "on", "my", "mark" },
+                    }
+                ),
+            };
+
+            // Nothing fires and nothing pends for set_burn, so no event carries its score —
+            // pin it against the same grammar directly, or the assertions below cannot tell
+            // "refused as incomplete" from "never cleared the gate".
+            var probe = new VoxrCommandParser(slots, commands).Parse("helm set burn to on my mark");
+            Assert.AreEqual(1, probe.Length);
+            Assert.AreEqual("set_burn", probe[0].Command.Intent);
+            Assert.AreEqual(
+                6f / 8f,
+                probe[0].Command.Score,
+                0.001f,
+                "the hand-derived score no longer holds — re-derive it and argue the new value"
             );
+            Assert.GreaterOrEqual(probe[0].Command.Score, 0.6f, "and it must clear minScore");
+            Assert.IsFalse(probe[0].Command.HasSlot("burn_level"), "with {burn_level} stranded");
+
+            _recogniser.Configure(slots, commands);
             _recogniser.BufferWindow = 0f;
             _recogniser.CommandCooldown = 0f;
             _recogniser.PendingTimeout = 30f;
@@ -203,8 +258,7 @@ namespace VoXR.Tests.Runtime
             _recogniser.OnCommandCancelled += _ => cancelledCount++;
             _recogniser.OnCommandRecognised += cmd => recognised = cmd;
 
-            // Scores (1 + 1 + 1 - 1 + 1) / 5 = 0.60 with {burn_level} stranded.
-            _recogniser.InjectText("set burn to now");
+            _recogniser.InjectText("helm set burn to on my mark");
 
             Assert.IsFalse(recognised.HasValue, "the incomplete command must not fire");
             Assert.AreEqual(

@@ -888,23 +888,61 @@ namespace VoXR.Tests.Runtime
         // TryEagerCommit has refused a command with an unfilled required slot since #66. The
         // ordinary flush path — the one on by default — had no such condition, so a slot-missing
         // candidate that cleared minScore fired with its argument simply absent.
+        //
+        // The claim is "an incomplete command does not fire AT ANY SCORE", so the cases below
+        // are spread across the range instead of clustered on the gate value (issue #76). A case
+        // pinned to 0.60 witnesses only "does not fire at 0.60", which the suite would keep
+        // reporting green if the completeness term were deleted and the gate loosened to
+        // `> minScore` — the exact regression these tests exist to catch.
 
-        [Test]
-        public void SlotMissing_AboveGate_DoesNotFire()
+        // Pins the candidate's score against the caller's hand-derived expectation, then asserts
+        // the recogniser refuses to fire it.
+        //
+        // The pin is the point. Without it a does-not-fire assertion FAILS OPEN: any change to
+        // the score denominator that pushed the candidate below minScore would leave the test
+        // green for the wrong reason — rejected on score, never reaching the completeness branch
+        // — with nothing to signal that it had gone vacuous. Per the #65 §7.3 discipline the
+        // expected scores are hand-derived and argued at each call site, never updated to
+        // whatever the code happens to emit.
+        void AssertIncompleteDoesNotFire(
+            VoxrSlotDefinition[] slots,
+            VoxrCommandDefinition[] commands,
+            string utterance,
+            float expectedScore,
+            string strandedSlot
+        )
         {
-            // #73's repro, and the deliberate counterpart to the boundary test above: both land
-            // on exactly 0.60 and both clear the >= gate, so score cannot be what separates them.
-            // "launch all missiles target" matches launch, {?quantity}, {weapon} and target, then
-            // strands {target}: (1 + 1 + 1 + 1 - 1) / 5 = 0.60. Firing it hands the handler a
-            // launch order with nothing to launch at.
-            ConfigureWithSyncDefaults();
+            var probe = new VoxrCommandParser(slots, commands).Parse(utterance);
+            Assert.AreEqual(1, probe.Length, "the utterance must yield exactly one candidate");
+            Assert.IsTrue(probe[0].IsMatch, "and that candidate must be a match");
+            Assert.AreEqual(
+                expectedScore,
+                probe[0].Command.Score,
+                0.001f,
+                "the hand-derived score no longer holds — re-derive it and argue the new value "
+                    + "before touching anything else, because everything below rests on it"
+            );
+            Assert.GreaterOrEqual(
+                probe[0].Command.Score,
+                0.6f,
+                "the candidate must clear the default minScore, or the refusal below proves "
+                    + "nothing about completeness"
+            );
+            Assert.IsFalse(
+                probe[0].Command.HasSlot(strandedSlot),
+                $"'{strandedSlot}' must really be unfilled — that is what the recogniser rejects on"
+            );
+
+            _recogniser.Configure(slots, commands);
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
 
             int recognisedCount = 0;
             string unrecognised = null;
             _recogniser.OnCommandRecognised += _ => recognisedCount++;
             _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
 
-            _recogniser.InjectText("launch all missiles target");
+            _recogniser.InjectText(utterance);
 
             Assert.AreEqual(
                 0,
@@ -912,9 +950,132 @@ namespace VoXR.Tests.Runtime
                 "a command missing a required argument must not fire, whatever it scores"
             );
             Assert.AreEqual(
-                "launch all missiles target",
+                utterance,
                 unrecognised,
                 "and the utterance is reported unrecognised rather than dropped in silence"
+            );
+        }
+
+        [Test]
+        public void SlotMissing_OnTheGate_DoesNotFire()
+        {
+            // #73's own repro, kept because it is the shape that was actually reported, and the
+            // deliberate counterpart to the boundary test above: both land on exactly 0.60 and
+            // both clear the >= gate, so score cannot be what separates them. "launch all
+            // missiles target" matches launch, {?quantity}, {weapon} and target, then strands
+            // {target}: (1 + 1 + 1 + 1 - 1) / 5 = 0.60. Firing it hands the handler a launch
+            // order with nothing to launch at.
+            //
+            // Sitting on the boundary is precisely what the helper's score pin protects: nothing
+            // else would notice this candidate sliding underneath the gate.
+            AssertIncompleteDoesNotFire(
+                MakeSlots(),
+                MakeCommands(),
+                "launch all missiles target",
+                3f / 5f,
+                "target"
+            );
+        }
+
+        [Test]
+        public void SlotMissing_AboveGate_DoesNotFire()
+        {
+            // Clear of the boundary, so the completeness branch is the only condition in Step 7
+            // that can reject this. Eight required elements — nothing optional, so the
+            // denominator is the pattern length outright — with seven matched and the trailing
+            // {target} stranded: (7 x 1 - 1) / 8 = 0.75.
+            var slots = new[]
+            {
+                new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two", "alpha one" }),
+                new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                new VoxrSlotDefinition("quantity", new[] { "all", "one", "two" }),
+                new VoxrSlotDefinition("tube", new[] { "one", "two", "three" }),
+            };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "launch_weapon",
+                    new[]
+                    {
+                        new[]
+                        {
+                            "launch",
+                            "{quantity}",
+                            "{weapon}",
+                            "from",
+                            "tube",
+                            "{tube}",
+                            "at",
+                            "{target}",
+                        },
+                    }
+                ),
+                new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+            };
+
+            AssertIncompleteDoesNotFire(
+                slots,
+                commands,
+                "launch all missiles from tube three at",
+                6f / 8f,
+                "target"
+            );
+        }
+
+        [Test]
+        public void SlotMissing_FarAboveGate_DoesNotFire()
+        {
+            // The witness for "at ANY score" (issue #76). One stranded slot on a fourteen-element
+            // pattern: (13 x 1 - 1) / 14 = 0.857 — a full 0.257 above the gate, which no
+            // plausible drift in the denominator moves under it. Concretely, coverage would have
+            // to charge more than six whole tokens' worth of unexplained speech — 12 / (14 + c)
+            // < 0.60 needs c > 6 — against an utterance the pattern consumes end to end.
+            //
+            // The pattern is deliberately long: with every element required and exactly one slot
+            // stranded the score is (N - 2) / N, so headroom above the gate is bought only with
+            // length. {target} is stranded mid-pattern and the tail still matches, which is also
+            // what keeps the coverage term at zero here — "on my mark" consumes the rest, so
+            // nothing is left orphaned after the last match.
+            var slots = new[]
+            {
+                new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two", "alpha one" }),
+                new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                new VoxrSlotDefinition("quantity", new[] { "all", "one", "two" }),
+                new VoxrSlotDefinition("tube", new[] { "one", "two", "three" }),
+            };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "launch_weapon",
+                    new[]
+                    {
+                        new[]
+                        {
+                            "weapons",
+                            "free",
+                            "launch",
+                            "{quantity}",
+                            "{weapon}",
+                            "from",
+                            "tube",
+                            "{tube}",
+                            "at",
+                            "target",
+                            "{target}",
+                            "on",
+                            "my",
+                            "mark",
+                        },
+                    }
+                ),
+            };
+
+            AssertIncompleteDoesNotFire(
+                slots,
+                commands,
+                "weapons free launch all missiles from tube three at target on my mark",
+                12f / 14f,
+                "target"
             );
         }
 
