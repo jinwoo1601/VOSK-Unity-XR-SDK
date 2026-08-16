@@ -198,7 +198,8 @@ namespace VoXR.Commands
             // rather than charge them as unexplained (issue #65 §5.2).
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands,
                 coverageWeight,
-                GetFollowUpGrammarWords()
+                GetFollowUpGrammarWords(),
+                cancelVocabulary
             );
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
@@ -302,7 +303,8 @@ namespace VoXR.Commands
 
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands,
                 coverageWeight,
-                GetFollowUpGrammarWords()
+                GetFollowUpGrammarWords(),
+                cancelVocabulary
             );
         }
 

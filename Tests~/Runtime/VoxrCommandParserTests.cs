@@ -4165,6 +4165,210 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void SiblingWarning_MembersDisagreeingOnTheAuthoredIndex_NumberEachPattern()
+        {
+            // Issue #91, the asymmetric shape it was opened for. The set is keyed on the frame
+            // "switch to *", which is P1's reading with "?please" omitted — so the frame's
+            // discriminator index is 2 while the word sits at index 3 of the pattern the
+            // message QUOTES. One number cannot serve both members, and the number that shipped
+            // pointed an author at "to".
+            //
+            // The longest-frame preference does not rescue this one: it collapses two frames
+            // carrying the SAME members, and here P2 contributes no four-element form at all,
+            // so there is only ever one frame to choose from.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"\\?please switch to weapons\" \\(with its optional elements "
+                        + "omitted\\) at element 4 and \"switch to navigation\" at element 3 "
+                        + "that differ only at that element "
+                        + "\\(\"weapons\" or \"navigation\"\\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mode_weapons", SibP("?please", "switch", "to", "weapons")),
+                    Sib("mode_navigation", SibP("switch", "to", "navigation")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_SymmetricSetWithABarePattern_NumbersEachPatternToo()
+        {
+            // The symmetric case issue #91 explicitly carved out as already fixed by the
+            // longest-frame preference. That carve-out died with issue #90: member retention
+            // means the three-member set and the two-member set no longer carry the same
+            // members, so IndexOfSameMembers returns -1 and the preference never runs. Both
+            // sets are emitted, and the three-member one mixes authored indices 3, 3 and 2.
+            //
+            // Item 2's architecture §6.4 fixture, pinned here as the second half of F14.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'set_mode', 'set_level' and 'set_bare' have patterns "
+                        + "\"set \\?now mode on\" \\(with its optional elements omitted\\) at "
+                        + "element 3, \"set \\?now level on\" \\(with its optional elements "
+                        + "omitted\\) at element 3 and \"set mode on\" at element 2 that differ "
+                        + "only at that element \\(\"mode\" or \"level\"\\)"
+                )
+            );
+            // The four-element frame's two members DO agree, so it keeps the established
+            // shorter wording. That split is the point: only the messages that were wrong move.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'set_mode' and 'set_level' have patterns \"set \\?now mode on\" "
+                        + "and \"set \\?now level on\" that differ only at element 3 "
+                        + "\\(\"mode\" or \"level\"\\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("set_mode", SibP("set", "?now", "mode", "on")),
+                    Sib("set_level", SibP("set", "?now", "level", "on")),
+                    Sib("set_bare", SibP("set", "mode", "on")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_SameIntentDiscriminator_ReportsNoCancelCollision()
+        {
+            // F13. Item 1 reported every collision and left "whether a same-intent tie is ever
+            // routed to the speaker" for the later items; item 3 decided it — never routed,
+            // because the same command is dispatched either way. So a value only reachable
+            // within one intent can never be given as an answer, and warning about it is a
+            // knowingly false advisory.
+            //
+            // Same grammar as SiblingWarning_DiscriminatorCollidingWithCancel_IsAlsoReported
+            // but for the intents, which is what makes this the narrowing and not a new rule.
+            // The set is single-intent, so the sibling warning is withheld too and
+            // NoUnexpectedReceived is the whole assertion.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib(
+                        "mark_contact",
+                        SibP("mark", "contact", "friendly"),
+                        SibP("mark", "contact", "negative")
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_CancelCollisionReachableOnlyThroughOnePair_StillReports()
+        {
+            // The narrowing is per-PAIR, not per-set, and this is the shape that separates
+            // them. The set is cross-intent overall, but "negative" is answerable from exactly
+            // one member: the 'ident_hostile' one, whose only different-valued co-member
+            // ('ident_friendly') carries a different intent. The 'mark_contact' member carrying
+            // the same word is NOT answerable — its only different-valued co-member shares its
+            // intent.
+            //
+            // A set-level test would report it from the wrong member and print that member's
+            // element number. So would a per-value dedup that suppressed against any earlier
+            // member rather than against earlier REPORTABLE ones — 'mark_contact' comes first
+            // and would have swallowed the real collision.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intent 'ident_hostile' carries the discriminating value \"negative\" at "
+                        + "element 3, which is also in the default cancel vocabulary"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib(
+                        "mark_contact",
+                        SibP("mark", "contact", "negative"),
+                        SibP("mark", "contact", "friendly")
+                    ),
+                    Sib("ident_hostile", SibP("mark", "contact", "negative")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_CancelVocabularyOverridden_ReportsAgainstTheOverride()
+        {
+            // F12. The report is computed against the vocabulary that will actually run, so an
+            // author who resolved the collision by overriding cancelVocabulary is not told
+            // about it again — and one they INTRODUCED with that override is reported.
+            //
+            // The wording follows: naming "the default cancel vocabulary" here would be false,
+            // and "override cancelVocabulary" is not a remedy for someone who already has.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intent 'mark_bravo' carries the discriminating value \"bravo\" at element "
+                        + "3, which is also in the cancel vocabulary configured on "
+                        + "VoxrCommandRecogniser.*drop that word from cancelVocabulary"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mark_alpha", SibP("mark", "contact", "alpha")),
+                    Sib("mark_bravo", SibP("mark", "contact", "bravo")),
+                },
+                effectiveCancelVocabulary: new[] { "bravo", "scrub that" }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_CancelVocabularyOverrideResolvesTheCollision_ReportsNothing()
+        {
+            // The other direction, and the one that makes the plumbing worth doing: "negative"
+            // collides with the DEFAULT vocabulary, and this author replaced it. Reporting the
+            // collision anyway would send them to fix a grammar that is already correct.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("answer_affirmative", SibP("mark", "contact", "friendly")),
+                    Sib("answer_negative", SibP("mark", "contact", "negative")),
+                },
+                effectiveCancelVocabulary: new[] { "scrub that" }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void SiblingWarning_DiscriminatorsClearOfCancel_ReportNoCollision()
         {
             // The other half: the collision report must not fire on ordinary values, or it is

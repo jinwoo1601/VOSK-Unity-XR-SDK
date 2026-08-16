@@ -35,12 +35,27 @@ namespace VoXR.Commands
         public readonly string Intent;
         public readonly string Value;
 
-        public SiblingMember(int commandIndex, int patternIndex, string intent, string value)
+        // Where the discriminating literal sits in the pattern the AUTHOR wrote, which is not
+        // in general where it sits in the set's frame (issue #91). The frame is one EXPANSION's
+        // shape, so a member whose form omitted an optional element carries the value at a
+        // later authored position than the frame's DiscriminatorIndex names — and the warning
+        // quotes the authored pattern while printing the frame's number, so it can point at a
+        // different word than the one it is about.
+        public readonly int AuthoredDiscriminatorIndex;
+
+        public SiblingMember(
+            int commandIndex,
+            int patternIndex,
+            string intent,
+            string value,
+            int authoredDiscriminatorIndex
+        )
         {
             CommandIndex = commandIndex;
             PatternIndex = patternIndex;
             Intent = intent;
             Value = value;
+            AuthoredDiscriminatorIndex = authoredDiscriminatorIndex;
         }
     }
 
@@ -275,6 +290,16 @@ namespace VoXR.Commands
         List<SiblingSet> _siblingSets;
 #pragma warning restore CS0649
 
+        // The cancel words the recogniser will actually match against, resolved once here so
+        // the construction-time collision report tests the same array TryHandleConfirmCancel
+        // will. Never null: an unset or empty override falls back to DefaultCancel.
+        readonly string[] _effectiveCancelVocabulary;
+
+        // Whether that array came from the caller rather than the default. Read only by the
+        // collision message, which has to name the right source and offer the remedy that still
+        // applies — "override cancelVocabulary" is not advice for an author who already did.
+        readonly bool _cancelVocabularyIsOverridden;
+
         // Pooled StringBuilder for TryMatchNumberSequence.
         readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
 
@@ -294,9 +319,19 @@ namespace VoXR.Commands
         // legitimately begin something — a follow-up — so they terminate an orphan run exactly
         // as a pattern start does. Null is correct for a caller that registered no follow-up
         // vocabulary with the decoder either.
+        //
+        // effectiveCancelVocabulary is the caller's configured cancel words, so the
+        // construction-time collision report is computed against the vocabulary that will
+        // actually run rather than against DefaultCancel (item 1's architecture §4.1, deferred
+        // to issue #74 item 3). Optional, and null/empty falls back to the default exactly as
+        // PendingCommandHandler.TryHandleConfirmCancel does — the report and the behaviour it
+        // predicts read from one rule. It is a CONSTRUCTOR parameter rather than a settable
+        // property because WarnOnSiblingDiscriminator runs inside this constructor, so a
+        // property would be assigned after the warning it governs had already been emitted.
         public VoxrCommandParser(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
             float coverageWeight = DefaultCoverageWeight,
-            string[] additionalGrammarWords = null
+            string[] additionalGrammarWords = null,
+            string[] effectiveCancelVocabulary = null
         )
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
@@ -304,6 +339,11 @@ namespace VoXR.Commands
 
             _slots = slots;
             _commands = commands;
+            _cancelVocabularyIsOverridden =
+                effectiveCancelVocabulary != null && effectiveCancelVocabulary.Length > 0;
+            _effectiveCancelVocabulary = _cancelVocabularyIsOverridden
+                ? effectiveCancelVocabulary
+                : VoxrFollowUpVocabulary.DefaultCancel;
             // Rejects negatives and NaN, and also non-finite positives: at +infinity a
             // candidate with nothing unexplained computes 0 * infinity = NaN, and NaN slips
             // through every `<= 0f` floor because those comparisons are false for NaN.
@@ -885,6 +925,45 @@ namespace VoXR.Commands
             return false;
         }
 
+        // Maps a discriminator's index in an expanded FORM back to its index in the pattern the
+        // author wrote (issue #91). Exact by counting, not by matching text — the obvious
+        // implementation, a two-pointer walk comparing element strings, is ambiguous on a
+        // pattern carrying two identical optionals (["a","?x","?x","b"]), which ExpandOptionals
+        // reaches because it enumerates 2^optionals subsets without deduplicating.
+        //
+        // Two facts make counting exact:
+        //   1. ExpandOptionals walks the authored pattern in order and only ever OMITS optional
+        //      positions, so every surviving element keeps its string and its relative order.
+        //   2. The only caller passes a `formIndex` where IsRequiredLiteral holds, and a
+        //      required element is never one of the omitted ones.
+        // So the form's non-optional elements ARE the pattern's non-optional elements, in the
+        // same order: the discriminator is the (r+1)-th of them in the form, hence the (r+1)-th
+        // in the pattern.
+        //
+        // When WarningForms hands back the raw pattern — no optionals, or past
+        // MaxWarningExpansion — form and pattern are the same array and this returns formIndex,
+        // as it must.
+        static int AuthoredIndexOfFormElement(string[] pattern, string[] form, int formIndex)
+        {
+            int rank = 0;
+            for (int i = 0; i < formIndex; i++)
+                if (CreditsRequired(form[i]))
+                    rank++;
+
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                if (!CreditsRequired(pattern[i]))
+                    continue;
+                if (rank == 0)
+                    return i;
+                rank--;
+            }
+
+            // Unreachable while (1) and (2) hold. Falling back to the form's own index keeps a
+            // future violation to a mis-numbered warning rather than an out-of-range read.
+            return formIndex;
+        }
+
         // What a candidate scores once the discriminator is dropped. Every element keeps its
         // usual weight — a matched slot credits MatchScore whether or not it is optional, and
         // only an optional literal credits OptionalLiteralScore — so the frame's total weight
@@ -998,7 +1077,13 @@ namespace VoXR.Commands
                             }
 
                             bucket.Members.Add(
-                                new SiblingMember(ci, pi, commands[ci].Intent, form[d])
+                                new SiblingMember(
+                                    ci,
+                                    pi,
+                                    commands[ci].Intent,
+                                    form[d],
+                                    AuthoredIndexOfFormElement(patterns[pi], form, d)
+                                )
                             );
                         }
                     }
@@ -1239,25 +1324,37 @@ namespace VoXR.Commands
                 )
                     UnityEngine.Debug.LogWarning(BuildSiblingWarning(set));
 
-                // The collision report is NOT narrowed the same way, and the difference is
-                // deliberate. The intent filter above rests on the wrong-INTENT harm, which a
-                // same-intent set cannot cause; this report is about a discriminating value
-                // being unreachable as an answer, which does not depend on whether the rival
-                // patterns share an intent. Whether a same-intent tie is ever routed to the
-                // speaker is left open for the later items to decide, so silencing this on
-                // their behalf would be guessing. It costs nothing to be wrong in this
-                // direction: one collision surfaced across the entire test corpus.
+                // The collision report is narrowed differently from the filter above, and the
+                // difference is still deliberate. That filter rests on the wrong-INTENT harm at
+                // the SET level; this report is about one discriminating value being unreachable
+                // as an answer, which is a per-PAIR question — item 2 established that a set can
+                // be cross-intent overall while a particular pair inside it shares an intent.
+                //
+                // Item 1 left "whether a same-intent tie is ever routed to the speaker" open for
+                // the later items, and reported every collision rather than guess on their
+                // behalf. Issue #74 item 3 decided it: same-intent ties are never routed, because
+                // the same command is dispatched either way. So a value is reachable as an answer
+                // only if some co-member carries BOTH a different value and a different intent —
+                // IsAnswerableRival, shared with the runtime gate rather than copied. Reporting a
+                // collision on a value the runtime would never ask about is a knowingly false
+                // advisory, the class issue #81 spent a whole feature reversing.
+                //
+                // Tested against the EFFECTIVE cancel vocabulary, so an author who already
+                // resolved the collision by overriding cancelVocabulary is not told about it
+                // again.
                 //
                 // Reported once per colliding VALUE, not once per member. Since issue #90 a
-                // value can be carried by several patterns, and the remedy — rename the literal,
-                // or override cancelVocabulary — is the same advice however many patterns spell
-                // it, so repeating it would be noise.
+                // value can be carried by several patterns, and the remedy is the same advice
+                // however many patterns spell it, so repeating it would be noise. The dedup
+                // counts only members that would themselves be reported: a value carried by an
+                // unanswerable member first and an answerable one later is a real collision, and
+                // suppressing it against the earlier member would lose it.
                 for (int m = 0; m < set.Members.Length; m++)
                 {
-                    if (
-                        Array.IndexOf(VoxrFollowUpVocabulary.DefaultCancel, set.Members[m].Value)
-                        < 0
-                    )
+                    if (Array.IndexOf(_effectiveCancelVocabulary, set.Members[m].Value) < 0)
+                        continue;
+
+                    if (!HasAnswerableCoMember(set, m))
                         continue;
 
                     bool alreadyReported = false;
@@ -1268,7 +1365,7 @@ namespace VoXR.Commands
                                 set.Members[e].Value,
                                 set.Members[m].Value,
                                 StringComparison.Ordinal
-                            )
+                            ) && HasAnswerableCoMember(set, e)
                         )
                         {
                             alreadyReported = true;
@@ -1278,7 +1375,9 @@ namespace VoXR.Commands
                     if (alreadyReported)
                         continue;
 
-                    UnityEngine.Debug.LogWarning(BuildCancelCollisionWarning(set, set.Members[m]));
+                    UnityEngine.Debug.LogWarning(
+                        BuildCancelCollisionWarning(set.Members[m], _cancelVocabularyIsOverridden)
+                    );
                 }
             }
         }
@@ -1326,6 +1425,54 @@ namespace VoXR.Commands
                 )
                     return false;
             return true;
+        }
+
+        // Could the speaker ever be asked to choose B over A, and pick B out by saying its
+        // word? Both halves are required:
+        //
+        //   different VALUE — otherwise there is nothing to say that distinguishes them. Two
+        //   members reaching the same literal are duplicates of each other, not siblings (item
+        //   1's requirements F8).
+        //
+        //   different INTENT — otherwise the answer changes nothing. The same command is
+        //   dispatched either way, so asking costs the speaker a round trip to choose between
+        //   identical outcomes. Item 1 left "whether a same-intent tie is ever routed to the
+        //   speaker" open for the later items; issue #74 item 3 decided it: never routed.
+        //
+        // Deliberately a predicate over four strings rather than a method on SiblingMember. Its
+        // two consumers hold the same facts in different structures — the Editor report walks
+        // SiblingMembers, the runtime gate walks SiblingMemberships and _commands — and
+        // _siblingSets is Editor-assigned only, so a shared rule expressed over SiblingMember
+        // would be a null dereference the moment the runtime path reached it in a player.
+        static bool IsAnswerableRival(
+            string valueA,
+            string intentA,
+            string valueB,
+            string intentB
+        ) =>
+            !string.Equals(valueA, valueB, StringComparison.Ordinal)
+            && !string.Equals(intentA, intentB, StringComparison.Ordinal);
+
+        // The set-local form of the question above: is this member's discriminating value ever
+        // something the speaker could be asked to say? Per-PAIR, not per-set, because item 2
+        // established that a set can be cross-intent overall while a particular pair inside it
+        // shares an intent — one command contributing two patterns alongside a third from
+        // another.
+        static bool HasAnswerableCoMember(SiblingSet set, int m)
+        {
+            var members = set.Members;
+            for (int o = 0; o < members.Length; o++)
+                if (
+                    o != m
+                    && IsAnswerableRival(
+                        members[m].Value,
+                        members[m].Intent,
+                        members[o].Value,
+                        members[o].Intent
+                    )
+                )
+                    return true;
+            return false;
         }
 
         // DR-1 applied to the two patterns' REQUIRED elements — their all-optionals-omitted
@@ -1539,11 +1686,17 @@ namespace VoXR.Commands
             if (a == null || b == null)
                 return false;
 
+            // Same rule as the Editor collision report's narrowing, one definition (F13). The
+            // intent half is already decided above — this pair reached here only by carrying
+            // two different intents — so IsAnswerableRival reduces to the value test here, and
+            // is called anyway so the two consumers cannot drift apart.
+            string intentA = _commands[ci1].Intent;
+            string intentB = _commands[ci2].Intent;
             for (int i = 0; i < a.Length; i++)
             for (int j = 0; j < b.Length; j++)
                 if (
                     a[i].SetId == b[j].SetId
-                    && !string.Equals(a[i].Value, b[j].Value, StringComparison.Ordinal)
+                    && IsAnswerableRival(a[i].Value, intentA, b[j].Value, intentB)
                 )
                     return true;
 
@@ -1566,6 +1719,22 @@ namespace VoXR.Commands
             // patterns of distinct intents carrying identical authored text. Printing it twice
             // would have the message assert that patterns "differ only at element N" while two
             // of the strings it just listed differ at no element at all.
+            //
+            // Whether one element number can speak for the whole set (issue #91). The frame's
+            // DiscriminatorIndex is an index into ONE expansion's shape, so a member whose form
+            // omitted an optional carries its value at a later authored position — and it is
+            // the AUTHORED pattern this message quotes. When the members agree, one number is
+            // still right for all of them and the message keeps its shorter, established
+            // wording; when they disagree, no single number can be right and each quoted
+            // pattern carries its own.
+            bool sharedIndex = true;
+            for (int i = 1; i < members.Length; i++)
+                if (members[i].AuthoredDiscriminatorIndex != members[0].AuthoredDiscriminatorIndex)
+                {
+                    sharedIndex = false;
+                    break;
+                }
+
             var patternTexts = new List<string>(members.Length);
             for (int i = 0; i < members.Length; i++)
             {
@@ -1573,6 +1742,9 @@ namespace VoXR.Commands
                 string text = "\"" + string.Join(" ", raw) + "\"";
                 if (raw.Length != set.Frame.Length)
                     text += " (with its optional elements omitted)";
+                // Authors count elements from one.
+                if (!sharedIndex)
+                    text += $" at element {members[i].AuthoredDiscriminatorIndex + 1}";
                 if (!patternTexts.Contains(text))
                     patternTexts.Add(text);
             }
@@ -1601,10 +1773,13 @@ namespace VoXR.Commands
                     values.Add(quoted);
             }
 
-            // Authors count elements from one.
+            string differ = sharedIndex
+                ? $"that differ only at element {members[0].AuthoredDiscriminatorIndex + 1}"
+                : "that differ only at that element";
+
             return $"[VoxrCommandParser] Intents {JoinWith(intents, "and")} have "
-                + $"patterns {JoinWith(patternTexts, "and")} that differ only at element "
-                + $"{set.DiscriminatorIndex + 1} ({JoinWith(values, "or")}). If that word is "
+                + $"patterns {JoinWith(patternTexts, "and")} {differ} "
+                + $"({JoinWith(values, "or")}). If that word is "
                 + "dropped, these patterns match the remainder equally — same score, same "
                 + "consumed span, same literal count — and selection falls through to "
                 + "registration order, so the wrong intent can fire. Make them differ in more "
@@ -1612,19 +1787,34 @@ namespace VoXR.Commands
                 + "— or mark the more destructive one requiresConfirmation.";
         }
 
-        static string BuildCancelCollisionWarning(SiblingSet set, SiblingMember member)
+        // Takes the MEMBER's authored index, not the set's DiscriminatorIndex: this message
+        // names one member and quotes its value, so the number has to index that member's own
+        // pattern (issue #91, the same defect as above and one message over).
+        static string BuildCancelCollisionWarning(SiblingMember member, bool vocabularyOverridden)
         {
-            // Stated as a future consequence rather than current behaviour: nothing in this
-            // version asks the speaker to choose between siblings, so there is no answer to
-            // swallow yet. Reported now because the remedy is to rename a grammar literal, and
-            // that is cheaper to do while the grammar is being written than after.
+            // Stated as a future consequence rather than current behaviour: this version asks
+            // the speaker to choose between siblings only when disambiguateSiblingTies is on,
+            // and it is off by default, so on most grammars there is no answer to swallow yet.
+            // Reported now because the remedy is to rename a grammar literal, and that is
+            // cheaper to do while the grammar is being written than after.
+            //
+            // Naming the right vocabulary and the remedy that still applies matters, not just
+            // reads better: once the report is computed against a configured override, "the
+            // DEFAULT cancel vocabulary" is false and "override cancelVocabulary" is advice the
+            // author has already taken.
+            string source = vocabularyOverridden
+                ? "also in the cancel vocabulary configured on VoxrCommandRecogniser"
+                : "also in the default cancel vocabulary";
+            string remedy = vocabularyOverridden
+                ? "Rename the literal, or drop that word from cancelVocabulary."
+                : "Rename the literal, or override cancelVocabulary on VoxrCommandRecogniser.";
+
             return $"[VoxrCommandParser] Intent '{member.Intent}' carries the discriminating "
-                + $"value \"{member.Value}\" at element {set.DiscriminatorIndex + 1}, which is "
-                + "also in the default cancel vocabulary. Follow-up handling checks cancel "
+                + $"value \"{member.Value}\" at element {member.AuthoredDiscriminatorIndex + 1}, "
+                + $"which is {source}. Follow-up handling checks cancel "
                 + "before anything else, so if this ambiguity is ever routed to the speaker to "
                 + "resolve, answering with that word would cancel rather than choose that "
-                + "option. Rename the literal, or override cancelVocabulary on "
-                + "VoxrCommandRecogniser.";
+                + $"option. {remedy}";
         }
 
         public VoxrCommandResult[] Parse(string text, VoxrWord[] words)
