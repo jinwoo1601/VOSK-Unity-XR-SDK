@@ -239,6 +239,23 @@ namespace VoXR.Commands
         bool[][] _canCommitEarly;
         bool _canCommitEarlyComputed;
 
+        // Sibling-set lookup keyed by [commandIdx][patternIdx], which is the key design §5.1
+        // specifies and the reason SiblingMember carries those indices. Null at a pattern that
+        // belongs to no set — the common case; most patterns of the demo grammar are in none.
+        //
+        // The leaf is an ARRAY because one pattern can belong to several sets: ["a","b","c"] is
+        // a sibling of ["a","b","d"] at position 2 and of ["a","x","c"] at position 1, and a
+        // scalar id would silently keep one hazard and lose the other.
+        //
+        // Lazy for the reason _canCommitEarly is (see the note at the end of the constructor):
+        // a parser rebuilt on every slot change but never asked for an eager verdict should not
+        // pay for this. In the Editor the construction-time warning consumes the same lookup,
+        // so there it is built at construction and built ONCE — not once per consumer, which is
+        // what DR-2 asks for.
+        SiblingMembership[][][] _siblingMemberships;
+        List<SiblingSet> _siblingSets;
+        bool _siblingLookupComputed;
+
         // Pooled StringBuilder for TryMatchNumberSequence.
         readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
 
@@ -1133,9 +1150,16 @@ namespace VoXR.Commands
         // messages pin them in editor Play Mode, where this package's Runtime suite runs, and
         // not in a built player.
         [System.Diagnostics.Conditional("UNITY_EDITOR")]
-        static void WarnOnSiblingDiscriminator(VoxrCommandDefinition[] commands)
+        void WarnOnSiblingDiscriminator(VoxrCommandDefinition[] commands)
         {
-            var sets = FindSiblingSets(commands);
+            // Consumes the shared lookup instead of calling FindSiblingSets again. DR-2 asks
+            // for ONE sibling-set computation consumed by the warning and by selection, and two
+            // calls per parser would be two — a cost no measurement here would have caught,
+            // since the A/B rig defines no UNITY_EDITOR and this [Conditional] caller elides
+            // there entirely. In a player that is exactly what happens: this call disappears
+            // and the lookup is instead built on the first eager check.
+            EnsureSiblingLookup();
+            var sets = _siblingSets;
 
             for (int s = 0; s < sets.Count; s++)
             {
@@ -1254,6 +1278,126 @@ namespace VoXR.Commands
                 )
                     return false;
             return true;
+        }
+
+        // One pattern's membership of one sibling set. The value rides along so the pair test
+        // below never has to walk SiblingSet.Members looking for a matching (command, pattern).
+        readonly struct SiblingMembership
+        {
+            public readonly int SetId;
+            public readonly string Value;
+
+            public SiblingMembership(int setId, string value)
+            {
+                SetId = setId;
+                Value = value;
+            }
+        }
+
+        // Builds the runtime lookup on first use and caches it, exactly as EnsureCanCommitEarly
+        // does for the extendability precompute.
+        void EnsureSiblingLookup()
+        {
+            if (_siblingLookupComputed)
+                return;
+            _siblingLookupComputed = true;
+
+            _siblingSets = FindSiblingSets(_commands);
+
+            var building = new List<SiblingMembership>[_commands.Length][];
+            for (int ci = 0; ci < _commands.Length; ci++)
+                building[ci] = new List<SiblingMembership>[_commands[ci].Patterns.Length];
+
+            for (int s = 0; s < _siblingSets.Count; s++)
+            {
+                // A set whose members all share an intent contains no cross-intent pair, and
+                // AreSiblingRivals requires one — so it can be skipped wholesale. This is a
+                // cheap pre-filter, NOT the rule: a set that survives it can still hold
+                // same-intent pairs, which is why the intent test below is per-pair.
+                if (IsSingleIntent(_siblingSets[s]))
+                    continue;
+
+                var members = _siblingSets[s].Members;
+                for (int m = 0; m < members.Length; m++)
+                {
+                    int ci = members[m].CommandIndex;
+                    int pi = members[m].PatternIndex;
+                    if ((uint)ci >= (uint)building.Length || (uint)pi >= (uint)building[ci].Length)
+                        continue;
+
+                    if (building[ci][pi] == null)
+                        building[ci][pi] = new List<SiblingMembership>();
+                    building[ci][pi].Add(new SiblingMembership(s, members[m].Value));
+                }
+            }
+
+            _siblingMemberships = new SiblingMembership[_commands.Length][][];
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                _siblingMemberships[ci] = new SiblingMembership[building[ci].Length][];
+                for (int pi = 0; pi < building[ci].Length; pi++)
+                    _siblingMemberships[ci][pi] = building[ci][pi]?.ToArray();
+            }
+        }
+
+        // Whether two candidates that tied at selection are siblings whose discriminator went
+        // missing — the coin flip issue #74 is about. All three tests are load-bearing:
+        //
+        //   share a set   the sibling relation itself, so non-sibling ties (authoring errors,
+        //                 not speech ambiguity) stay out of the runtime path (design §5.3)
+        //   differ in value   two members carrying the same literal are duplicates of each
+        //                 other, not siblings — requirements F8 leaves those alone
+        //   differ in intent  the same command dispatches either way otherwise, so refusing
+        //                 would buy latency for nothing
+        //
+        // The intent test is per PAIR, not per set. Since issue #90 retains duplicate-valued
+        // members, a set can be cross-intent overall while a particular tied pair inside it
+        // shares an intent — one command contributing two patterns alongside a third from
+        // another. A set-level test alone would refuse on that pair.
+        //
+        // Allocation-free: both operands are prebuilt arrays, and the common case exits on the
+        // first null. Only ever called on a Tied comparison, which is rare.
+        bool AreSiblingRivals(int ci1, int pi1, int ci2, int pi2)
+        {
+            if (_siblingMemberships == null)
+                return false;
+            if (
+                (uint)ci1 >= (uint)_siblingMemberships.Length
+                || (uint)ci2 >= (uint)_siblingMemberships.Length
+            )
+                return false;
+            if (
+                (uint)pi1 >= (uint)_siblingMemberships[ci1].Length
+                || (uint)pi2 >= (uint)_siblingMemberships[ci2].Length
+            )
+                return false;
+
+            var a = _siblingMemberships[ci1][pi1];
+            var b = _siblingMemberships[ci2][pi2];
+            if (a == null || b == null)
+                return false;
+
+            // Same command is necessarily the same intent; two distinct commands may still
+            // share one, so compare the strings rather than the indices alone.
+            if (
+                ci1 == ci2
+                || string.Equals(
+                    _commands[ci1].Intent,
+                    _commands[ci2].Intent,
+                    StringComparison.Ordinal
+                )
+            )
+                return false;
+
+            for (int i = 0; i < a.Length; i++)
+            for (int j = 0; j < b.Length; j++)
+                if (
+                    a[i].SetId == b[j].SetId
+                    && !string.Equals(a[i].Value, b[j].Value, StringComparison.Ordinal)
+                )
+                    return true;
+
+            return false;
         }
 
         static string BuildSiblingWarning(VoxrCommandDefinition[] commands, SiblingSet set)
@@ -2627,6 +2771,7 @@ namespace VoXR.Commands
                 return EagerCommitVerdict.None;
 
             EnsureCanCommitEarly();
+            EnsureSiblingLookup();
             BuildCoverageTables(tokens);
 
             float bestScore = float.MinValue;
@@ -2638,6 +2783,18 @@ namespace VoXR.Commands
             int bestConsumedEndIdx = 0;
             bool bestMissedRequiredSlot = false;
             bool bestHasUnmatchedRequiredTail = false;
+
+            // The first sibling rival found tying the current incumbent, or -1. Cleared
+            // whenever a new incumbent is adopted: Tied means the whole key tuple compared
+            // equal, so a candidate that beats the incumbent beats everything tied with it and
+            // the recorded rival is stale by construction.
+            //
+            // The FIRST sibling rival rather than the most recent rival of any kind, and that
+            // matters: a winner can be tied by several candidates, only some of them siblings.
+            // Keeping "the last thing that tied" and testing sibling-ness afterwards would drop
+            // a sibling rival whenever a non-sibling happened to be enumerated after it.
+            int bestTiedSiblingCommandIdx = -1;
+            int bestTiedSiblingPatternIdx = -1;
 
             for (int ci = 0; ci < _commands.Length; ci++)
             {
@@ -2652,16 +2809,16 @@ namespace VoXR.Commands
                         // searchStart is 0: this scan mirrors ParseInternal's first round.
                         var matchResult = TryMatchScored(tokens, startIdx, patterns[pi], 0);
 
-                        if (
-                            CompareCandidate(
-                                matchResult,
-                                startIdx,
-                                bestScore,
-                                bestStartIdx,
-                                bestConsumedEndIdx,
-                                bestLiteralCount
-                            ) == CandidateOrder.Better
-                        )
+                        var order = CompareCandidate(
+                            matchResult,
+                            startIdx,
+                            bestScore,
+                            bestStartIdx,
+                            bestConsumedEndIdx,
+                            bestLiteralCount
+                        );
+
+                        if (order == CandidateOrder.Better)
                         {
                             bestScore = matchResult.Score;
                             bestLiteralCount = matchResult.LiteralCount;
@@ -2672,6 +2829,17 @@ namespace VoXR.Commands
                             bestEndIdx = matchResult.EndIdx;
                             bestMissedRequiredSlot = matchResult.MissedRequiredSlot;
                             bestHasUnmatchedRequiredTail = matchResult.HasUnmatchedRequiredTail;
+                            bestTiedSiblingCommandIdx = -1;
+                            bestTiedSiblingPatternIdx = -1;
+                        }
+                        else if (
+                            order == CandidateOrder.Tied
+                            && bestTiedSiblingCommandIdx < 0
+                            && AreSiblingRivals(bestCommandIdx, bestPatternIdx, ci, pi)
+                        )
+                        {
+                            bestTiedSiblingCommandIdx = ci;
+                            bestTiedSiblingPatternIdx = pi;
                         }
                     }
                 }
@@ -2764,9 +2932,29 @@ namespace VoXR.Commands
 
             // Guarded accessor: the indices come from a separate scan, so route through the
             // bounds-checked path rather than indexing raw.
-            return CanCommitEarly(bestCommandIdx, bestPatternIdx)
-                ? EagerCommitVerdict.Commit
-                : EagerCommitVerdict.HoldExtendable;
+            if (!CanCommitEarly(bestCommandIdx, bestPatternIdx))
+                return EagerCommitVerdict.HoldExtendable;
+
+            // Last, and deliberately last: a sibling tie means the buffer fits two intents
+            // exactly equally, so the winner was picked by registration order and the word that
+            // would have decided may still be coming. Refusing costs only latency here — the
+            // flush will fire the same intent moments later if nothing more arrives, and the
+            // right one if the missing word does (design DR-5, §5.8).
+            //
+            // This is the natural extension of the #70 tail condition above to the case #70
+            // structurally cannot reach: that one covers a discriminator the speaker has not
+            // reached yet, this one a discriminator the recogniser dropped mid-utterance.
+            //
+            // It sits AFTER both HoldExtendable returns on purpose. Placed beside #70 it would
+            // also convert HoldExtendable into None — lengthening the wait from
+            // prefixHoldSeconds to the full bufferWindow on a buffer that was never going to
+            // commit early anyway. There is nothing to refuse when nothing was being offered,
+            // and a refusal must not lengthen a wait it is not responsible for. Here the only
+            // transition it introduces is Commit -> None.
+            if (bestTiedSiblingCommandIdx >= 0)
+                return EagerCommitVerdict.None;
+
+            return EagerCommitVerdict.Commit;
         }
 
         bool[][] ComputeCanCommitEarly()

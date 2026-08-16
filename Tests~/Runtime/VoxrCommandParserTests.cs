@@ -4238,9 +4238,18 @@ namespace VoXR.Tests.Runtime
             // deleting it would break no other test — the scan would simply start running in
             // built players, silently, where its output cannot be seen. Pinned by reflection
             // the way the coverage-weight rename is.
+            //
+            // Both binding flags, deliberately. The scan became an INSTANCE method when it
+            // started consuming the shared sibling lookup rather than recomputing the sets
+            // (issue #74 item 2, so the Editor computes them once rather than twice), and this
+            // lookup went null on Static alone. Whether the method is static is not what this
+            // test is about — the attribute is — so the search is made indifferent to it rather
+            // than re-pinned to the current answer, which would break again on the next move.
             var scan = typeof(VoxrCommandParser).GetMethod(
                 "WarnOnSiblingDiscriminator",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+                System.Reflection.BindingFlags.NonPublic
+                    | System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.Static
             );
 
             Assert.IsNotNull(scan, "the construction-time sibling scan");
