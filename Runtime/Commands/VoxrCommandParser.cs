@@ -2121,8 +2121,14 @@ namespace VoXR.Commands
                 // That is a real loss: the diagnostic exists to answer "was the winner decided
                 // by a coin flip, and against whom?", and a truncated tie IS a coin flip. Two
                 // ints keep it answering exactly what it answered before issue #74 item 3.
+                //
+                // Since issue #95 the exemplar covers a NON-sibling tie too, with the third
+                // local saying which kind it is. Design §5.3 asks for exactly that split:
+                // restricting the action to sibling rivals keeps authoring errors out of the
+                // runtime paths "while leaving them visible to the editor diagnostic".
                 int diagRivalCommandIdx = -1;
                 int diagRivalPatternIdx = -1;
+                bool diagRivalIsSibling = false;
 
                 // A rival that ties provably but cannot be NAMED (its expansion was truncated,
                 // so the pair test answers the bool with no set id). Tracked separately from
@@ -2180,6 +2186,7 @@ namespace VoXR.Commands
                                 tiedTruncated = false;
                                 diagRivalCommandIdx = -1;
                                 diagRivalPatternIdx = -1;
+                                diagRivalIsSibling = false;
                                 sawUnnameableRival = false;
 
                                 // Copy current match buffer into best buffer
@@ -2216,10 +2223,9 @@ namespace VoXR.Commands
                             // the innermost body of the ci x pi x startIdx loop. One predictable
                             // test against a readonly field, hundreds of times per parse on the
                             // demo grammar. Measured rather than argued (requirements F18(d)).
-                            else if (
-                                _recordSiblingTies
-                                && order == CandidateOrder.Tied
-                                && TryFindSiblingRival(
+                            else if (_recordSiblingTies && order == CandidateOrder.Tied)
+                            {
+                                bool isSiblingRival = TryFindSiblingRival(
                                     bestCommandIdx,
                                     bestPatternIdx,
                                     ci,
@@ -2227,60 +2233,77 @@ namespace VoXR.Commands
                                     out int rivalSetId,
                                     out string winnerValue,
                                     out string rivalValue
-                                )
-                            )
-                            {
+                                );
+
                                 // The Editor diagnostic names the FIRST sibling rival, whether or
                                 // not it can be offered as a choice — a tie we cannot phrase a
                                 // question about is still a coin flip, and that is what this
                                 // field reports. Set before every refusal below.
-                                if (diagRivalCommandIdx < 0)
+                                //
+                                // Failing that it names the first rival of ANY kind (issue #95),
+                                // flagged as non-sibling. The precedence is load-bearing rather
+                                // than tidy: a winner's own second phrasing routinely ties it
+                                // first and is not a sibling — same intent — so naming whatever
+                                // tied first would shadow the cross-intent hazard behind it. A
+                                // sibling rival therefore displaces a non-sibling exemplar however
+                                // late it arrives, and a sibling exemplar is never displaced.
+                                if (isSiblingRival ? !diagRivalIsSibling : diagRivalCommandIdx < 0)
                                 {
                                     diagRivalCommandIdx = ci;
                                     diagRivalPatternIdx = pi;
+                                    diagRivalIsSibling = isSiblingRival;
                                 }
 
-                                // A truncated analysis answers the bool but names no set, so it
-                                // can refuse on the eager path and cannot ask here.
-                                bool nameable = rivalSetId >= 0;
-                                if (!nameable)
-                                    sawUnnameableRival = true;
-
-                                // ONE question at a time. A pattern can belong to several sets,
-                                // and AreSiblingRivals answers true on ANY shared set, so
-                                // without this a winner sitting in two sets would mix a rival
-                                // that differs at position 2 with one that differs at position 1
-                                // into a single choice list — two questions, two winner values,
-                                // one prompt. Which set wins is registration order,
-                                // deterministically.
-                                bool sameQuestion = tiedRivalCount == 0 || rivalSetId == tiedSetId;
-
-                                // The second live ambiguity IS an answer the speaker could have
-                                // given and will not be offered, so it is reported exactly as the
-                                // cap is (F19 — never silently truncated). This is what the
-                                // comment here used to promise and the code did not do.
-                                if (!nameable)
+                                // Everything below is the runtime CHOICE, which stays sibling-only:
+                                // DR-4 makes the discriminating values the vocabulary, and a
+                                // non-sibling tie has none, so there is nothing the speaker could
+                                // be asked. Widening the diagnostic does not widen this.
+                                if (isSiblingRival)
                                 {
-                                    // Nothing to record and nothing to report yet — see the
-                                    // Truncated resolution where the record is written.
+                                    // A truncated analysis answers the bool but names no set, so
+                                    // it can refuse on the eager path and cannot ask here.
+                                    bool nameable = rivalSetId >= 0;
+                                    if (!nameable)
+                                        sawUnnameableRival = true;
+
+                                    // ONE question at a time. A pattern can belong to several
+                                    // sets, and AreSiblingRivals answers true on ANY shared set,
+                                    // so without this a winner sitting in two sets would mix a
+                                    // rival that differs at position 2 with one that differs at
+                                    // position 1 into a single choice list — two questions, two
+                                    // winner values, one prompt. Which set wins is registration
+                                    // order, deterministically.
+                                    bool sameQuestion =
+                                        tiedRivalCount == 0 || rivalSetId == tiedSetId;
+
+                                    // The second live ambiguity IS an answer the speaker could
+                                    // have given and will not be offered, so it is reported
+                                    // exactly as the cap is (F19 — never silently truncated). This
+                                    // is what the comment here used to promise and the code did
+                                    // not do.
+                                    if (!nameable)
+                                    {
+                                        // Nothing to record and nothing to report yet — see the
+                                        // Truncated resolution where the record is written.
+                                    }
+                                    else if (!sameQuestion)
+                                    {
+                                        tiedTruncated = true;
+                                    }
+                                    else
+                                        RecordTiedRival(
+                                            ci,
+                                            pi,
+                                            rivalSetId,
+                                            winnerValue,
+                                            rivalValue,
+                                            matchResult,
+                                            ref tiedRivalCount,
+                                            ref tiedSetId,
+                                            ref tiedWinnerValue,
+                                            ref tiedTruncated
+                                        );
                                 }
-                                else if (!sameQuestion)
-                                {
-                                    tiedTruncated = true;
-                                }
-                                else
-                                    RecordTiedRival(
-                                        ci,
-                                        pi,
-                                        rivalSetId,
-                                        winnerValue,
-                                        rivalValue,
-                                        matchResult,
-                                        ref tiedRivalCount,
-                                        ref tiedSetId,
-                                        ref tiedWinnerValue,
-                                        ref tiedTruncated
-                                    );
                             }
                         }
                     }
@@ -2357,15 +2380,17 @@ namespace VoXR.Commands
                     PatternString = string.Join(" ", _commands[bestCommandIdx].Patterns[bestPatternIdx]),
                     SlotStartWords = diagStartWords,
                     SlotEndWords = diagEndWords,
-                    // The FIRST sibling rival of the round, offerable or not. Deliberately
-                    // NOT read off the choice list: a truncated analysis ties provably but names
-                    // no set, so it is refused as a choice — and the question this field answers,
-                    // "was the winner decided by a coin flip, and against whom?", is still yes
-                    // there. Reading the choice list made this go silently null on exactly that
-                    // shape, which is what the review caught.
-                    TiedSiblingIntent =
+                        // The round's exemplar rival — the first sibling one, offerable or not, else
+                        // the first of any kind. Deliberately NOT read off the choice list: a
+                        // truncated analysis ties provably but names no set, so it is refused as a
+                        // choice — and the question this field answers, "was the winner decided by a
+                        // coin flip, and against whom?", is still yes there. Reading the choice list
+                        // made this go silently null on exactly that shape, which is what the review
+                        // caught.
+                        TiedRivalIntent =
                         diagRivalCommandIdx >= 0 ? _commands[diagRivalCommandIdx].Intent : null,
-                    TiedSiblingPatternIndex = diagRivalPatternIdx,
+                        TiedRivalPatternIndex = diagRivalPatternIdx,
+                        TiedRivalIsSibling = diagRivalIsSibling,
                 });
 #endif
                 searchStart = bestEndIdx;
@@ -2885,16 +2910,39 @@ namespace VoXR.Commands
             public int[] SlotStartWords;
             public int[] SlotEndWords;
 
-            // The sibling that tied this command at selection, or null / -1 when none did.
+            // The rival that tied this command at selection, or null / -1 when none did.
             // Null is the overwhelmingly common case: it is set only when the winner was
-            // decided by registration order over a rival differing on one dropped word.
+            // decided by registration order over an equally-good candidate.
             //
             // Nothing reads this to make a decision — the flush fires the same command either
             // way. It exists because the coin flip is otherwise invisible: a score of 0.67 in
             // the log looks entirely healthy, and the winner is correct by every rule the
-            // parser has. Issue #74 item 3 is what will act on it.
-            public string TiedSiblingIntent;
-            public int TiedSiblingPatternIndex;
+            // parser has.
+            public string TiedRivalIntent;
+            public int TiedRivalPatternIndex;
+
+            // Whether that rival was a SIBLING rival — differing from the winner at exactly one
+            // required literal, with two intents and two discriminating values (DR-1, and the
+            // per-pair narrowing in TryFindSiblingRival). Only those reach the runtime paths:
+            // DR-4 makes the discriminating values the choice vocabulary, so a tie with no such
+            // values is a tie there is no question to ask about.
+            //
+            // But it is still a coin flip, and issue #95 is that recording only the sibling half
+            // made the other half indistinguishable from "nothing tied" — a grammar carrying two
+            // duplicate patterns under different intents showed an author a healthy diagnostic.
+            // False here is a grammar-authoring hazard rather than speech ambiguity: duplicate
+            // patterns, or two patterns that overlap by accident. Meaningless when the intent
+            // above is null, exactly as the pattern index is.
+            public bool TiedRivalIsSibling;
+
+            // How the rival is named to an author, resolved here rather than in each Editor
+            // surface: the debug window and the batch test window both report it, and two
+            // copies of the phrasing would drift. Null when nothing tied, which is what every
+            // consumer tests.
+            public string DescribeTiedRival() =>
+                TiedRivalIntent == null
+                    ? null
+                    : $"{TiedRivalIntent} (pattern {TiedRivalPatternIndex})";
         }
 
         internal ParseDiagnosticEntry[] LastParseDiagnostics;

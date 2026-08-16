@@ -263,7 +263,12 @@ namespace VoXR.Testing
                     attempts[i] = new VoxrMatchAttempt(
                         cmd.Intent, parseDiag[i].PatternString,
                         cmd.Score, _minScore, cmd.Confidence, _minConfidence,
-                        null, reason, accepted);
+                        null,
+                        reason,
+                        accepted,
+                        parseDiag[i].DescribeTiedRival(),
+                        parseDiag[i].TiedRivalIsSibling
+                    );
                 }
             }
             else

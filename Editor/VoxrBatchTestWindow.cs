@@ -272,6 +272,21 @@ namespace VoXR.Editor
 
                     if (attempt.RejectReason != null)
                         EditorGUILayout.LabelField($"  Rejected: {attempt.RejectReason}");
+
+                    // A rival that tied this one on every selection key, so registration order
+                    // decided it. A corpus run is where a duplicate pattern is most likely to be
+                    // caught, and the pass/fail column cannot show it: the case passes whenever
+                    // the coin lands on the expected intent.
+                    if (attempt.TiedRival != null)
+                        EditorGUILayout.LabelField(
+                            $"  Tied with: {attempt.TiedRival}"
+                                + (
+                                    attempt.TiedRivalIsSibling
+                                        ? " — sibling, one dropped word apart"
+                                        : " — not a sibling; check for duplicate or overlapping "
+                                            + "patterns"
+                                )
+                        );
                 }
                 EditorGUI.indentLevel--;
             }

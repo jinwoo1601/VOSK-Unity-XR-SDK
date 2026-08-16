@@ -178,11 +178,15 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual(' ', VoxrCommandParser.SplitSeparator[0]);
         }
 
-        // ---------- The tied sibling rival (issue #74 item 2) ----------
+        // ---------- The tied rival (issue #74 item 2, widened by issue #95) ----------
         //
         // The flush fires the same command whether or not a rival tied it, so this record
         // changes no behaviour. It exists because the coin flip is otherwise invisible: the
         // winner is correct by every rule the parser has, and a 0.75 in the log looks healthy.
+        //
+        // Item 2 recorded a tie only when the rival was a SIBLING, which left a non-sibling tie
+        // — an authoring hazard — indistinguishable from no tie at all. Since issue #95 any tie
+        // is recorded and TiedRivalIsSibling says which kind it was.
 
         static VoxrSlotDefinition[] ShipSlots() =>
             new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) };
@@ -214,10 +218,16 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual(1, diag.Length);
             Assert.AreEqual(
                 "set_level",
-                diag[0].TiedSiblingIntent,
+                diag[0].TiedRivalIntent,
                 "the rival that made the winner a coin flip"
             );
-            Assert.AreEqual(0, diag[0].TiedSiblingPatternIndex);
+            Assert.AreEqual(0, diag[0].TiedRivalPatternIndex);
+            Assert.IsTrue(diag[0].TiedRivalIsSibling, "one dropped word apart, and two intents");
+            Assert.AreEqual(
+                "set_level (pattern 0)",
+                diag[0].DescribeTiedRival(),
+                "how the Editor surfaces name it"
+            );
         }
 
         [Test]
@@ -228,17 +238,24 @@ namespace VoXR.Tests.Editor
 
             var diag = parser.LastParseDiagnostics;
             Assert.AreEqual(1, diag.Length);
-            Assert.IsNull(diag[0].TiedSiblingIntent);
-            Assert.AreEqual(-1, diag[0].TiedSiblingPatternIndex);
+            Assert.IsNull(diag[0].TiedRivalIntent);
+            Assert.AreEqual(-1, diag[0].TiedRivalPatternIndex);
+            Assert.IsFalse(diag[0].TiedRivalIsSibling);
+            Assert.IsNull(
+                diag[0].DescribeTiedRival(),
+                "nothing tied, so the Editor surfaces print no tie line"
+            );
         }
 
         [Test]
-        public void LastParseDiagnostics_SameIntentTie_RecordsNoRival()
+        public void LastParseDiagnostics_SameIntentTie_RecordsANonSiblingRival()
         {
-            // Two phrasings of one command tie, but the same command dispatches either way, so
-            // there is no coin flip to report. This is the PER-PAIR intent test doing work the
-            // set-level filter could not: it is what keeps a same-intent rival out of the
-            // record even when it is enumerated before a cross-intent one.
+            // Two phrasings of one command tie. The same command dispatches either way, so this
+            // is not the speech ambiguity the runtime can ask about — the per-PAIR intent test
+            // keeps it out of the choice vocabulary, and out of the record entirely until issue
+            // #95. It is still a coin flip between two patterns, and the author of a grammar
+            // where one phrasing can never win is entitled to see that it was a tie rather than
+            // a clean victory, so it is recorded and flagged non-sibling.
             var parser = new VoxrCommandParser(
                 ShipSlots(),
                 new[]
@@ -258,7 +275,68 @@ namespace VoXR.Tests.Editor
 
             var diag = parser.LastParseDiagnostics;
             Assert.AreEqual(1, diag.Length);
-            Assert.IsNull(diag[0].TiedSiblingIntent);
+            Assert.AreEqual("set_mode", diag[0].TiedRivalIntent, "its own second phrasing");
+            Assert.AreEqual(1, diag[0].TiedRivalPatternIndex);
+            Assert.IsFalse(
+                diag[0].TiedRivalIsSibling,
+                "one intent, so there is no question the speaker could answer"
+            );
+
+            Assert.AreEqual(
+                0,
+                parser.TiedSiblingBuffer[0].RivalCount,
+                "and the runtime choice list stays sibling-only"
+            );
+        }
+
+        [Test]
+        public void LastParseDiagnostics_DuplicatePatterns_RecordANonSiblingRival()
+        {
+            // Issue #95's headline case, and the one nothing else in the package reports. Two
+            // intents carry the SAME pattern, so every utterance that matches one matches the
+            // other identically and set_level can never fire. They are not siblings — siblings
+            // differ at exactly one position and carry two discriminating values, and these
+            // differ nowhere — so the sibling set is never emitted, the construction-time
+            // warning stays silent, and before this the diagnostic recorded nothing either. The
+            // author saw a clean 1.00 PASS on a grammar with a dead command in it.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                }
+            );
+
+            var results = parser.Parse("set alpha mode on", null);
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("set_mode", results[0].Command.Intent, "first-registered wins");
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.AreEqual(
+                "set_level",
+                diag[0].TiedRivalIntent,
+                "the duplicate that can never fire is named"
+            );
+            Assert.AreEqual(0, diag[0].TiedRivalPatternIndex);
+            Assert.IsFalse(
+                diag[0].TiedRivalIsSibling,
+                "an authoring error, not speech ambiguity — there is no dropped word to ask about"
+            );
+
+            Assert.AreEqual(
+                0,
+                parser.TiedSiblingBuffer[0].RivalCount,
+                "and it stays out of the runtime paths, exactly as design §5.3 requires"
+            );
         }
 
         [Test]
@@ -269,6 +347,10 @@ namespace VoXR.Tests.Editor
             // about. The per-pair intent test skips it and the scan continues to set_level,
             // which is the real hazard — and the one issue #90's retention keeps in the set at
             // all.
+            //
+            // Since issue #95 that same-intent rival IS recorded — as a non-sibling — so this
+            // now also pins the precedence between the two: a sibling rival displaces a
+            // non-sibling exemplar however late it arrives.
             var parser = new VoxrCommandParser(
                 ShipSlots(),
                 new[]
@@ -294,9 +376,10 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual(1, diag.Length);
             Assert.AreEqual(
                 "set_level",
-                diag[0].TiedSiblingIntent,
+                diag[0].TiedRivalIntent,
                 "a same-intent rival must not shadow the cross-intent one"
             );
+            Assert.IsTrue(diag[0].TiedRivalIsSibling, "and it is recorded as the sibling it is");
         }
 
         [Test]
@@ -341,7 +424,7 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual(1, diag.Length);
             Assert.AreEqual(
                 "set_level",
-                diag[0].TiedSiblingIntent,
+                diag[0].TiedRivalIntent,
                 "a rival sharing the winner's intent across two commands is still not a rival"
             );
         }
@@ -394,10 +477,14 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual(1, diag.Length);
             Assert.AreEqual(
                 "weapons_up",
-                diag[0].TiedSiblingIntent,
+                diag[0].TiedRivalIntent,
                 "the coin flip is still reported, exactly as it was before item 3"
             );
-            Assert.AreEqual(0, diag[0].TiedSiblingPatternIndex);
+            Assert.AreEqual(0, diag[0].TiedRivalPatternIndex);
+            Assert.IsTrue(
+                diag[0].TiedRivalIsSibling,
+                "provably siblings — unnameable is not the same as not a sibling"
+            );
 
             // …and it is still refused as a choice, because it cannot be phrased as one.
             Assert.AreEqual(

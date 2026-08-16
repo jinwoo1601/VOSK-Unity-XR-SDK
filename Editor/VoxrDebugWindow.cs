@@ -35,6 +35,7 @@ namespace VoXR.Editor
 
         GUIStyle _boldIntentStyle;
         GUIStyle _rejectStyle;
+        GUIStyle _tieHazardStyle;
         GUIStyle _thresholdStyle;
         GUIStyle _historyStyle;
 
@@ -422,6 +423,36 @@ namespace VoXR.Editor
                     _rejectStyle ??= new GUIStyle(EditorStyles.label)
                         { normal = { textColor = new Color(1f, 0.4f, 0.4f) } };
                     EditorGUILayout.LabelField($"Rejected: {attempt.RejectReason}", _rejectStyle);
+                }
+
+                // The rival this attempt beat on registration order alone. Never red — the
+                // command above fired, and by every rule the parser has it was the right winner.
+                // The point is that the choice was a coin flip, which nothing else here shows: a
+                // healthy 0.67 and a PASS look identical whether or not a rival tied.
+                //
+                // A non-sibling tie is a grammar-authoring hazard rather than speech ambiguity,
+                // so it is worded as one and drawn in amber; a sibling tie is what the
+                // disambiguation flag exists to handle and reads as plain information.
+                if (attempt.TiedRival != null)
+                {
+                    if (attempt.TiedRivalIsSibling)
+                    {
+                        EditorGUILayout.LabelField(
+                            $"Tied with: {attempt.TiedRival} — sibling, one dropped word apart"
+                        );
+                    }
+                    else
+                    {
+                        _tieHazardStyle ??= new GUIStyle(EditorStyles.label)
+                        {
+                            normal = { textColor = new Color(1f, 0.75f, 0.3f) },
+                        };
+                        EditorGUILayout.LabelField(
+                            $"Tied with: {attempt.TiedRival} — not a sibling; "
+                                + "check for duplicate or overlapping patterns",
+                            _tieHazardStyle
+                        );
+                    }
                 }
 
                 // Slots

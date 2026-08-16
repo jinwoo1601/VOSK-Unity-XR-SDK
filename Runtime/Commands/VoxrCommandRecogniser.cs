@@ -1243,11 +1243,15 @@ namespace VoXR.Commands
             string rejectReason, bool isAccepted)
         {
             string pattern = null;
+            string tiedRival = null;
+            bool tiedRivalIsSibling = false;
             VoxrDiagnosticSlotMatch[] diagSlots = Array.Empty<VoxrDiagnosticSlotMatch>();
 
             if (parseDiag != null && index < parseDiag.Length)
             {
                 pattern = parseDiag[index].PatternString;
+                tiedRival = parseDiag[index].DescribeTiedRival();
+                tiedRivalIsSibling = parseDiag[index].TiedRivalIsSibling;
 
                 if (cmd.Slots.Length > 0 && parseDiag[index].SlotStartWords != null)
                 {
@@ -1267,7 +1271,11 @@ namespace VoXR.Commands
             return new VoxrMatchAttempt(
                 cmd.Intent, pattern, cmd.Score, minScore,
                 cmd.Confidence, minConfidence, diagSlots,
-                rejectReason, isAccepted);
+                rejectReason,
+                isAccepted,
+                tiedRival,
+                tiedRivalIsSibling
+            );
         }
 #endif
     }
