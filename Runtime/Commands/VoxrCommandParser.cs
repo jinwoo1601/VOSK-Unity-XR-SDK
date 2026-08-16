@@ -1514,6 +1514,7 @@ namespace VoXR.Commands
             int searchStart = 0;
 #if UNITY_EDITOR
             var diagnosticEntries = new List<ParseDiagnosticEntry>();
+            EnsureSiblingLookup();
 #endif
 
             while (searchStart < tokens.Length)
@@ -1526,6 +1527,14 @@ namespace VoXR.Commands
                 int bestEndIdx = 0;
                 int bestConsumedEndIdx = 0;
                 int bestSlotCount = 0;
+#if UNITY_EDITOR
+                // Declared HERE, with the round's other best* locals, and not beside
+                // diagnosticEntries above: selection restarts per extraction round, so a rival
+                // recorded in round 1 must not survive into round 2's diagnostic entry. Hoisting
+                // these out of the loop compiles and passes any single-command test.
+                int bestTiedSiblingCommandIdx = -1;
+                int bestTiedSiblingPatternIdx = -1;
+#endif
 
                 for (int ci = 0; ci < _commands.Length; ci++)
                 {
@@ -1544,16 +1553,16 @@ namespace VoXR.Commands
                                 searchStart
                             );
 
-                            if (
-                                CompareCandidate(
-                                    matchResult,
-                                    startIdx,
-                                    bestScore,
-                                    bestStartIdx,
-                                    bestConsumedEndIdx,
-                                    bestLiteralCount
-                                ) == CandidateOrder.Better
-                            )
+                            var order = CompareCandidate(
+                                matchResult,
+                                startIdx,
+                                bestScore,
+                                bestStartIdx,
+                                bestConsumedEndIdx,
+                                bestLiteralCount
+                            );
+
+                            if (order == CandidateOrder.Better)
                             {
                                 bestScore = matchResult.Score;
                                 bestLiteralCount = matchResult.LiteralCount;
@@ -1563,6 +1572,10 @@ namespace VoXR.Commands
                                 bestEndIdx = matchResult.EndIdx;
                                 bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                                 bestSlotCount = matchResult.SlotCount;
+#if UNITY_EDITOR
+                                bestTiedSiblingCommandIdx = -1;
+                                bestTiedSiblingPatternIdx = -1;
+#endif
                                 // Copy current match buffer into best buffer
                                 if (matchResult.SlotCount > 0)
                                 {
@@ -1573,6 +1586,26 @@ namespace VoXR.Commands
 #endif
                                 }
                             }
+#if UNITY_EDITOR
+                            // Editor-only, and inert: the flush fires the same command whether
+                            // or not a rival tied it. Recorded so the coin flip is inspectable
+                            // where today it is invisible, and so the pending path that will
+                            // ACT on it (issue #74 item 3) inherits a working record rather
+                            // than introducing one alongside a behaviour change.
+                            //
+                            // The eager path keeps its own copy of this rather than sharing:
+                            // that one must run in a player build, since the refusal is not
+                            // behind any flag.
+                            else if (
+                                order == CandidateOrder.Tied
+                                && bestTiedSiblingCommandIdx < 0
+                                && AreSiblingRivals(bestCommandIdx, bestPatternIdx, ci, pi)
+                            )
+                            {
+                                bestTiedSiblingCommandIdx = ci;
+                                bestTiedSiblingPatternIdx = pi;
+                            }
+#endif
                         }
                     }
                 }
@@ -1626,6 +1659,11 @@ namespace VoXR.Commands
                     PatternString = string.Join(" ", _commands[bestCommandIdx].Patterns[bestPatternIdx]),
                     SlotStartWords = diagStartWords,
                     SlotEndWords = diagEndWords,
+                        TiedSiblingIntent =
+                            bestTiedSiblingCommandIdx >= 0
+                                ? _commands[bestTiedSiblingCommandIdx].Intent
+                                : null,
+                        TiedSiblingPatternIndex = bestTiedSiblingPatternIdx,
                 });
 #endif
                 searchStart = bestEndIdx;
@@ -1965,6 +2003,17 @@ namespace VoXR.Commands
             public string PatternString;
             public int[] SlotStartWords;
             public int[] SlotEndWords;
+
+            // The sibling that tied this command at selection, or null / -1 when none did.
+            // Null is the overwhelmingly common case: it is set only when the winner was
+            // decided by registration order over a rival differing on one dropped word.
+            //
+            // Nothing reads this to make a decision — the flush fires the same command either
+            // way. It exists because the coin flip is otherwise invisible: a score of 0.67 in
+            // the log looks entirely healthy, and the winner is correct by every rule the
+            // parser has. Issue #74 item 3 is what will act on it.
+            public string TiedSiblingIntent;
+            public int TiedSiblingPatternIndex;
         }
 
         internal ParseDiagnosticEntry[] LastParseDiagnostics;

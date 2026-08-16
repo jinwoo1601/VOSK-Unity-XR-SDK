@@ -177,5 +177,126 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual(1, VoxrCommandParser.SplitSeparator.Length);
             Assert.AreEqual(' ', VoxrCommandParser.SplitSeparator[0]);
         }
+
+        // ---------- The tied sibling rival (issue #74 item 2) ----------
+        //
+        // The flush fires the same command whether or not a rival tied it, so this record
+        // changes no behaviour. It exists because the coin flip is otherwise invisible: the
+        // winner is correct by every rule the parser has, and a 0.75 in the log looks healthy.
+
+        static VoxrSlotDefinition[] ShipSlots() =>
+            new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) };
+
+        [Test]
+        public void LastParseDiagnostics_SiblingTie_NamesTheRivalThatTiedTheWinner()
+        {
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+
+            var results = parser.Parse("set alpha on", null);
+
+            Assert.AreEqual(1, results.Length, "the tie still resolves to exactly one command");
+            Assert.AreEqual("set_mode", results[0].Command.Intent, "first-registered, as before");
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.AreEqual(
+                "set_level",
+                diag[0].TiedSiblingIntent,
+                "the rival that made the winner a coin flip"
+            );
+            Assert.AreEqual(0, diag[0].TiedSiblingPatternIndex);
+        }
+
+        [Test]
+        public void LastParseDiagnostics_NoTie_RecordsNoRival()
+        {
+            var parser = CreateParser();
+            parser.Parse("shoot missiles", null);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.IsNull(diag[0].TiedSiblingIntent);
+            Assert.AreEqual(-1, diag[0].TiedSiblingPatternIndex);
+        }
+
+        [Test]
+        public void LastParseDiagnostics_SameIntentTie_RecordsNoRival()
+        {
+            // Two phrasings of one command tie, but the same command dispatches either way, so
+            // there is no coin flip to report. This is the PER-PAIR intent test doing work the
+            // set-level filter could not: it is what keeps a same-intent rival out of the
+            // record even when it is enumerated before a cross-intent one.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[]
+                        {
+                            new[] { "set", "{ship}", "mode", "on" },
+                            new[] { "set", "{ship}", "level", "on" },
+                        }
+                    ),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.IsNull(diag[0].TiedSiblingIntent);
+        }
+
+        [Test]
+        public void LastParseDiagnostics_ShadowedRival_IsTheCrossIntentOne()
+        {
+            // The winner's FIRST tied rival here is set_mode's own second pattern, which shares
+            // its intent. Recording that one would name a rival the speaker never had a choice
+            // about. The per-pair intent test skips it and the scan continues to set_level,
+            // which is the real hazard — and the one issue #90's retention keeps in the set at
+            // all.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[]
+                        {
+                            new[] { "set", "{ship}", "mode", "on" },
+                            new[] { "set", "{ship}", "level", "on" },
+                        }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.AreEqual(
+                "set_level",
+                diag[0].TiedSiblingIntent,
+                "a same-intent rival must not shadow the cross-intent one"
+            );
+        }
     }
 }
