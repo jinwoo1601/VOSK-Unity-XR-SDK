@@ -1640,6 +1640,87 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void Disambiguation_SetLargerThanTheCap_ReportsTruncationToTheIntegrator()
+        {
+            // The parser-level test asserts record.Truncated; this asserts the four hops that
+            // carry it to the surface an integrator actually reads — TiedSiblingBuffer.Truncated
+            // → EnterPending(choicesTruncated) → VoxrPendingCommand.ChoicesTruncated →
+            // VoxrPendingAmbiguity.IsTruncated. A hard-coded false at any hop passed the whole
+            // suite before this test, because nothing asserted the true direction.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            _recogniser.DisambiguateSiblingTies = true;
+            var commands = new System.Collections.Generic.List<VoxrCommandDefinition>();
+            foreach (string v in new[] { "mode", "level", "standby", "trim", "gain", "bias" })
+                commands.Add(
+                    new VoxrCommandDefinition(
+                        "set_" + v,
+                        new[] { new[] { "set", "{ship}", v, "on" } }
+                    )
+                );
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                commands.ToArray()
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            VoxrPendingAmbiguity? seen = null;
+            _recogniser.OnCommandPending += _ => seen = _recogniser.PendingAmbiguity;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.IsTrue(seen.HasValue);
+            Assert.AreEqual(
+                1 + VoxrCommandParser.MaxDisambiguationRivals,
+                seen.Value.Choices.Length,
+                "the winner plus the cap's worth of rivals"
+            );
+            Assert.IsTrue(
+                seen.Value.IsTruncated,
+                "and the integrator is told there are answers not on this list, so they can "
+                    + "word \"…or say the whole command again\""
+            );
+        }
+
+        [Test]
+        public void Disambiguation_RivalOnCooldown_IsNotOffered()
+        {
+            // The debounce gate in Step 7 tests the WINNER only, and every rival is a different
+            // intent by construction — so without testing each choice, answering could fire a
+            // command inside its own cooldown window, which nothing downstream re-checks
+            // (InterpretResolution calls RecordFire and never IsOnCooldown).
+            //
+            // Here set_level fires first and takes its cooldown; the ambiguous utterance then
+            // finds set_mode clear, so the question would have been asked with an unfireable
+            // answer on it. Dropping set_level leaves one choice, so the winner fires instead.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+            _recogniser.CommandCooldown = 30f;
+
+            int pendingCount = 0;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandPending += _ => pendingCount++;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha level on");
+            _recogniser.FlushPendingBuffer();
+            Assert.AreEqual("set_level", received.Value.Intent, "set_level is now on cooldown");
+
+            received = null;
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(
+                0,
+                pendingCount,
+                "the only rival cannot fire, so there is no question worth asking"
+            );
+            Assert.IsTrue(received.HasValue);
+            Assert.AreEqual("set_mode", received.Value.Intent, "and the winner fires");
+        }
+
+        [Test]
         public void Disambiguation_TrailingDiscriminator_AlsoAsksAndIsAnswerable()
         {
             // Design §7 item 1 asks for BOTH shapes, and the trailing one reaches the flush for

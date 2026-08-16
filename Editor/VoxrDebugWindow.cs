@@ -334,7 +334,7 @@ namespace VoXR.Editor
             EditorGUILayout.LabelField($"Intent: {p.Command.Intent}", EditorStyles.boldLabel);
 
             // Three-way since issue #74 item 3. A two-way ternary here does not merely omit the
-            // new reason \u2014 it labels a disambiguation "Awaiting confirmation", which is exactly
+            // new reason — it labels a disambiguation "Awaiting confirmation", which is exactly
             // the confusion VoxrPendingAmbiguity exists to prevent, reproduced in this package's
             // own tooling.
             string reason;

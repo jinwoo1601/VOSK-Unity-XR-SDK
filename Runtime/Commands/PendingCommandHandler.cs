@@ -99,6 +99,12 @@ namespace VoXR.Commands
             if (tokens.Length == 0)
                 return PendingResolution.NoAction();
 
+            // Guarded like Cancel() below, because the deref moved out of the confirm branch
+            // when the choice arm landed: the sole caller checks HasPending first, so this is
+            // latent robustness for a second caller rather than a live path.
+            if (!_pendingCommand.HasValue)
+                return PendingResolution.NoAction();
+
             string[] effectiveCancel = cancelVocab != null && cancelVocab.Length > 0
                 ? cancelVocab : VoxrFollowUpVocabulary.DefaultCancel;
             string[] effectiveConfirm = confirmVocab != null && confirmVocab.Length > 0
@@ -122,7 +128,10 @@ namespace VoXR.Commands
                 {
                     for (int i = 0; i < pending.ChoiceValues.Length; i++)
                     {
-                        if (!IsVocabularyMatchTokens(tokens, OneValue(pending.ChoiceValues, i)))
+                        // The single-phrase primitive directly — IsVocabularyMatchTokens is
+                        // just a loop over it, and the choices have to be tried one at a time
+                        // so the index of the match is known.
+                        if (!MatchPhraseAgainstTokens(tokens, pending.ChoiceValues[i].AsSpan()))
                             continue;
 
                         // Through the ordinary Complete path rather than a new one — that is
@@ -151,17 +160,6 @@ namespace VoXR.Commands
             }
 
             return PendingResolution.NoAction();
-        }
-
-        // IsVocabularyMatchTokens takes an array, and the choice values have to be tried one at
-        // a time so the index of the match is known. One reusable single-element array rather
-        // than a per-answer allocation; this runs once per follow-up utterance, not per parse.
-        readonly string[] _oneValueBuf = new string[1];
-
-        string[] OneValue(string[] values, int i)
-        {
-            _oneValueBuf[0] = values[i];
-            return _oneValueBuf;
         }
 
         internal VoxrCommand? TryFollowUpSlotFill(string text, string[] tokens,

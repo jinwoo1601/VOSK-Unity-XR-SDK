@@ -200,7 +200,9 @@ namespace VoXR.Commands
         /// disambiguation does nothing, leaving the pending to time out and fire nothing.
         ///
         /// Only ever non-null with <c>disambiguateSiblingTies</c> enabled. Read it while the
-        /// pending is live; the arrays are allocated once at entry and are safe to retain.
+        /// pending is live. The arrays are allocated once at entry and are safe to retain, but
+        /// they are the live pending's own arrays rather than copies — do not write to them, as
+        /// that would change which word resolves the question and what fires when it does.
         /// </remarks>
         public VoxrPendingAmbiguity? PendingAmbiguity
         {
@@ -654,15 +656,34 @@ namespace VoXR.Commands
                 {
                     InterpretResolution(ccResolution);
 #if UNITY_EDITOR
+                    // Three-way since the choice arm landed. Answering a disambiguation whose
+                    // chosen intent requires confirmation resolves as ReEnteredPending, and a
+                    // two-way "confirmed or cancelled" label reported that as "cancelled via
+                    // vocabulary" with accepted=false — in LastMatchDiagnostics, the debug window
+                    // and the exported session log — while the runtime had in fact advanced to
+                    // asking "are you sure?".
                     bool wasConfirmed = ccResolution.Outcome == PendingOutcome.Confirmed;
-                    string ccLabel = wasConfirmed ? "confirmed" : "cancelled";
+                    string ccReject;
+                    switch (ccResolution.Outcome)
+                    {
+                        case PendingOutcome.Confirmed:
+                            ccReject = null;
+                            break;
+                        case PendingOutcome.ReEnteredPending:
+                            ccReject = "chosen via vocabulary, now awaiting confirmation";
+                            break;
+                        default:
+                            ccReject = "cancelled via vocabulary";
+                            break;
+                    }
                     LastMatchDiagnostics = new VoxrMatchDiagnostics(
                         text, diagWords,
                         new[] { new VoxrMatchAttempt(
                             ccResolution.Command.Intent, null,
                             ccResolution.Command.Score, minScore,
                             ccResolution.Command.Confidence, minConfidence,
-                            null, wasConfirmed ? null : $"{ccLabel} via vocabulary",
+                                null,
+                                ccReject,
                             wasConfirmed) },
                         Time.frameCount);
 #endif
@@ -695,7 +716,14 @@ namespace VoXR.Commands
             // user's pending command in favour of one that then goes nowhere — losing the
             // half-finished command to an utterance that produces nothing.
             bool hasCompleteNewCommand = false;
-            var resultBuf = _parser.ResultBuffer;
+            // Snapshot the parser itself alongside its buffer. Both are read across iterations
+            // of the Step 7 loop, which raises public events a subscriber may answer by calling
+            // Configure (setting _parser to null) or SetActiveSets (installing a parser with
+            // differently-sized buffers). One instance for the whole walk, or the two halves of
+            // the ResultBuffer/TiedSiblingBuffer parallel-array contract can come from different
+            // parsers mid-loop.
+            var parser = _parser;
+            var resultBuf = parser.ResultBuffer;
             for (int i = 0; i < resultCount; i++)
             {
                 var cmd = resultBuf[i].Command;
@@ -880,12 +908,15 @@ namespace VoXR.Commands
                 if (
                     disambiguateSiblingTies
                     && TryBuildAmbiguity(
+                        parser,
                         i,
+                        now,
                         tokens,
                         wordConfidence,
                         out var choices,
                         out var choiceValues,
-                        out var choiceDefs
+                        out var choiceDefs,
+                        out bool choicesTruncated
                     )
                 )
                 {
@@ -904,7 +935,7 @@ namespace VoXR.Commands
                         choices,
                         choiceValues,
                         choiceDefs,
-                        _parser.TiedSiblingBuffer[i].Truncated
+                        choicesTruncated
                     );
                     InterpretResolution(cancelAmbRes);
                     InterpretResolution(enterAmbRes);
@@ -987,24 +1018,43 @@ namespace VoXR.Commands
         // itself stays allocation-free (the parser records rivals into preallocated buffers);
         // this is the boundary where that stops being true, following the same rule
         // PendingCommandHandler already applies to anything reaching a subscriber.
+        // Builds the choice list for result i, or answers false and asks nothing.
+        //
+        // `parser` is passed in rather than read from the field, and that is load-bearing: the
+        // Step 7 loop raises public events between iterations, and a subscriber is allowed to
+        // call Configure — which sets _parser to null — or SetActiveSets, which installs a new
+        // parser whose buffers are sized to the new command count. The loop already snapshots
+        // ResultBuffer for exactly this reason; reading _parser live here reintroduced the
+        // hazard that snapshot exists to remove.
+        //
+        // Allocates — three small arrays and one VoxrCommand per alternative — and that is
+        // deliberate: this runs once per AMBIGUITY, never per candidate, and everything it
+        // produces crosses into a public event where a subscriber can retain it. The parse path
+        // itself stays allocation-free (the parser records rivals into preallocated buffers);
+        // this is the boundary where that stops being true, following the same rule
+        // PendingCommandHandler already applies to anything reaching a subscriber.
         bool TryBuildAmbiguity(
+            VoxrCommandParser parser,
             int i,
+            float now,
             string[] tokens,
             Dictionary<string, float> wordConfidence,
             out VoxrCommand[] choices,
             out string[] choiceValues,
-            out VoxrCommandDefinition[] choiceDefinitions
+            out VoxrCommandDefinition[] choiceDefinitions,
+            out bool truncated
         )
         {
             choices = null;
             choiceValues = null;
             choiceDefinitions = null;
 
-            var record = _parser.TiedSiblingBuffer[i];
+            var record = parser.TiedSiblingBuffer[i];
+            truncated = record.Truncated;
             if (record.RivalCount == 0)
                 return false;
 
-            var winner = _parser.ResultBuffer[i].Command;
+            var winner = parser.ResultBuffer[i].Command;
             if (!_setManager.TryLookupCommand(winner.Intent, out var winnerDef))
                 return false;
 
@@ -1019,23 +1069,45 @@ namespace VoXR.Commands
 
             for (int n = 0; n < record.RivalCount; n++)
             {
-                // A rival whose intent resolves to no definition is dropped rather than offered:
-                // it could be named in a prompt but not fired. Same judgement IsIncomplete makes
-                // about an intent with no definition — a tie we cannot fully describe is not a
-                // reason to fire nothing.
-                if (!_setManager.TryLookupCommand(_parser.RivalIntent(i, n), out var rivalDef))
+                // Two reasons to drop a rival, and BOTH set `truncated` — an answer the speaker
+                // could have given is about to go unoffered, which is exactly what that flag
+                // means (F19: never silently truncated). Only the winner passed the gates in the
+                // Step 7 loop above; a rival is a different intent by construction, so its own
+                // cooldown has never been tested and testing it here is what makes the branch's
+                // "a command on cooldown should not raise a question" claim true of the choices
+                // as well as of the winner.
+                //
+                // Confidence needs no such test: a rival's span differs from the winner's only
+                // by trailing [unk], which ComputeConfidence skips, so their confidences are
+                // equal by construction and the winner already cleared the floor.
+                // Unreachable today, and kept anyway — the same treatment AdvanceSlotFill's
+                // array carry gets. Every construction site builds the parser and the set
+                // manager's lookup from ONE command array (Configure passes the same array to
+                // both; SetActiveSets takes what Activate returns, and Activate calls
+                // BuildLookup on exactly that), so an intent the parser can report is always
+                // resolvable. A test asserting this branch was written and then removed: it
+                // registered the rival in an inactive set, which does not reach the shape —
+                // the parser is rebuilt from the ACTIVE commands, so it stops seeing the tie
+                // at all. The guard is what keeps that argument true if either end changes.
+                if (!_setManager.TryLookupCommand(parser.RivalIntent(i, n), out var rivalDef))
+                {
+                    // Nameable in a prompt but not fireable, so not offered — and reported,
+                    // because an answer the speaker could have given is going unoffered.
+                    truncated = true;
                     continue;
+                }
 
-                _choiceBuf.Add(
-                    _parser.BuildRivalCommand(
-                        i,
-                        n,
-                        _parser.ResultBuffer[i].Command.RawText,
-                        tokens,
-                        wordConfidence
-                    )
-                );
-                _choiceValueBuf.Add(_parser.TiedRival(i, n).Value);
+                if (
+                    commandCooldown > 0f
+                    && _debouncer.IsOnCooldown(parser.RivalIntent(i, n), now, commandCooldown)
+                )
+                {
+                    truncated = true;
+                    continue;
+                }
+
+                _choiceBuf.Add(parser.BuildRivalCommand(i, n, tokens, wordConfidence));
+                _choiceValueBuf.Add(parser.TiedRival(i, n).Value);
                 _choiceDefBuf.Add(rivalDef);
             }
 
