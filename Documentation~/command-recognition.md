@@ -89,7 +89,7 @@ Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character w
 
 ### Never leave a required function word between a bare pattern and its slot
 
-If a command has a bare pattern *and* a sibling that extends it with one required literal followed by a slot, mark that literal optional:
+If a command has a bare pattern *and* a longer one that extends it with a required literal followed by a slot, mark that literal optional:
 
 ```csharp
 // Warned about -- a dropped "by" leaves the slot-filled form barely above the gate
@@ -124,17 +124,9 @@ The parser logs a validation warning at construction naming the literal and the 
 - **Over a run of required literals, not just one.** Dropping any single word in `decelerate by the {burn_level}` strands the value just as dropping `by` alone does.
 - **Over optional forms.** `fire {?quantity} {weapon}` is not literally a prefix of `fire {weapon} at {target}`, but it is once its own optional is omitted -- which is exactly the form the parser matches when no quantity is spoken. Patterns are expanded before comparison, as the eager-flush prefix analysis already does.
 
-The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild an Editor session makes and expansion is exponential. For *this* scan that costs recall on that pattern only. The same bound applies to the sibling scan below, where it costs more, because those forms now feed a runtime gate rather than only a message — see `KNOWN_LIMITATIONS.md`.
+The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild an Editor session makes and expansion is exponential. For *this* scan that costs recall on that pattern only. The same bound applies to the scan below, where it costs more, because those forms now decide whether the recogniser warns you and whether it can ask the speaker -- see `KNOWN_LIMITATIONS.md`.
 
 ### Do not separate two commands by a single word
-
-> **Two different hazards share the word "sibling".** The one just above is a bare
-> pattern out-ranking its *own* longer form and discarding a slot value — one intent,
-> and the fix is to mark a literal optional. The one below is two *different* intents
-> that become indistinguishable — and marking anything optional makes it worse. Tell
-> them apart by the Console message: the first names a **slot** at risk
-> (`…in front of slot "burn_level"`), the second names two **intents** and the element
-> they `differ only at`.
 
 If two *different* intents differ at exactly one required word, the parser cannot tell them apart when the recogniser drops it:
 
@@ -186,7 +178,7 @@ One further warning fires if a discriminating value is also cancel vocabulary. F
 
 ---
 
-## Ambiguous commands: ask instead of guessing
+## Ambiguous Commands: Ask Instead of Guessing
 
 Everything above stops the recogniser committing to a coin flip early. It does not stop it coin-flipping at the end — the flush still picks the first-registered pattern. **`disambiguateSiblingTies` is what replaces that guess with a question.**
 
@@ -227,9 +219,7 @@ Past that — or where the winner is ambiguous in two different ways at once, or
 
 ### Push-to-talk: one setting to check
 
-Under push-to-talk with **Cancel Pending On Release** set, release flushes *and then cancels* — so the question is created and destroyed in consecutive statements and the speaker is never asked. That is the documented meaning of that flag: it exists to make the button a hard reset.
-
-Leave it **off** and the question survives release. The speaker presses again and answers, and the ordinary `pendingTimeout` still applies — so they have `pendingTimeout` seconds from the question, not from the next press, to get there. Raise it if a press-to-answer round trip does not fit in the default 5 s.
+Under push-to-talk, **Cancel Pending On Release** discards the question the instant it is raised — release flushes, and the flush is what creates it. Leave that setting off and the question survives for the speaker to answer on their next press. See [Cancel Pending On Release](push-to-talk.md#cancel-pending-on-release) for the ordering and the timer arithmetic.
 
 ---
 
@@ -476,7 +466,9 @@ If the user says the same command twice quickly (or VOSK produces overlapping re
 
 ## Pending Commands
 
-Sometimes a command partially matches (some required slots are unfilled) or needs explicit confirmation before a high-consequence action fires. The pending command system handles both cases by holding the command in a "pending" state and listening for follow-up speech.
+Sometimes a command partially matches (some required slots are unfilled), or needs explicit confirmation before a high-consequence action fires, or cannot be told apart from another command at all. The pending command system handles all three by holding the command in a "pending" state and listening for follow-up speech.
+
+The third kind is [ambiguity](#ambiguous-commands-ask-instead-of-guessing), and it only ever arises with `disambiguateSiblingTies` enabled. Everything in this section applies to it — preemption, cancellation, `CancelPendingCommand()` — **with one exception, called out under Timeout Behaviour below.**
 
 ### Partial Match with Follow-Up Slot-Fill
 
@@ -530,6 +522,8 @@ Configure `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` on `VoxrCom
 - **Cancel** (default) -- the pending command is discarded and `OnCommandCancelled` fires.
 - **FireAsIs** -- the pending command fires with whatever slots were filled, even if some are still missing.
 
+**`FireAsIs` does not apply to a pending ambiguity, which always cancels.** The two settings answer different questions: `FireAsIs` means "the command is known, fire it with what I have", and under an ambiguity the *command itself* is what is unknown. Firing the first-registered candidate after a pause would be the same coin flip the question was asked to avoid, arriving later.
+
 ### The two ways an incomplete command still fires
 
 A command missing a required argument does not fire on the ordinary path: it is refused outright, or, with `allowPartialMatch`, held pending for slot-fill. Two opt-ins deliberately override that, and both hand your handler a command with arguments absent:
@@ -562,7 +556,7 @@ Confirm and cancel vocabulary words are automatically included in the VOSK gramm
 
 ### Programmatic Control
 
-Call `CancelPendingCommand()` to cancel the pending command from code (e.g. on a scene transition or mode switch). Check `HasPendingCommand` and `PendingCommand` to inspect the current pending state.
+Call `CancelPendingCommand()` to cancel the pending command from code (e.g. on a scene transition or mode switch). Check `HasPendingCommand` and `PendingCommand` to inspect the current pending state, and [`PendingAmbiguity`](api/data-types.md#voxrpendingambiguity) to tell an ambiguity from a confirmation — `OnCommandPending` carries no reason of its own, so that property is how you know which question you were asked.
 
 ---
 

@@ -252,7 +252,7 @@ A command that clears both gates can still not fire. In order:
 | Sibling tie, with `disambiguateSiblingTies` on | Enters pending, fires on the speaker's answer | `entered pending (awaiting disambiguation, N choices)` |
 | `requiresConfirmation` | Enters pending, fires on confirmation | `entered pending (awaiting confirmation)` |
 
-That order is deliberate: a command already on cooldown should not raise a question the speaker then answers into a cooldown, and "which did you mean?" has to precede "are you sure?" — you cannot confirm an intent you have not identified. Answering a choice whose command also sets `requiresConfirmation` therefore asks twice, in that order.
+That order is deliberate: a command already on cooldown should not raise a question the speaker then answers into a cooldown, and a disambiguation has to precede a confirmation — you cannot confirm an intent you have not identified. The two-question exchange that produces is worked through in [Ambiguous commands](command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
 
 And below `minScore`, `allowPartialMatch` diverts to pending rather than rejecting: `entered pending (partial: unfilled [...])`.
 
@@ -271,7 +271,7 @@ It does **not** mean "nothing matched". It fires whenever an utterance produced 
 | A candidate was rejected by `minConfidence` | silent |
 | A candidate was suppressed by debounce | silent |
 
-The disambiguation row is the one deliberate silence among the diversions: being told the speech was not understood, in the same frame you were asked to prompt about it, is the confusion the flag exists to remove.
+The disambiguation row is the one deliberate silence among the diversions: being told the speech was not understood, in the same frame you were asked to prompt about it, is the confusion `disambiguateSiblingTies` exists to remove.
 
 So the event is not a reliable "I heard nothing" signal: the score-rejection rows of §7 raise it too. If you show the player feedback on it, expect it after a half-heard command as well as after noise.
 
@@ -444,14 +444,15 @@ This is the case the start test has to ask the matcher to get right. Testing onl
 
 Each log entry is one **utterance**. Its `attempts` array holds one entry per *decision the recogniser logged* for that utterance. On the ordinary parse path that is one entry per extraction round — the winner of that round, accepted or rejected. Losing candidates are never logged, so a pattern's absence means it lost selection, not that it was never tried.
 
-Four paths short-circuit before the parse and publish a **single synthetic attempt** instead. All of them leave `pattern` empty, so an empty `pattern` is how you tell them apart:
+Five paths short-circuit before the parse and publish a **single synthetic attempt** instead. All of them leave `pattern` empty, so an empty `pattern` is how you tell them apart:
 
 | `rejectReason` | What happened |
 |----------------|---------------|
 | `no match` | The parser extracted nothing. `intent` is empty too, and `aggregateConfidence` is `0` — *not* the `-1` sentinel, which only ever comes from a real matched span. |
 | `cancelled via vocabulary` | Follow-up speech cancelled a pending command. The confirm case is the same entry with `accepted: true` and an empty `rejectReason`. |
+| `chosen via vocabulary, now awaiting confirmation` | The speaker answered an ambiguity, and the command they chose sets `requiresConfirmation` — so it did not fire, it asked again. `accepted: false`, and the *next* utterance's entry carries the confirmation. |
 | *(empty, `accepted: true`)* — or `still pending (partial: unfilled [...])` | Follow-up speech filled a pending command's missing slot. Empty reason with `accepted: true` means no required slot is left and the command fired. When the utterance filled some but not all of what was still missing, the same entry carries `accepted: false` and `still pending (partial: unfilled [...])` instead: the fill was kept, the command did not fire, and the pending is still live. |
-| `timeout — cancelled` | A pending command timed out and was discarded. `inputText` is the *original* command's transcript, and `words` is empty — this entry is not an utterance at all. Under `FireAsIs` the same entry carries `accepted: true` and an empty `rejectReason`. |
+| `timeout — cancelled` | A pending command timed out and was discarded. `inputText` is the *original* command's transcript, and `words` is empty — this entry is not an utterance at all. Under `FireAsIs` the same entry carries `accepted: true` and an empty `rejectReason` — **except for an unanswered ambiguity, which cancels under either setting**. |
 
 | Field | What it is | Section |
 |-------|-----------|---------|
@@ -477,7 +478,7 @@ The diagnoses below cover most of what sends you to the log. The first question 
 | `score` = 1.0 but `aggregateConfidence` below the gate | One acoustically weak word (§5). Check `words`; consider a slot alias. |
 | The wrong one of two similar commands fired, and its `score` looks healthy | Neither command did anything wrong: they differ at one word, that word was dropped, and selection fell through to registration order (§3). Turn on [`disambiguateSiblingTies`](command-recognition.md#ambiguous-commands-ask-instead-of-guessing) to be asked instead of guessed at. |
 | `rejectReason` = `entered pending (awaiting disambiguation, N choices)` | The above, with the flag already on: nothing fired because the speaker is being asked. Read `PendingAmbiguity` from `OnCommandPending` and prompt with the N choices. |
-| Accepted with an empty `slots` array where you expected a value | A bare sibling pattern out-ranked the slot-filled one. Coverage closes the common case (§7 B). If you still see it, the stranded value's first word probably begins another pattern, so coverage charged the bare form nothing — or `coverageWeight` is `0`. |
+| Accepted with an empty `slots` array where you expected a value | A bare pattern out-ranked the slot-filled one. Coverage closes the common case (§7 B). If you still see it, the stranded value's first word probably begins another pattern, so coverage charged the bare form nothing — or `coverageWeight` is `0`. |
 
 ---
 

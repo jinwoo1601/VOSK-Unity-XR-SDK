@@ -23,7 +23,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Utterance buffer merges split speech across VOSK VAD boundaries
 - Sequential command extraction (multiple commands per utterance)
 - Per-intent debounce to suppress rapid duplicate firings
-- Pending command system: partial match with follow-up slot-fill, and explicit confirmation before firing
+- Pending command system: partial match with follow-up slot-fill, explicit confirmation before firing, and asking the speaker which command they meant when two are indistinguishable
 - Configurable `minConfidence` and `minScore` thresholds
 - Free-speech mode toggle for unconstrained vocabulary with best-effort matching
 
@@ -160,7 +160,7 @@ public class CommandDemo : MonoBehaviour
 For full documentation, see the [documentation index](Documentation~/index.md).
 
 - [Getting Started](Documentation~/getting-started.md) -- installation, model setup, quick start, lifecycle
-- [Command Recognition](Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring, pending commands
+- [Command Recognition](Documentation~/command-recognition.md) -- pipeline concepts, patterns, slots, scoring, pending commands, and resolving two commands that are too alike to tell apart
 - [Matching and Scoring](Documentation~/scoring.md) -- score formula and miss costs, coverage, selection order, the two gates, eager-flush verdicts
 - [Command Sets](Documentation~/command-sets.md) -- named sets, runtime mode switching
 - [Inspector Authoring](Documentation~/inspector-authoring.md) -- zero-code ScriptableObject setup
