@@ -910,7 +910,6 @@ namespace VoXR.Commands
                     && TryBuildAmbiguity(
                         parser,
                         i,
-                        now,
                         tokens,
                         wordConfidence,
                         out var choices,
@@ -1036,7 +1035,6 @@ namespace VoXR.Commands
         bool TryBuildAmbiguity(
             VoxrCommandParser parser,
             int i,
-            float now,
             string[] tokens,
             Dictionary<string, float> wordConfidence,
             out VoxrCommand[] choices,
@@ -1069,17 +1067,29 @@ namespace VoXR.Commands
 
             for (int n = 0; n < record.RivalCount; n++)
             {
-                // Two reasons to drop a rival, and BOTH set `truncated` — an answer the speaker
-                // could have given is about to go unoffered, which is exactly what that flag
-                // means (F19: never silently truncated). Only the winner passed the gates in the
-                // Step 7 loop above; a rival is a different intent by construction, so its own
-                // cooldown has never been tested and testing it here is what makes the branch's
-                // "a command on cooldown should not raise a question" claim true of the choices
-                // as well as of the winner.
+                // A chosen alternative is NOT re-tested against the debounce, and that is a
+                // decision rather than an omission. A review found that the Step 7 cooldown
+                // check tests only the winner, and gating each rival here was tried and
+                // reverted: on a two-way set it drops the only rival, the choice list falls
+                // below two, and the winner fires — silently degrading to the coin flip this
+                // feature exists to remove, with the truncation signal discarded on the way out.
                 //
-                // Confidence needs no such test: a rival's span differs from the winner's only
+                // It also could not have been doing its job. An answer always waits out
+                // bufferWindow (the eager path is skipped while a pending is live), so the
+                // earliest a choice can fire is now + bufferWindow, while exclusion requires
+                // now - lastFire < commandCooldown. At the shipped 0.5s and 0.3s the cooldown
+                // has always expired before the answer could fire. And the bias runs backwards:
+                // the intent on cooldown is the one the speaker just used.
+                //
+                // The pre-existing confirmation path already settles the principle — it enters
+                // pending after the debounce check and fires on confirm without re-checking. A
+                // deliberate answer to a question the recogniser asked is not the duplicate
+                // VOSK result CommandDebouncer exists to suppress.
+                //
+                // Confidence needs no test either: a rival's span differs from the winner's only
                 // by trailing [unk], which ComputeConfidence skips, so their confidences are
                 // equal by construction and the winner already cleared the floor.
+                //
                 // Unreachable today, and kept anyway — the same treatment AdvanceSlotFill's
                 // array carry gets. Every construction site builds the parser and the set
                 // manager's lookup from ONE command array (Configure passes the same array to
@@ -1093,15 +1103,6 @@ namespace VoXR.Commands
                 {
                     // Nameable in a prompt but not fireable, so not offered — and reported,
                     // because an answer the speaker could have given is going unoffered.
-                    truncated = true;
-                    continue;
-                }
-
-                if (
-                    commandCooldown > 0f
-                    && _debouncer.IsOnCooldown(parser.RivalIntent(i, n), now, commandCooldown)
-                )
-                {
                     truncated = true;
                     continue;
                 }

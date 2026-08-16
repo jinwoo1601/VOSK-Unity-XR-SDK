@@ -2119,6 +2119,16 @@ namespace VoXR.Commands
                 int diagRivalCommandIdx = -1;
                 int diagRivalPatternIdx = -1;
 
+                // A rival that ties provably but cannot be NAMED (its expansion was truncated,
+                // so the pair test answers the bool with no set id). Tracked separately from
+                // tiedTruncated because whether it counts as truncation depends on something not
+                // yet known when it is seen: if the round ends up asking no question at all, the
+                // speaker re-utters anyway and nothing was lost — but if some OTHER rival makes
+                // a question happen, this one is an answer the speaker could have given and will
+                // not be offered. Resolved where the record is written, so the arrival order of
+                // the two rivals does not change the answer.
+                bool sawUnnameableRival = false;
+
                 for (int ci = 0; ci < _commands.Length; ci++)
                 {
                     var patterns = _commands[ci].Patterns;
@@ -2165,6 +2175,7 @@ namespace VoXR.Commands
                                 tiedTruncated = false;
                                 diagRivalCommandIdx = -1;
                                 diagRivalPatternIdx = -1;
+                                sawUnnameableRival = false;
 
                                 // Copy current match buffer into best buffer
                                 if (matchResult.SlotCount > 0)
@@ -2225,11 +2236,10 @@ namespace VoXR.Commands
                                 }
 
                                 // A truncated analysis answers the bool but names no set, so it
-                                // can refuse on the eager path and cannot ask here. Not counted
-                                // as truncation: nothing was dropped for want of ROOM, and the
-                                // integrator's remedy for it ("say the whole command again") is
-                                // what happens anyway when no question is asked at all.
+                                // can refuse on the eager path and cannot ask here.
                                 bool nameable = rivalSetId >= 0;
+                                if (!nameable)
+                                    sawUnnameableRival = true;
 
                                 // ONE question at a time. A pattern can belong to several sets,
                                 // and AreSiblingRivals answers true on ANY shared set, so
@@ -2306,7 +2316,11 @@ namespace VoXR.Commands
                     SetId = tiedSetId,
                     WinnerValue = tiedWinnerValue,
                     StartIdx = bestStartIdx,
-                    Truncated = tiedTruncated,
+
+                    // An unnameable rival only counts as truncation once a question is actually
+                    // being asked — otherwise the flush fires the winner and re-uttering is what
+                    // the speaker does regardless, which is what the flag would have told them.
+                    Truncated = tiedTruncated || (sawUnnameableRival && tiedRivalCount > 0),
                 };
 
                 _resultBuf[_resultCount++] = new VoxrCommandResult(command);
@@ -2367,26 +2381,40 @@ namespace VoXR.Commands
             ref bool tiedTruncated
         )
         {
-            // Two rivals can carry the same value as EACH OTHER — the pair test only guarantees
-            // each differs from the WINNER. Answering that word could not choose between them,
-            // so only the first is kept, exactly as item 1's F8 leaves author-duplicated
-            // patterns alone, one level up.
+            // The pair test only guarantees each rival differs from the WINNER — it says nothing
+            // about the rivals differing from EACH OTHER, so the same rule has to be applied
+            // again here. IsAnswerableRival is that rule, and using it rather than a second
+            // hand-written comparison is what F13's "exactly one code site expresses reachable
+            // as an answer" actually asks for.
+            //
+            // Both halves matter, and a review found the intent half missing:
+            //
+            //   same VALUE   two spellings of one choice; answering the word could not pick
+            //                between them (item 1's F8, one level up).
+            //   same INTENT  two DIFFERENT words that dispatch the identical command. The
+            //                speaker is asked to choose between indistinguishable outcomes, and
+            //                the duplicate burns one of the MaxDisambiguationRivals slots — on a
+            //                grammar where one intent contributes four sibling patterns, it
+            //                takes all of them and squeezes out the only real alternative.
             //
             // Deduped HERE rather than where the choice arrays are built, so the cap counts
             // offerable choices and Truncated means a real one did not fit. A bounded scan over
-            // at most MaxDisambiguationRivals strings, and only on a tie that already walked two
+            // at most MaxDisambiguationRivals entries, and only on a tie that already walked two
             // membership arrays to get here.
+            string rivalIntent = _commands[ci].Intent;
             int firstRival = _resultCount * MaxDisambiguationRivals;
             for (int r = 0; r < tiedRivalCount; r++)
             {
+                var kept = _tiedRivalBuf[firstRival + r];
                 if (
-                    string.Equals(
-                        _tiedRivalBuf[firstRival + r].Value,
+                    !IsAnswerableRival(
+                        kept.Value,
+                        _commands[kept.CommandIndex].Intent,
                         rivalValue,
-                        StringComparison.Ordinal
+                        rivalIntent
                     )
                 )
-                    return; // A duplicate spelling of a choice already offered. Nothing lost.
+                    return; // Indistinguishable from a choice already offered. Nothing lost.
             }
 
             if (tiedRivalCount >= MaxDisambiguationRivals)

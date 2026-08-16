@@ -1684,16 +1684,17 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void Disambiguation_RivalOnCooldown_IsNotOffered()
+        public void Disambiguation_AnswerFiresEvenWhenItsIntentIsOnCooldown()
         {
-            // The debounce gate in Step 7 tests the WINNER only, and every rival is a different
-            // intent by construction — so without testing each choice, answering could fire a
-            // command inside its own cooldown window, which nothing downstream re-checks
-            // (InterpretResolution calls RecordFire and never IsOnCooldown).
+            // Replaces a test that pinned the opposite, and was wrong to. Gating each choice on
+            // its own cooldown was tried: on a two-way set it drops the only rival, the question
+            // collapses, and the WINNER fires — so the speaker who said "set alpha level on" and
+            // was then misheard got set_mode, a command they never uttered, precisely BECAUSE
+            // they had just used level.
             //
-            // Here set_level fires first and takes its cooldown; the ambiguous utterance then
-            // finds set_mode clear, so the question would have been asked with an unfireable
-            // answer on it. Dropping set_level leaves one choice, so the winner fires instead.
+            // The debouncer exists to suppress duplicate VOSK results, not deliberate answers to
+            // a question the recogniser asked. The confirmation path already settles this: it
+            // enters pending after the debounce check and fires on confirm without re-checking.
             LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
             ConfigureAsking();
             _recogniser.CommandCooldown = 30f;
@@ -1711,13 +1712,13 @@ namespace VoXR.Tests.Runtime
             _recogniser.InjectText("set alpha on");
             _recogniser.FlushPendingBuffer();
 
-            Assert.AreEqual(
-                0,
-                pendingCount,
-                "the only rival cannot fire, so there is no question worth asking"
-            );
-            Assert.IsTrue(received.HasValue);
-            Assert.AreEqual("set_mode", received.Value.Intent, "and the winner fires");
+            Assert.AreEqual(1, pendingCount, "the question is still asked");
+            Assert.IsNull(received, "and nothing fires on the coin flip");
+
+            Answer("level");
+
+            Assert.IsTrue(received.HasValue, "the answer fires the intent the speaker chose");
+            Assert.AreEqual("set_level", received.Value.Intent);
         }
 
         [Test]

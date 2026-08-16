@@ -4898,6 +4898,91 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void TiedSiblingRecord_TruncatedRivalBesideAnAnswerableOne_ReportsTruncation()
+        {
+            // A truncated rival ties provably but cannot be NAMED, so it is never offered. When
+            // it is the ONLY tie that is harmless — no question is asked and the speaker re-utters
+            // anyway. When another rival makes a question happen, it is an answer they could have
+            // given that is missing from the list, and saying it matches nothing: the pending
+            // then times out and DR-6 fires nothing.
+            //
+            // So the flag has to cover it, exactly as it covers the cap and the two-set drop.
+            // A review caught this reporting IsTruncated == false while the Editor diagnostic
+            // named the missing rival in the same parse.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[]
+                {
+                    ShipSib("set_mode", "mode"),
+                    Sib(
+                        "set_level",
+                        SibP(
+                            "set",
+                            "{ship}",
+                            "level",
+                            "on",
+                            "?p",
+                            "?q",
+                            "?r",
+                            "?s",
+                            "?t",
+                            "?u",
+                            "?v"
+                        )
+                    ),
+                    ShipSib("set_standby", "standby"),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(1, record.RivalCount, "only the nameable rival is offered");
+            Assert.AreEqual("standby", parser.TiedRival(0, 0).Value);
+            Assert.IsTrue(
+                record.Truncated,
+                "and the integrator is told an answer is missing from the list"
+            );
+        }
+
+        [Test]
+        public void TiedSiblingRecord_TwoRivalsOfOneIntent_OfferOnlyTheFirst()
+        {
+            // The pair test guarantees each rival differs from the WINNER in both value and
+            // intent; it says nothing about the rivals differing from each other. Two patterns
+            // of ONE intent carrying different words pass the value dedup and would both be
+            // offered — asking the speaker to choose between two spellings of the same command,
+            // which is the round trip IsAnswerableRival's intent half exists to prevent.
+            //
+            // The cap makes it worse than cosmetic: four sibling patterns of one intent would
+            // take every slot and squeeze out the only genuinely different alternative.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[]
+                {
+                    ShipSib("set_mode", "mode"),
+                    Sib(
+                        "set_beta",
+                        SibP("set", "{ship}", "level", "on"),
+                        SibP("set", "{ship}", "report", "on")
+                    ),
+                    ShipSib("set_standby", "standby"),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(2, record.RivalCount, "one choice per intent, not per pattern");
+            CollectionAssert.AreEqual(
+                new[] { "set_beta", "set_standby" },
+                new[] { parser.RivalIntent(0, 0), parser.RivalIntent(0, 1) },
+                "and the second intent still gets its slot"
+            );
+            Assert.AreEqual("level", parser.TiedRival(0, 0).Value, "the first spelling wins");
+        }
+
+        [Test]
         public void TiedSiblingRecord_TruncatedExpansion_RecordsNoRivalThoughTheGateRefuses()
         {
             // The divergence architecture §2.4 asked for, and the reason the eager path keeps
