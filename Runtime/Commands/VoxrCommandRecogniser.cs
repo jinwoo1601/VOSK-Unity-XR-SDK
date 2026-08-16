@@ -115,6 +115,16 @@ namespace VoXR.Commands
                  "Leave empty to use defaults (cancel, abort, negative, belay that, never mind).")]
         [SerializeField] string[] cancelVocabulary;
 
+        [Tooltip(
+            "When the recogniser cannot tell two commands apart — they differ only by one "
+                + "word and the recogniser dropped it — ask instead of guessing. The pending "
+                + "command is raised through OnCommandPending with PendingAmbiguity set; the "
+                + "speaker answers with the distinguishing word. Off by default: with no "
+                + "OnCommandPending subscriber an ambiguous utterance would fire nothing at all."
+        )]
+        [SerializeField]
+        bool disambiguateSiblingTies = false;
+
         public event Action<VoxrCommand> OnCommandRecognised;
         public event Action<VoxrCommand[]> OnCommandsRecognised;
         public event Action<string> OnUnrecognisedSpeech;
@@ -199,7 +209,8 @@ namespace VoXR.Commands
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), commands,
                 coverageWeight,
                 GetFollowUpGrammarWords(),
-                cancelVocabulary
+                cancelVocabulary,
+                disambiguateSiblingTies
             );
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
@@ -304,7 +315,8 @@ namespace VoXR.Commands
             _parser = new VoxrCommandParser(_slotManager.BuildEffectiveSlots(_slots), _activeCommands,
                 coverageWeight,
                 GetFollowUpGrammarWords(),
-                cancelVocabulary
+                cancelVocabulary,
+                disambiguateSiblingTies
             );
         }
 
@@ -943,6 +955,15 @@ namespace VoXR.Commands
         }
         internal string[] ConfirmVocabulary { set => confirmVocabulary = value; }
         internal string[] CancelVocabulary { set => cancelVocabulary = value; }
+
+        // Like cancelVocabulary, this is frozen into the parser at Configure/RebuildParser time,
+        // so a test must set it BEFORE Configure. Getting that wrong is invisible here — the
+        // parser records ties whenever the flag is set OR UNITY_EDITOR is defined, and every
+        // Unity test runs in the Editor — so it shows up only as the flush not routing.
+        internal bool DisambiguateSiblingTies
+        {
+            set => disambiguateSiblingTies = value;
+        }
         internal string TestGrammarJson => _grammar.CurrentJson;
         internal bool TestGrammarRebuildDeferred => _grammar.GrammarRebuildDeferred;
         internal float TestEffectiveBufferWindow => EffectiveBufferWindow;

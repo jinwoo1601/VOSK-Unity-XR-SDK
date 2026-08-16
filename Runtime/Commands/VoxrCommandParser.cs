@@ -59,6 +59,65 @@ namespace VoXR.Commands
         }
     }
 
+    // One sibling rival that tied the flush's winner: which pattern it was, the word that tells
+    // it apart from the winner, and enough of its own match to fire it if the speaker picks it.
+    internal struct TiedSiblingRival
+    {
+        public int CommandIndex;
+        public int PatternIndex;
+
+        // This rival's discriminating value — what the speaker says to choose it (issue #74
+        // DR-4: the discriminating values ARE the choice vocabulary).
+        public string Value;
+
+        public int SlotCount;
+
+        // Its own, not the winner's: the tie compares ConsumedEndIdx, not EndIdx, so two tied
+        // candidates can differ by trailing [unk] neither consumed.
+        public int EndIdx;
+    }
+
+    // What the flush loop learned about the winner's sibling rivals in one extraction round.
+    // Parallel to VoxrCommandResult in the result buffer: index i of one describes index i of
+    // the other.
+    //
+    // NOT a field on VoxrCommandResult, which is a PUBLIC readonly struct — widening it would
+    // be a public API change nobody asked for.
+    //
+    // Sibling-only, in both the Editor and a player, and that is forced rather than preferred:
+    // DR-4 makes the discriminating values the choice vocabulary, and a non-sibling tie has no
+    // discriminating values — that is what "not siblings" means. Recording one would produce a
+    // question the speaker cannot answer. Design §5.3's promise that non-sibling ties stay
+    // "visible to the editor diagnostic" is the half this design never builds; issue #95
+    // carries it, and states that closing it needs a record separating "a rival tied" from
+    // "a SIBLING rival tied" rather than a relaxed gate.
+    internal struct TiedSiblingRecord
+    {
+        // 0 when nothing tied. Reset at the top of every extraction round — a stale record
+        // surviving into a round that found no tie is exactly the failure item 2's review
+        // caught when these locals were hoisted out of the extraction loop.
+        public int RivalCount;
+
+        // The ONE sibling set this question is about. A pattern can belong to several sets —
+        // ["a","b","c"] is a sibling of ["a","b","d"] at position 2 and of ["a","x","c"] at
+        // position 1 — so without fixing the set, an n-ary rival list could mix a rival that
+        // differs at position 2 with one that differs at position 1: two different questions,
+        // two different winner values, presented as one choice list.
+        public int SetId;
+
+        // The winner's own value in that set.
+        public string WinnerValue;
+
+        // Shared by every tied candidate, because CompareCandidate returns Tied only when
+        // startIdx == bestStartIdx. Recorded rather than derived because ComputeConfidence takes
+        // a SPAN, so an alternative's confidence needs both ends and EndIdx alone is not enough.
+        public int StartIdx;
+
+        // More rivals tied than the cap holds, so the choices offered are the first N. Surfaced
+        // to the integrator; the author was told at construction, where they can still act.
+        public bool Truncated;
+    }
+
     // Patterns that are element-wise equal but for one position, where each holds a required
     // literal (issue #74 design DR-1). Frame carries the shared elements, normalized, with
     // null at DiscriminatorIndex.
@@ -290,6 +349,33 @@ namespace VoXR.Commands
         List<SiblingSet> _siblingSets;
 #pragma warning restore CS0649
 
+        // How many sibling rivals one choice list can hold, and so how large the preallocated
+        // rival buffers are. Chosen against MEASURED set sizes, not guessed: on the shipped demo
+        // grammar the largest sibling set spans four distinct discriminating values
+        // ("close"/"set"/"make"/"open" distance {range} target {target}), which needs three
+        // rivals; every cross-intent set there spans two. The largest fixture across Tests~ is
+        // three. Four leaves a set clear of the largest measured shape with room to spare, at a
+        // cost of _resultBuf.Length * 4 rival records and the matching slot slab.
+        //
+        // A set with more members than this offers the first four choices and sets Truncated —
+        // never a silent cap. The author is told at construction (WarnOnSiblingDiscriminator),
+        // where set sizes are already known and they can still act on it.
+        internal const int MaxDisambiguationRivals = 4;
+
+        // Whether the flush loop records which sibling rival tied the winner. The Editor always
+        // records — the parse diagnostic reads it — while a player records only when the
+        // recogniser was configured with disambiguateSiblingTies, because with the flag off
+        // nothing reads it and DR-7 promises the opt-in costs a flag-off player nothing.
+        //
+        // readonly and set at construction, so the branch it guards predicts perfectly.
+        readonly bool _recordSiblingTies;
+
+        // Parallel to _resultBuf: index i describes the result at index i. Rival detail lives in
+        // flat preallocated arrays rather than inside the struct so nothing allocates per round.
+        TiedSiblingRecord[] _tiedSiblingBuf;
+        TiedSiblingRival[] _tiedRivalBuf; // _resultBuf.Length * MaxDisambiguationRivals
+        VoxrSlotMatch[] _rivalSlotBuf; // ...that, times _maxSlotsPerPattern
+
         // The cancel words the recogniser will actually match against, resolved once here so
         // the construction-time collision report tests the same array TryHandleConfirmCancel
         // will. Never null: an unset or empty override falls back to DefaultCancel.
@@ -328,10 +414,16 @@ namespace VoXR.Commands
         // predicts read from one rule. It is a CONSTRUCTOR parameter rather than a settable
         // property because WarnOnSiblingDiscriminator runs inside this constructor, so a
         // property would be assigned after the warning it governs had already been emitted.
+        //
+        // recordSiblingTies is the recogniser's disambiguateSiblingTies. Also a constructor
+        // parameter, and for a sharper reason: VoxrCommandRecogniser builds a NEW parser on
+        // Configure and RebuildParser, so a post-construction setter is one call site away from
+        // a silently flag-off parser after a rebuild.
         public VoxrCommandParser(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
             float coverageWeight = DefaultCoverageWeight,
             string[] additionalGrammarWords = null,
-            string[] effectiveCancelVocabulary = null
+            string[] effectiveCancelVocabulary = null,
+            bool recordSiblingTies = false
         )
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
@@ -339,6 +431,13 @@ namespace VoXR.Commands
 
             _slots = slots;
             _commands = commands;
+#if UNITY_EDITOR
+            // The Editor records unconditionally: ParseDiagnosticEntry's sibling fields read the
+            // same record, and item 2's five diagnostic tests assert them with no flag set.
+            _recordSiblingTies = true;
+#else
+            _recordSiblingTies = recordSiblingTies;
+#endif
             _cancelVocabularyIsOverridden =
                 effectiveCancelVocabulary != null && effectiveCancelVocabulary.Length > 0;
             _effectiveCancelVocabulary = _cancelVocabularyIsOverridden
@@ -503,6 +602,17 @@ namespace VoXR.Commands
 #endif
 
             _resultBuf = new VoxrCommandResult[Math.Max(commands.Length, 1)];
+
+            // Parallel to _resultBuf, and preallocated with it: the flush loop is the innermost
+            // path over every (command, pattern, startIdx) triple, so recording a rival must not
+            // allocate there. Sized unconditionally rather than under _recordSiblingTies — these
+            // are three arrays per parser, not per parse, and a null check on the hot path would
+            // cost more than the memory does.
+            _tiedSiblingBuf = new TiedSiblingRecord[_resultBuf.Length];
+            _tiedRivalBuf = new TiedSiblingRival[_resultBuf.Length * MaxDisambiguationRivals];
+            _rivalSlotBuf = new VoxrSlotMatch[
+                _resultBuf.Length * MaxDisambiguationRivals * _maxSlotsPerPattern
+            ];
 
             // _canCommitEarly is computed lazily on the first eager check (issue #25), so
             // callers who leave eager flush off never pay the O(2^optionals)+O(forms^2)
@@ -1628,8 +1738,41 @@ namespace VoXR.Commands
         //
         // Allocation-free: both operands are prebuilt arrays, and the common case exits on the
         // first null. Only ever called on a Tied comparison, which is rare.
-        bool AreSiblingRivals(int ci1, int pi1, int ci2, int pi2)
+        //
+        // The eager path's shape, kept as a wrapper so its CONDITION is untouched (requirements
+        // F17 forbids changing the eager condition; it does not require the helper beneath it
+        // to stay byte-identical). TryEagerCommit only ever asks WHETHER a sibling tie exists,
+        // to return None — it never needs the words.
+        bool AreSiblingRivals(int ci1, int pi1, int ci2, int pi2) =>
+            TryFindSiblingRival(ci1, pi1, ci2, pi2, out _, out _, out _);
+
+        // The same question, plus the two strings the choice vocabulary is made of: the winner's
+        // value in the shared set and the rival's. AreSiblingRivals computed both and threw them
+        // away, and without them DR-4 cannot be built — the discriminating values ARE the
+        // choices.
+        //
+        // Returns FALSE under expansion truncation, which is a deliberate divergence from what
+        // the bool-only path could do. When either pattern was past MaxWarningExpansion the
+        // fallback is RequiredElementsAreSiblings, which answers a bool about all-optionals-
+        // omitted readings and knows no set, so it can confirm a tie but cannot name the words.
+        // That over-approximation is right for REFUSING on the eager path — the direction
+        // ComputeCanCommitEarly already fails in — but a refusal needs no vocabulary and a
+        // question does. So a truncated tie records no rival and the flush fires the winner,
+        // exactly as it would with the flag off. Safe direction, and stated rather than found.
+        bool TryFindSiblingRival(
+            int ci1,
+            int pi1,
+            int ci2,
+            int pi2,
+            out int setId,
+            out string winnerValue,
+            out string rivalValue
+        )
         {
+            setId = -1;
+            winnerValue = null;
+            rivalValue = null;
+
             if (_siblingMemberships == null)
                 return false;
             if (
@@ -1675,6 +1818,15 @@ namespace VoXR.Commands
             // Partial, and deliberately so: a sibling relation existing only in a MID expansion
             // is still missed. This narrows the over-approximation to something provable rather
             // than closing the hole completely.
+            //
+            // This arm answers the BOOL and leaves setId at -1, and the asymmetry is the point.
+            // RequiredElementsAreSiblings knows no set, so it cannot name the winner's value or
+            // the rival's — and a question needs those words while a refusal does not. So the
+            // eager gate keeps refusing here exactly as item 2 built it (F17, and the two tests
+            // TryEagerCommit_SiblingAnalysisTruncatedByTheExpansionCap_RefusesAnyway and
+            // _TruncatedPatternAsTheRival_RefusesToo pin it), while the flush's recorder — which
+            // requires a set id — records nothing and fires the winner, as it would with the
+            // flag off. Safe direction on both paths, from one call.
             if (_siblingFormsTruncated[ci1][pi1] || _siblingFormsTruncated[ci2][pi2])
                 return RequiredElementsAreSiblings(
                     _commands[ci1].Patterns[pi1],
@@ -1698,7 +1850,12 @@ namespace VoXR.Commands
                     a[i].SetId == b[j].SetId
                     && IsAnswerableRival(a[i].Value, intentA, b[j].Value, intentB)
                 )
+                {
+                    setId = a[i].SetId;
+                    winnerValue = a[i].Value;
+                    rivalValue = b[j].Value;
                     return true;
+                }
 
             return false;
         }
@@ -1777,6 +1934,24 @@ namespace VoXR.Commands
                 ? $"that differ only at element {members[0].AuthoredDiscriminatorIndex + 1}"
                 : "that differ only at that element";
 
+            // The cap, reported at construction where the set sizes are already known and the
+            // author can still act — and NOT merely flagged at parse time, which is the silent
+            // cap wearing a boolean (requirements F19 forbids one). Runtime disambiguation
+            // offers the winner plus MaxDisambiguationRivals alternatives, so a set spanning
+            // more distinct values than that cannot put them all in one question.
+            //
+            // Emitted only from this message, so it inherits the same-intent and reachability
+            // gates: a same-intent set is never routed to the speaker at all, and telling an
+            // author their synonym list is too long to ask about would be advice about a
+            // question that is never asked.
+            string capNote =
+                values.Count > 1 + MaxDisambiguationRivals
+                    ? $" This set spans {values.Count} discriminating values and runtime "
+                        + $"disambiguation offers at most {1 + MaxDisambiguationRivals} choices, "
+                        + "so the rest cannot be answered in one word — the speaker would have "
+                        + "to say the whole command again."
+                    : string.Empty;
+
             return $"[VoxrCommandParser] Intents {JoinWith(intents, "and")} have "
                 + $"patterns {JoinWith(patternTexts, "and")} {differ} "
                 + $"({JoinWith(values, "or")}). If that word is "
@@ -1784,7 +1959,7 @@ namespace VoXR.Commands
                 + "consumed span, same literal count — and selection falls through to "
                 + "registration order, so the wrong intent can fire. Make them differ in more "
                 + "than one element — the only fix that removes the tie rather than moving it "
-                + "— or mark the more destructive one requiresConfirmation.";
+                + $"— or mark the more destructive one requiresConfirmation.{capNote}";
         }
 
         // Takes the MEMBER's authored index, not the set's DiscriminatorIndex: this message
@@ -1866,8 +2041,25 @@ namespace VoXR.Commands
             int searchStart = 0;
 #if UNITY_EDITOR
             var diagnosticEntries = new List<ParseDiagnosticEntry>();
-            EnsureSiblingLookup();
 #endif
+            // OUTSIDE the Editor gate, and that placement is the whole feature working or not.
+            // AreSiblingRivals reads _siblingMemberships, which only EnsureSiblingLookup builds;
+            // its other callers are WarnOnSiblingDiscriminator ([Conditional("UNITY_EDITOR")],
+            // so elided in a player) and TryEagerCommit (reached only when
+            // eagerFlushOnCompleteMatch is set, and it defaults to false). Left inside the gate,
+            // a shipped player would never assign _siblingMemberships, every AreSiblingRivals
+            // call would short-circuit on its null check, no rival would ever be recorded, and
+            // the flush would fire the first-registered sibling exactly as before — the feature
+            // working in the Editor and doing nothing in a shipped game.
+            //
+            // No Unity test can catch that: Unity always defines UNITY_EDITOR, so EditMode and
+            // PlayMode pass either way, and the A/B rig is the only build here in the player
+            // configuration and it checks compilation, not behaviour.
+            //
+            // Guarded by _recordSiblingTies rather than unconditional, so item 2's cost decision
+            // survives intact for a flag-off player: it still never builds the lookup.
+            if (_recordSiblingTies)
+                EnsureSiblingLookup();
 
             while (searchStart < tokens.Length)
             {
@@ -1879,14 +2071,19 @@ namespace VoXR.Commands
                 int bestEndIdx = 0;
                 int bestConsumedEndIdx = 0;
                 int bestSlotCount = 0;
-#if UNITY_EDITOR
-                // Declared HERE, with the round's other best* locals, and not beside
-                // diagnosticEntries above: selection restarts per extraction round, so a rival
-                // recorded in round 1 must not survive into round 2's diagnostic entry. Hoisting
-                // these out of the loop compiles and passes any single-command test.
-                int bestTiedSiblingCommandIdx = -1;
-                int bestTiedSiblingPatternIdx = -1;
-#endif
+
+                // Declared HERE, with the round's other best* locals, and not outside the loop:
+                // selection restarts per extraction round, so a rival recorded in round 1 must
+                // not survive into round 2. Hoisting these out compiles and passes any
+                // single-command test — item 2's review caught exactly that, and left the reset
+                // itself unpinned (its GAP-3). This feature moves them, so it pins it.
+                //
+                // No longer #if UNITY_EDITOR: since issue #74 item 3 the RUNTIME reads this to
+                // decide whether to ask the speaker which intent was meant.
+                int tiedRivalCount = 0;
+                int tiedSetId = -1;
+                string tiedWinnerValue = null;
+                bool tiedTruncated = false;
 
                 for (int ci = 0; ci < _commands.Length; ci++)
                 {
@@ -1924,10 +2121,15 @@ namespace VoXR.Commands
                                 bestEndIdx = matchResult.EndIdx;
                                 bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                                 bestSlotCount = matchResult.SlotCount;
-#if UNITY_EDITOR
-                                bestTiedSiblingCommandIdx = -1;
-                                bestTiedSiblingPatternIdx = -1;
-#endif
+
+                                // Clear-on-adopt: a new incumbent has its own rivals, and the
+                                // old one's are about a candidate that no longer wins. This rule
+                                // is shared with the eager path's copy and must stay so.
+                                tiedRivalCount = 0;
+                                tiedSetId = -1;
+                                tiedWinnerValue = null;
+                                tiedTruncated = false;
+
                                 // Copy current match buffer into best buffer
                                 if (matchResult.SlotCount > 0)
                                 {
@@ -1938,30 +2140,134 @@ namespace VoXR.Commands
 #endif
                                 }
                             }
-#if UNITY_EDITOR
-                            // Editor-only, and inert: the flush fires the same command whether
-                            // or not a rival tied it. Recorded so the coin flip is inspectable
-                            // where today it is invisible, and so the pending path that will
-                            // ACT on it (issue #74 item 3) inherits a working record rather
-                            // than introducing one alongside a behaviour change.
+                            // Every tied sibling rival, up to the cap — not just the first. Item
+                            // 2's first-rival rule was right for an Editor diagnostic naming *a*
+                            // rival, and is undersized for a CHOICE vocabulary, which needs every
+                            // answer the speaker might give (design §5.1: a sibling set
+                            // "generalises to n-ary sets"; the discriminating values ARE the
+                            // choices). On a three-way set with the discriminator elided all
+                            // three candidates tie, and item 2 saw rivals two and three and
+                            // discarded them.
                             //
-                            // The eager path carries the same eight lines rather than sharing a
-                            // helper, and the reason is the loop locals, not the build config:
-                            // each loop owns its own incumbent and its own tie state, so a
-                            // shared routine would take them all by ref and read worse than the
-                            // duplication. Both copies must stay in step — the first-rival and
-                            // clear-on-adopt rules are the same rules — so a change to one is a
-                            // change to both.
+                            // The eager path still carries its own copy of these lines rather
+                            // than sharing a helper, for the reason item 2 gave — each loop owns
+                            // its own incumbent and tie state, so a shared routine would take
+                            // them all by ref and read worse. Item 2's comment said the two
+                            // copies "must stay in step"; that is now HALF true, and saying so
+                            // beats leaving it to mislead. The clear-on-adopt rule stays shared.
+                            // The recording DEPTH deliberately diverges, because only the flush
+                            // has a consumer that cares how many: TryEagerCommit asks only
+                            // WHETHER a sibling tie exists, to return None.
+                            //
+                            // The leading _recordSiblingTies test is what a flag-off player pays
+                            // for this feature, and it is per CANDIDATE, not per tie — this is
+                            // the innermost body of the ci x pi x startIdx loop. One predictable
+                            // test against a readonly field, hundreds of times per parse on the
+                            // demo grammar. Measured rather than argued (requirements F18(d)).
                             else if (
-                                order == CandidateOrder.Tied
-                                && bestTiedSiblingCommandIdx < 0
-                                && AreSiblingRivals(bestCommandIdx, bestPatternIdx, ci, pi)
+                                _recordSiblingTies
+                                && order == CandidateOrder.Tied
+                                && TryFindSiblingRival(
+                                    bestCommandIdx,
+                                    bestPatternIdx,
+                                    ci,
+                                    pi,
+                                    out int rivalSetId,
+                                    out string winnerValue,
+                                    out string rivalValue
+                                )
+                                // A truncated analysis answers the bool but names no set, so it
+                                // can refuse on the eager path and cannot ask here.
+                                && rivalSetId >= 0
+                                // ONE question at a time. A pattern can belong to several sets,
+                                // and AreSiblingRivals answers true on ANY shared set, so
+                                // without this a winner sitting in two sets would mix a rival
+                                // that differs at position 2 with one that differs at position 1
+                                // into a single choice list — two questions, two winner values,
+                                // one prompt. Which set wins is registration order,
+                                // deterministically. A second live ambiguity goes unasked, the
+                                // same class as the cap and reported the same way.
+                                && (tiedRivalCount == 0 || rivalSetId == tiedSetId)
                             )
                             {
-                                bestTiedSiblingCommandIdx = ci;
-                                bestTiedSiblingPatternIdx = pi;
+                                // Two rivals can carry the same value as EACH OTHER — the pair
+                                // test only guarantees each differs from the WINNER. Answering
+                                // that word could not choose between them, so only the first is
+                                // kept, exactly as item 1's F8 leaves author-duplicated patterns
+                                // alone, one level up.
+                                //
+                                // Deduped HERE rather than where the choice arrays are built, so
+                                // the cap counts offerable choices and Truncated means a real
+                                // one did not fit. A bounded scan over at most
+                                // MaxDisambiguationRivals strings, and only on a tie that already
+                                // walked two membership arrays to get here.
+                                bool duplicate = false;
+                                int firstRival = _resultCount * MaxDisambiguationRivals;
+                                for (int r = 0; r < tiedRivalCount; r++)
+                                {
+                                    if (
+                                        string.Equals(
+                                            _tiedRivalBuf[firstRival + r].Value,
+                                            rivalValue,
+                                            StringComparison.Ordinal
+                                        )
+                                    )
+                                    {
+                                        duplicate = true;
+                                        break;
+                                    }
+                                }
+
+                                if (duplicate)
+                                {
+                                    // Nothing to record and nothing lost.
+                                }
+                                else if (tiedRivalCount >= MaxDisambiguationRivals)
+                                {
+                                    // A choice the speaker could have given, that this buffer
+                                    // cannot hold. Flagged rather than dropped in silence: the
+                                    // integrator can word "…or say the whole command again", and
+                                    // the author was told at construction where they can act.
+                                    tiedTruncated = true;
+                                }
+                                else
+                                {
+                                    if (tiedRivalCount == 0)
+                                    {
+                                        tiedSetId = rivalSetId;
+                                        tiedWinnerValue = winnerValue;
+                                    }
+
+                                    int slot = firstRival + tiedRivalCount;
+                                    _tiedRivalBuf[slot] = new TiedSiblingRival
+                                    {
+                                        CommandIndex = ci,
+                                        PatternIndex = pi,
+                                        Value = rivalValue,
+                                        SlotCount = matchResult.SlotCount,
+                                        EndIdx = matchResult.EndIdx,
+                                    };
+
+                                    // This rival's OWN slots, captured now rather than derived
+                                    // from the winner's later (requirements F6). Siblings are
+                                    // element-wise equal but for one required literal, so the
+                                    // slots agree in every case anyone can construct — but the
+                                    // tie is between AUTHORED patterns that may reach the sibling
+                                    // relation through different optional expansions, and "they
+                                    // agree in practice" is not a reason to fire a command with
+                                    // another candidate's arguments.
+                                    if (matchResult.SlotCount > 0)
+                                        Array.Copy(
+                                            _matchSlotBuf,
+                                            0,
+                                            _rivalSlotBuf,
+                                            slot * _maxSlotsPerPattern,
+                                            matchResult.SlotCount
+                                        );
+
+                                    tiedRivalCount++;
+                                }
                             }
-#endif
                         }
                     }
                 }
@@ -1999,6 +2305,20 @@ namespace VoXR.Commands
 
                 if (_resultCount >= _resultBuf.Length)
                     break; // Buffer full — stop extracting.
+
+                // Written BEFORE _resultCount advances, so index i of _tiedSiblingBuf describes
+                // index i of _resultBuf — the alignment the recogniser relies on when it walks
+                // the two in lockstep. Written unconditionally, including RivalCount = 0, so a
+                // round that found no tie clears whatever the previous round left here.
+                _tiedSiblingBuf[_resultCount] = new TiedSiblingRecord
+                {
+                    RivalCount = tiedRivalCount,
+                    SetId = tiedSetId,
+                    WinnerValue = tiedWinnerValue,
+                    StartIdx = bestStartIdx,
+                    Truncated = tiedTruncated,
+                };
+
                 _resultBuf[_resultCount++] = new VoxrCommandResult(command);
 #if UNITY_EDITOR
                 int[] diagStartWords = null;
@@ -2015,11 +2335,25 @@ namespace VoXR.Commands
                     PatternString = string.Join(" ", _commands[bestCommandIdx].Patterns[bestPatternIdx]),
                     SlotStartWords = diagStartWords,
                     SlotEndWords = diagEndWords,
+                        // Populated from rival 0 of the record above rather than from a pair of
+                        // Editor-only locals, so every existing diagnostic test asserts unchanged
+                        // values. The diagnostic still names ONE rival — the question it answers is
+                        // "was the winner decided by a coin flip, and against whom?", which needs an
+                        // exemplar, not a vocabulary.
                         TiedSiblingIntent =
-                            bestTiedSiblingCommandIdx >= 0
-                                ? _commands[bestTiedSiblingCommandIdx].Intent
+                            tiedRivalCount > 0
+                                ? _commands[
+                                    _tiedRivalBuf[
+                                        (_resultCount - 1) * MaxDisambiguationRivals
+                                    ].CommandIndex
+                                ].Intent
                                 : null,
-                        TiedSiblingPatternIndex = bestTiedSiblingPatternIdx,
+                        TiedSiblingPatternIndex =
+                            tiedRivalCount > 0
+                                ? _tiedRivalBuf[
+                                    (_resultCount - 1) * MaxDisambiguationRivals
+                                ].PatternIndex
+                                : -1,
                 });
 #endif
                 searchStart = bestEndIdx;
@@ -2034,6 +2368,55 @@ namespace VoXR.Commands
         }
 
         internal VoxrCommandResult[] ResultBuffer => _resultBuf;
+
+        // Aligned with ResultBuffer: index i describes the result at index i, valid for the
+        // count ParseInternal returned. Exposed the same way, and read the same way — the
+        // recogniser already walks the result buffer by index in its Step 7 loop.
+        internal TiedSiblingRecord[] TiedSiblingBuffer => _tiedSiblingBuf;
+
+        // Rival n of result i. Flat indexing rather than a jagged array so nothing allocates per
+        // round; the caller has already checked n against TiedSiblingBuffer[i].RivalCount.
+        internal TiedSiblingRival TiedRival(int resultIdx, int n) =>
+            _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n];
+
+        // That rival's own slot matches, copied out fresh because they cross into a public
+        // VoxrCommand the subscriber can retain — the PendingCommandHandler precedent that
+        // anything reaching a public event is allocated, never pool-borrowed. Once per
+        // ambiguity, never per candidate.
+        internal VoxrSlotMatch[] CopyRivalSlots(int resultIdx, int n)
+        {
+            int slot = resultIdx * MaxDisambiguationRivals + n;
+            int count = _tiedRivalBuf[slot].SlotCount;
+            if (count <= 0)
+                return Array.Empty<VoxrSlotMatch>();
+
+            var slots = new VoxrSlotMatch[count];
+            Array.Copy(_rivalSlotBuf, slot * _maxSlotsPerPattern, slots, 0, count);
+            return slots;
+        }
+
+        // The span every tied candidate shares, so an alternative's confidence can be computed
+        // over its own reading. ComputeConfidence takes (tokens, startIdx, endIdx): startIdx is
+        // on the record because CompareCandidate returns Tied only when the start indices match,
+        // and endIdx is per rival because the tie compares ConsumedEndIdx, not EndIdx.
+        internal float RivalConfidence(
+            int resultIdx,
+            int n,
+            string[] tokens,
+            Dictionary<string, float> wordConfidence
+        ) =>
+            ComputeConfidence(
+                tokens,
+                _tiedSiblingBuf[resultIdx].StartIdx,
+                _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n].EndIdx,
+                wordConfidence
+            );
+
+        internal string RivalIntent(int resultIdx, int n) =>
+            _commands[_tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n].CommandIndex].Intent;
+
+        internal int RivalPatternIndex(int resultIdx, int n) =>
+            _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n].PatternIndex;
 
         public VoxrCommandResult[] Parse(string text)
         {
