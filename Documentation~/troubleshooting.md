@@ -90,7 +90,9 @@ The healthy-looking score is the tell: nothing went wrong with the match. The wo
 
 **The eager-flush gate no longer commits early on this shape.** Where the buffer fits two different intents exactly equally and they differ at one required word, it declines and waits out the full window instead of firing a coin flip mid-utterance. That covers the **middle**-of-pattern case the gate's tail rule cannot see — `set {ship} mode on` against `set {ship} level on`, heard as "set alpha on". The same command still fires, at the end of the window rather than immediately, so the wrong-command symptom above is unchanged; only its timing is.
 
-Fix by diverging by more than one word, or give the more destructive of the pair `requiresConfirmation`. Where both phrasings must exist verbatim, register the safer one first. See [Do not separate two commands by a single word](command-recognition.md#do-not-separate-two-commands-by-a-single-word).
+**The fix that actually resolves it: turn on `disambiguateSiblingTies`.** The gate above buys the decision one thing — it now happens once, at the flush, on a final transcript — and that is where the recogniser can *ask*. With the flag on, an ambiguous utterance fires nothing, raises `OnCommandPending` with `PendingAmbiguity` set, and the speaker says the one distinguishing word (`weapons`, `navigation`) to settle it. It is off by default because it needs somewhere to put the question: with no `OnCommandPending` subscriber the command is lost rather than merely mis-picked. See [Ask instead of guessing](command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
+
+Where you cannot prompt, the grammar-side fixes still apply: diverge by more than one word, or give the more destructive of the pair `requiresConfirmation`. Where both phrasings must exist verbatim, register the safer one first. See [Do not separate two commands by a single word](command-recognition.md#do-not-separate-two-commands-by-a-single-word).
 
 ### A command reports nothing at all, though it clearly part-matched
 

@@ -62,9 +62,13 @@ Setter semantics:
 
 ## Cancel Pending On Release
 
-`VoxrCommandRecogniser` can hold a command in a *pending* state when it waits for confirmation (`RequiresConfirmation`) or for a follow-up slot-fill (`AllowPartialMatch`). Pending commands normally resolve on their own — via follow-up speech, a confirm/cancel phrase, or the configurable `pendingTimeout` (default 5 s).
+`VoxrCommandRecogniser` can hold a command in a *pending* state when it waits for confirmation (`RequiresConfirmation`), for a follow-up slot-fill (`AllowPartialMatch`), or — with `disambiguateSiblingTies` enabled — for the speaker to say which of two indistinguishable commands they meant. Pending commands normally resolve on their own: via follow-up speech, a confirm/cancel phrase, a discriminating word, or the configurable `pendingTimeout` (default 5 s).
 
 With `Cancel Pending On Release` enabled, lifting the talk button immediately cancels any pending command, firing `OnCommandCancelled`. Use this when you want the talk button to act as a hard reset for partial utterances. Leave it disabled if you want pending commands to survive release and resolve on their own timer.
+
+**Turn this off if you use `disambiguateSiblingTies`.** `ReleaseTalk` flushes the buffer and *then* cancels, and the flush is what creates a disambiguation — so with this setting on, the question is raised and discarded in consecutive statements and the speaker is never asked. That is the setting doing its job, not a bug: it exists to make the button a hard reset.
+
+Left off, the question survives release. The speaker presses again and answers it. Note the clock does not stop: `pendingTimeout` runs from the moment the question was raised, not from the next press, so the whole round trip — prompt, react, press, speak — has to fit inside it. Raise `pendingTimeout` above its 5 s default if that is tight.
 
 ## Android Permission Race
 
