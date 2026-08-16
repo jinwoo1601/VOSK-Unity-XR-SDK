@@ -960,38 +960,53 @@ namespace VoXR.Commands
                 if (members.Count < 2)
                     continue;
 
-                // One member per discriminating value: two patterns reaching the same literal
-                // are duplicates of each other, not siblings, which is what keeps
-                // author-duplicated patterns out of the report. Greedy and first-wins, so the
-                // survivor is the earliest registered and the result is stable across runs.
+                // EVERY pattern carrying the hazard is kept, and the set is emitted when at
+                // least two distinct discriminating values remain (issue #90).
                 //
-                // A per-(command, pattern) guard used to sit beside this, against a pattern
-                // being its own sibling. It became unreachable when frame comparison stopped
-                // folding optional literals: two same-length forms of ONE pattern differ only
-                // in which optionals they include, and with the "?" preserved those positions
-                // never compare equal — so the shift that used to align a required literal
-                // against a different one cannot happen, and an optional position can never be
-                // the discriminator anyway. Removed rather than kept as insurance against a
-                // mechanism the code no longer has.
+                // This used to keep one member per distinct value, which under-reported: with
+                // a:["mode","on"], b:["mode","on"], c:["mode","off"] the emitted set was
+                // {a,c} and b was never named, even though b<->c is exactly the hazard a<->c
+                // is. An author fixing what the warning named left the other half live. Worse,
+                // where the dropped member was the only one carrying a second intent, the
+                // survivors shared one intent and the same-intent filter then suppressed the
+                // set entirely — an under-report becoming no report at all, and invisible to
+                // the runtime lookup that consumes these sets.
+                //
+                // What keeps author-duplicated patterns out (requirements F8) is no longer
+                // this gate but the "distinct values" test below plus the per-PAIR test in
+                // AreSiblingRivals: two members sharing a value are duplicates of each other,
+                // not siblings, so they never form a rival pair.
+                //
+                // The exact-duplicate guard below is NOT the per-(command, pattern) arm that
+                // was removed at PR #92's review, and it is here for a different reason. That
+                // one guarded a pattern being its own sibling through a shift aligning a
+                // required literal against a different one — a mechanism the code no longer
+                // has, since frame comparison stopped folding optional literals. This one
+                // absorbs a pattern reaching one bucket TWICE: ExpandOptionals enumerates
+                // 2^optionals subsets without deduplicating, so ["a","?x","?x","b"] yields the
+                // form ["a","?x","b"] from two different masks, and both land here with the
+                // same (command, pattern, value). The old value gate hid that; keeping members
+                // exposes it, and the warning would name one pattern twice.
                 var kept = new List<SiblingMember>();
                 for (int i = 0; i < members.Count; i++)
                 {
-                    bool seen = false;
+                    bool duplicate = false;
                     for (int j = 0; j < kept.Count; j++)
                     {
                         if (
-                            string.Equals(kept[j].Value, members[i].Value, StringComparison.Ordinal)
+                            kept[j].CommandIndex == members[i].CommandIndex
+                            && kept[j].PatternIndex == members[i].PatternIndex
                         )
                         {
-                            seen = true;
+                            duplicate = true;
                             break;
                         }
                     }
-                    if (!seen)
+                    if (!duplicate)
                         kept.Add(members[i]);
                 }
 
-                if (kept.Count < 2)
+                if (kept.Count < 2 || DistinctValueCount(kept) < 2)
                     continue;
 
                 // One hazard can surface under several frames: a pattern pair carrying an
@@ -1056,6 +1071,30 @@ namespace VoXR.Commands
                     frame[i] = i == Discriminator ? null : NormalizeElement(Form[i]);
                 return frame;
             }
+        }
+
+        // A set is only a hazard if the members disagree about the discriminating word. Two
+        // patterns reaching the same literal are duplicates of each other — an authoring error
+        // this design leaves alone (requirements F8) — so a bucket whose members all carry one
+        // value has nothing to tie over.
+        static int DistinctValueCount(List<SiblingMember> members)
+        {
+            int distinct = 0;
+            for (int i = 0; i < members.Count; i++)
+            {
+                bool seenEarlier = false;
+                for (int j = 0; j < i; j++)
+                {
+                    if (string.Equals(members[j].Value, members[i].Value, StringComparison.Ordinal))
+                    {
+                        seenEarlier = true;
+                        break;
+                    }
+                }
+                if (!seenEarlier)
+                    distinct++;
+            }
+            return distinct;
         }
 
         static int IndexOfSameMembers(List<SiblingSet> sets, List<SiblingMember> candidate)
@@ -1146,6 +1185,11 @@ namespace VoXR.Commands
                 // speaker is left open for the later items to decide, so silencing this on
                 // their behalf would be guessing. It costs nothing to be wrong in this
                 // direction: one collision surfaced across the entire test corpus.
+                //
+                // Reported once per colliding VALUE, not once per member. Since issue #90 a
+                // value can be carried by several patterns, and the remedy — rename the literal,
+                // or override cancelVocabulary — is the same advice however many patterns spell
+                // it, so repeating it would be noise.
                 for (int m = 0; m < set.Members.Length; m++)
                 {
                     if (
@@ -1153,6 +1197,25 @@ namespace VoXR.Commands
                         < 0
                     )
                         continue;
+
+                    bool alreadyReported = false;
+                    for (int e = 0; e < m; e++)
+                    {
+                        if (
+                            string.Equals(
+                                set.Members[e].Value,
+                                set.Members[m].Value,
+                                StringComparison.Ordinal
+                            )
+                        )
+                        {
+                            alreadyReported = true;
+                            break;
+                        }
+                    }
+                    if (alreadyReported)
+                        continue;
+
                     UnityEngine.Debug.LogWarning(BuildCancelCollisionWarning(set, set.Members[m]));
                 }
             }
@@ -1201,14 +1264,12 @@ namespace VoXR.Commands
             // author can find the text in their asset — the frame this set was keyed on is
             // normalized, and normalized text is not what they wrote.
             var patternTexts = new string[members.Length];
-            var values = new string[members.Length];
             for (int i = 0; i < members.Length; i++)
             {
                 string[] raw = commands[members[i].CommandIndex].Patterns[members[i].PatternIndex];
                 patternTexts[i] = "\"" + string.Join(" ", raw) + "\"";
                 if (raw.Length != set.Frame.Length)
                     patternTexts[i] += " (with its optional elements omitted)";
-                values[i] = "\"" + members[i].Value + "\"";
             }
 
             // One intent can contribute several patterns to a set — "cease fire" and "hold
@@ -1222,10 +1283,23 @@ namespace VoXR.Commands
                     intents.Add(quoted);
             }
 
+            // Values are deduplicated for the same reason, and it became necessary when the
+            // emission gate stopped dropping duplicate-valued members (issue #90): two patterns
+            // reaching the same literal are both named as patterns, but the CHOICE the speaker
+            // faces is between distinct words, so rendering ("on", "on" or "off") would be
+            // wrong about the question rather than merely repetitive.
+            var values = new List<string>(members.Length);
+            for (int i = 0; i < members.Length; i++)
+            {
+                string quoted = "\"" + members[i].Value + "\"";
+                if (!values.Contains(quoted))
+                    values.Add(quoted);
+            }
+
             // Authors count elements from one.
             return $"[VoxrCommandParser] Intents {JoinWith(intents.ToArray(), "and")} have "
                 + $"patterns {JoinWith(patternTexts, "and")} that differ only at element "
-                + $"{set.DiscriminatorIndex + 1} ({JoinWith(values, "or")}). If that word is "
+                + $"{set.DiscriminatorIndex + 1} ({JoinWith(values.ToArray(), "or")}). If that word is "
                 + "dropped, these patterns match the remainder equally — same score, same "
                 + "consumed span, same literal count — and selection falls through to "
                 + "registration order, so the wrong intent can fire. Diverge earlier, or mark "

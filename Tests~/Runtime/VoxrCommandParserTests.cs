@@ -3716,6 +3716,145 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(0, sets.Count, "score-equivalent is not admission-equivalent");
         }
 
+        // ---------- Duplicate-valued members are kept, not dropped (issue #90) ----------
+
+        [Test]
+        public void SiblingSets_DuplicateValuedMember_IsRetained()
+        {
+            // Issue #90's example. The gate used to keep one member per distinct value, so
+            // set_b was dropped and never named — even though set_b <-> set_c is exactly the
+            // hazard set_a <-> set_c is. All three are now members; two distinct values.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_a", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_b", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_c", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count);
+            Assert.AreEqual(3, sets[0].Members.Length, "the duplicate-valued member is kept");
+            CollectionAssert.AreEqual(
+                new[] { "set_a", "set_b", "set_c" },
+                Array.ConvertAll(sets[0].Members, m => m.Intent)
+            );
+            CollectionAssert.AreEqual(
+                new[] { "mode", "mode", "level" },
+                Array.ConvertAll(sets[0].Members, m => m.Value)
+            );
+        }
+
+        [Test]
+        public void SiblingSets_ShadowedCrossIntentMember_IsNoLongerSuppressed()
+        {
+            // Issue #90's sharper variant, and the one that reaches the runtime. set_mode
+            // contributes BOTH values, so the old first-wins-by-value dedup dropped set_level
+            // entirely; the survivors then shared one intent and the same-intent filter
+            // suppressed the set outright — an under-report becoming no report at all. The
+            // real hazard, set_mode's "mode" pattern against set_level, was invisible.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib(
+                        "set_mode",
+                        SibP("set", "{ship}", "mode", "on"),
+                        SibP("set", "{ship}", "level", "on")
+                    ),
+                    Sib("set_level", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count);
+            Assert.AreEqual(3, sets[0].Members.Length);
+            Assert.IsFalse(
+                VoxrCommandParser.IsSingleIntent(sets[0]),
+                "set_level must survive, or the same-intent filter hides a real hazard"
+            );
+        }
+
+        [Test]
+        public void SiblingSets_IdenticalPatternsAcrossIntents_AreStillNotASet()
+        {
+            // Requirements F8 still holds after issue #90: two patterns reaching the SAME
+            // literal are duplicates of each other, not siblings. Keeping members did not
+            // widen the relation — the "at least two distinct values" gate is what excludes
+            // them now, in place of the old per-value dedup.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_a", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_b", SibP("set", "{ship}", "mode", "on")),
+                }
+            );
+
+            Assert.AreEqual(0, sets.Count);
+        }
+
+        [Test]
+        public void SiblingSets_DuplicatedOptionalElement_DoesNotDoubleCountAPattern()
+        {
+            // ExpandOptionals enumerates 2^optionals subsets without deduplicating, so a
+            // pattern carrying the same optional twice yields the identical expanded form from
+            // two different masks. Both reach one bucket with the same (command, pattern,
+            // value). The old per-value dedup hid that; keeping members exposes it, and without
+            // the exact-duplicate guard the warning would name one pattern twice.
+            // The rival must share the frame, or "dup" never forms a set at all and this test
+            // passes without exercising anything.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("dup", SibP("set", "?now", "?now", "mode", "on")),
+                    Sib("other", SibP("set", "?now", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count, "the fixture must actually produce a set");
+            Assert.AreEqual(
+                2,
+                sets[0].Members.Length,
+                "'dup' reaches this bucket from two identical expansions and must be named once"
+            );
+
+            var seen = new List<string>();
+            foreach (var m in sets[0].Members)
+            {
+                string key = m.CommandIndex + ":" + m.PatternIndex;
+                Assert.IsFalse(seen.Contains(key), "one pattern reached this set twice: " + key);
+                seen.Add(key);
+            }
+        }
+
+        [Test]
+        public void SiblingSets_OneHazardUnderTwoFrames_WithAnExtraMember_StaysTwoSets()
+        {
+            // A consequence of keeping members, accepted rather than fixed (architecture §6.4).
+            // IndexOfSameMembers collapses two frames of one hazard by comparing member lists,
+            // and that comparison only worked because the old gate normalised every bucket to
+            // one member per value. Here "set * on" collects a, b AND c while "set ?now * on"
+            // collects only a and b, so the lists differ and both sets survive.
+            //
+            // Two warnings for what an author may read as one problem — accepted because the
+            // sets genuinely implicate different patterns, and collapsing them would have to
+            // discard c, which is issue #90 again one level up. Pinned so the next maintainer
+            // meets a decision rather than a bug.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("a", SibP("set", "?now", "mode", "on")),
+                    Sib("b", SibP("set", "?now", "level", "on")),
+                    Sib("c", SibP("set", "mode", "on")),
+                }
+            );
+
+            Assert.AreEqual(2, sets.Count);
+            CollectionAssert.AreEquivalent(
+                new[] { 2, 3 },
+                Array.ConvertAll(sets.ToArray(), s => s.Members.Length),
+                "the shorter frame picks up the third pattern; the longer one does not"
+            );
+        }
+
         [Test]
         public void SiblingWarning_CrossIntent_NamesIntentsPatternsAndValues()
         {
