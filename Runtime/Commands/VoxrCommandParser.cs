@@ -1959,7 +1959,9 @@ namespace VoXR.Commands
                 + "consumed span, same literal count — and selection falls through to "
                 + "registration order, so the wrong intent can fire. Make them differ in more "
                 + "than one element — the only fix that removes the tie rather than moving it "
-                + $"— or mark the more destructive one requiresConfirmation.{capNote}";
+                + "— mark the more destructive one requiresConfirmation, or enable "
+                + "disambiguateSiblingTies on VoxrCommandRecogniser to ask the speaker which "
+                + $"was meant.{capNote}";
         }
 
         // Takes the MEMBER's authored index, not the set's DiscriminatorIndex: this message
@@ -2399,24 +2401,44 @@ namespace VoXR.Commands
         // over its own reading. ComputeConfidence takes (tokens, startIdx, endIdx): startIdx is
         // on the record because CompareCandidate returns Tied only when the start indices match,
         // and endIdx is per rival because the tie compares ConsumedEndIdx, not EndIdx.
-        internal float RivalConfidence(
-            int resultIdx,
-            int n,
-            string[] tokens,
-            Dictionary<string, float> wordConfidence
-        ) =>
-            ComputeConfidence(
-                tokens,
-                _tiedSiblingBuf[resultIdx].StartIdx,
-                _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n].EndIdx,
-                wordConfidence
-            );
-
         internal string RivalIntent(int resultIdx, int n) =>
             _commands[_tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n].CommandIndex].Intent;
 
-        internal int RivalPatternIndex(int resultIdx, int n) =>
-            _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n].PatternIndex;
+        // The command that fires if the speaker picks rival n — built here rather than in the
+        // recogniser because _slotNames and the confidence span both live on this side.
+        //
+        // Confidence is computed over the RIVAL's own span. ComputeConfidence takes
+        // (tokens, startIdx, endIdx): startIdx comes from the record, because CompareCandidate
+        // returns Tied only when the start indices match, and endIdx is per rival, because the
+        // tie compares ConsumedEndIdx rather than EndIdx — so two tied candidates can differ by
+        // a trailing [unk] neither of them consumed.
+        //
+        // The score is the winner's, and that is not an approximation: reaching Tied means the
+        // scores were equal.
+        internal VoxrCommand BuildRivalCommand(
+            int resultIdx,
+            int n,
+            string text,
+            string[] tokens,
+            Dictionary<string, float> wordConfidence
+        )
+        {
+            var rival = _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n];
+            return new VoxrCommand(
+                _commands[rival.CommandIndex].Intent,
+                CopyRivalSlots(resultIdx, n),
+                ComputeConfidence(
+                    tokens,
+                    _tiedSiblingBuf[resultIdx].StartIdx,
+                    rival.EndIdx,
+                    wordConfidence
+                ),
+                _resultBuf[resultIdx].Command.Score,
+                text,
+                _slotNames,
+                rival.PatternIndex
+            );
+        }
 
         public VoxrCommandResult[] Parse(string text)
         {

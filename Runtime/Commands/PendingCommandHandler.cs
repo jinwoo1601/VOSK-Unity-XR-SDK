@@ -56,10 +56,17 @@ namespace VoXR.Commands
         internal VoxrPendingCommand? Current => _pendingCommand;
         internal VoxrCommand? PendingCommand => _pendingCommand?.Command;
 
+        // The three choice arrays are optional trailing parameters, so the two call sites that
+        // enter a PartialMatch or AwaitingConfirmation pending are unchanged.
         internal PendingResolution EnterPending(VoxrCommand command,
             VoxrCommandDefinition definition, string[] unfilledSlots,
             VoxrPendingReason reason, float currentTime,
-            out PendingResolution cancelledPrevious)
+            out PendingResolution cancelledPrevious,
+            VoxrCommand[] choices = null,
+            string[] choiceValues = null,
+            VoxrCommandDefinition[] choiceDefinitions = null,
+            bool choicesTruncated = false
+        )
         {
             cancelledPrevious = _pendingCommand.HasValue
                 ? Cancel()
@@ -72,13 +79,22 @@ namespace VoXR.Commands
                 UnfilledSlots = unfilledSlots,
                 Reason = reason,
                 CreatedTime = currentTime,
+                Choices = choices,
+                ChoiceValues = choiceValues,
+                ChoiceDefinitions = choiceDefinitions,
+                ChoicesTruncated = choicesTruncated,
             };
 
             return PendingResolution.Entered(command);
         }
 
+        // currentTime is used only on the disambiguation path, where answering a choice whose
+        // intent requires confirmation re-enters pending and that re-entry needs a fresh clock.
         internal PendingResolution TryHandleConfirmCancel(string[] tokens,
-            string[] confirmVocab, string[] cancelVocab)
+            string[] confirmVocab,
+            string[] cancelVocab,
+            float currentTime
+        )
         {
             if (tokens.Length == 0)
                 return PendingResolution.NoAction();
@@ -88,17 +104,64 @@ namespace VoXR.Commands
             string[] effectiveConfirm = confirmVocab != null && confirmVocab.Length > 0
                 ? confirmVocab : VoxrFollowUpVocabulary.DefaultConfirm;
 
+            // Cancel first, under every reason. That order is what gives design §5.5's
+            // collision its direction — a discriminating value that IS a cancel word cancels
+            // rather than choosing, safety wins, and the author was told at construction.
             if (IsVocabularyMatchTokens(tokens, effectiveCancel))
                 return Cancel();
 
+            var pending = _pendingCommand.Value;
+            if (pending.Reason == VoxrPendingReason.AwaitingDisambiguation)
+            {
+                // The discriminating values are the choice vocabulary (DR-4), matched through
+                // the same whole-utterance matcher confirm and cancel use — so "set alpha mode
+                // on" is NOT read as the bare choice "mode". That utterance is a full
+                // re-utterance and belongs to the parse path, which preempts this pending before
+                // the follow-up ever runs.
+                if (pending.ChoiceValues != null)
+                {
+                    for (int i = 0; i < pending.ChoiceValues.Length; i++)
+                    {
+                        if (!IsVocabularyMatchTokens(tokens, OneValue(pending.ChoiceValues, i)))
+                            continue;
+
+                        // Through the ordinary Complete path rather than a new one — that is
+                        // DR-4's dividend, and it is what sequences "which?" before "are you
+                        // sure?". Complete reads _pendingCommand itself, so it is not cleared
+                        // here.
+                        return Complete(
+                            pending.Choices[i],
+                            pending.ChoiceDefinitions[i],
+                            currentTime
+                        );
+                    }
+                }
+
+                // Confirm is inert here, and deliberately NOT a cancel. "Yes" is not an answer
+                // to "which?", but it is not an instruction to abandon either — leaving the
+                // pending live lets the speaker follow it with the actual answer inside the same
+                // timeout window.
+                return PendingResolution.NoAction();
+            }
+
             if (IsVocabularyMatchTokens(tokens, effectiveConfirm))
             {
-                var confirmed = _pendingCommand.Value;
                 _pendingCommand = null;
-                return PendingResolution.Confirmed(confirmed.Command);
+                return PendingResolution.Confirmed(pending.Command);
             }
 
             return PendingResolution.NoAction();
+        }
+
+        // IsVocabularyMatchTokens takes an array, and the choice values have to be tried one at
+        // a time so the index of the match is known. One reusable single-element array rather
+        // than a per-answer allocation; this runs once per follow-up utterance, not per parse.
+        readonly string[] _oneValueBuf = new string[1];
+
+        string[] OneValue(string[] values, int i)
+        {
+            _oneValueBuf[0] = values[i];
+            return _oneValueBuf;
         }
 
         internal VoxrCommand? TryFollowUpSlotFill(string text, string[] tokens,
@@ -201,25 +264,54 @@ namespace VoXR.Commands
                 UnfilledSlots = ComputeUnfilledSlots(partiallyFilled, pending.Definition),
                 Reason = pending.Reason,
                 CreatedTime = currentTime,
+
+                // Carried, though an AwaitingDisambiguation pending cannot reach here today: it
+                // always has UnfilledSlots empty (a command missing a required argument is
+                // routed to PartialMatch by issue #73's gate before the fire path, so anything
+                // that reached the tie was complete), and TryFollowUpSlotFill returns null on an
+                // empty list. Copying Reason forward while dropping these would produce a
+                // pending claiming to be a disambiguation with no choices — which the choice arm
+                // would dereference. Three assignments to keep the argument true if either end
+                // changes.
+                Choices = pending.Choices,
+                ChoiceValues = pending.ChoiceValues,
+                ChoiceDefinitions = pending.ChoiceDefinitions,
+                ChoicesTruncated = pending.ChoicesTruncated,
             };
 
             return PendingResolution.ReEntered(partiallyFilled);
         }
 
-        internal PendingResolution Complete(VoxrCommand completed, float currentTime)
+        // resolvedDefinition is the definition of the command actually being completed, which is
+        // not always pending.Definition. Under AwaitingDisambiguation the pending carries the
+        // WINNER's definition while the speaker may have chosen a rival, so reading
+        // pending.Definition here would take the confirmation decision from the wrong command: a
+        // destructive rival marked requiresConfirmation would fire without asking, or a benign
+        // one would be gratuitously confirmed because the winner required it. The two existing
+        // callers pass pending.Definition and are unchanged in behaviour.
+        internal PendingResolution Complete(
+            VoxrCommand completed,
+            VoxrCommandDefinition resolvedDefinition,
+            float currentTime
+        )
         {
             var pending = _pendingCommand.Value;
             _pendingCommand = null;
 
-            // If the definition also requires confirmation and we were pending
-            // for partial match, re-enter pending for confirmation
-            if (pending.Definition.RequiresConfirmation &&
-                pending.Reason == VoxrPendingReason.PartialMatch)
+            // If the resolved definition also requires confirmation, and we were not ALREADY
+            // awaiting one, re-enter pending for confirmation. Written as "not already
+            // confirming" rather than "was a partial match" so the third reason is covered:
+            // you cannot confirm an intent you have not identified, so "which?" comes first and
+            // "are you sure?" follows.
+            if (
+                resolvedDefinition.RequiresConfirmation
+                && pending.Reason != VoxrPendingReason.AwaitingConfirmation
+            )
             {
                 _pendingCommand = new VoxrPendingCommand
                 {
                     Command = completed,
-                    Definition = pending.Definition,
+                    Definition = resolvedDefinition,
                     UnfilledSlots = Array.Empty<string>(),
                     Reason = VoxrPendingReason.AwaitingConfirmation,
                     // Restarts for the same reason the fill path does: confirmation is a fresh
@@ -238,7 +330,20 @@ namespace VoXR.Commands
             var pending = _pendingCommand.Value;
             _pendingCommand = null;
 
-            if (behavior == VoxrPendingTimeoutBehavior.FireAsIs)
+            // DR-6: under ambiguity FireAsIs degrades to Cancel, and the argument is semantic
+            // rather than a preference. FireAsIs means "the intent is known, fire it with the
+            // slots I have" — under ambiguity the INTENT itself is unknown, which is a different
+            // situation wearing the same flag. Firing the first-registered after a pause coin-
+            // flips anyway, merely later, and that is incoherent with an integrator who opted in
+            // specifically to stop coin-flipping.
+            //
+            // No third value is added to the public VoxrPendingTimeoutBehavior; that was
+            // rejected at DR-6 as public API for an edge case, and can still be added later
+            // without breaking anything.
+            if (
+                behavior == VoxrPendingTimeoutBehavior.FireAsIs
+                && pending.Reason != VoxrPendingReason.AwaitingDisambiguation
+            )
                 return PendingResolution.Confirmed(pending.Command);
 
             return PendingResolution.Cancelled(pending.Command);

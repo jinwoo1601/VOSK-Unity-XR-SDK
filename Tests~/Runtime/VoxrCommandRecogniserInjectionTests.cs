@@ -1204,5 +1204,466 @@ namespace VoXR.Tests.Runtime
             );
             Assert.AreEqual("set_level", received.Value.Intent, "and on the spoken intent");
         }
+
+        // -------- The flush ASKS instead of guessing (issue #74 item 3) --------
+        //
+        // Item 2 bought a pause and spent it on nothing: the eager gate refuses, the window
+        // expires, the flush ties, registration order decides, and the first-registered sibling
+        // fires — the same coin flip, reached later. These pin what makes that latency worth
+        // paying.
+        //
+        // ALL of them drive VoxrCommandRecogniser and assert on real events. Item 2's review
+        // found that its two most important tests were never built, because every eager test
+        // called TryEagerCommit as a pure function and so structurally could not observe what
+        // happened after a refusal. A parser-level test here can prove a rival was RECORDED and
+        // prove nothing about whether the speaker is ever ASKED.
+        //
+        // disambiguateSiblingTies is frozen into the parser at Configure time, so it is set
+        // BEFORE Configure in every one of these. Getting that wrong is invisible in the Editor:
+        // the parser records ties whenever the flag is set OR UNITY_EDITOR is defined.
+
+        void ConfigureAsking(bool flag = true, params VoxrCommandDefinition[] extra)
+        {
+            var commands = new System.Collections.Generic.List<VoxrCommandDefinition>
+            {
+                new VoxrCommandDefinition(
+                    "set_mode",
+                    new[] { new[] { "set", "{ship}", "mode", "on" } }
+                ),
+                new VoxrCommandDefinition(
+                    "set_level",
+                    new[] { new[] { "set", "{ship}", "level", "on" } }
+                ),
+            };
+            commands.AddRange(extra);
+
+            _recogniser.DisambiguateSiblingTies = flag;
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                commands.ToArray()
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+        }
+
+        // The follow-up goes through the buffer exactly as the first utterance does — Step 1's
+        // confirm/cancel/choice check runs inside ProcessParsedResultsCore, which a non-zero
+        // bufferWindow reaches only on flush. Injecting an answer without flushing asserts
+        // nothing: the pending is still live because the answer was never delivered, so a test
+        // that forgets this passes its "still pending" asserts vacuously and fails its real one.
+        // Named rather than inlined so it cannot be forgotten twice.
+        void Answer(string utterance)
+        {
+            _recogniser.InjectText(utterance);
+            _recogniser.FlushPendingBuffer();
+        }
+
+        [Test]
+        public void Disambiguation_AmbiguousUtterance_AsksInsteadOfFiring()
+        {
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            int pendingCount = 0,
+                firedCount = 0,
+                unrecognisedCount = 0;
+            _recogniser.OnCommandPending += _ => pendingCount++;
+            _recogniser.OnCommandRecognised += _ => firedCount++;
+            _recogniser.OnUnrecognisedSpeech += _ => unrecognisedCount++;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(1, pendingCount, "the speaker is asked");
+            Assert.AreEqual(0, firedCount, "and nothing fires on the coin flip");
+            Assert.AreEqual(
+                0,
+                unrecognisedCount,
+                "and the integrator is not told the speech was not understood in the same frame "
+                    + "it was asked to prompt about it"
+            );
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void Disambiguation_FlagOff_FiresTheFirstRegisteredExactlyAsBefore()
+        {
+            // F2's control, at the level that matters: the whole feature is downstream of the
+            // flag, and with it clear this fixture behaves as it does on main.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking(flag: false);
+
+            int pendingCount = 0;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandPending += _ => pendingCount++;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(0, pendingCount, "no question is asked");
+            Assert.IsTrue(received.HasValue, "and the command still fires");
+            Assert.AreEqual("set_mode", received.Value.Intent, "first-registered, as always");
+            Assert.IsNull(_recogniser.PendingAmbiguity);
+        }
+
+        [Test]
+        public void Disambiguation_TheAnswer_FiresTheChosenIntentWithItsOwnSlots()
+        {
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            VoxrCommand? confirmed = null;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandConfirmed += cmd => confirmed = cmd;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            Answer("level");
+
+            Assert.IsTrue(confirmed.HasValue, "resolving a pending raises OnCommandConfirmed");
+            Assert.IsTrue(received.HasValue, "…then OnCommandRecognised");
+            Assert.AreEqual("set_level", received.Value.Intent, "the intent the speaker chose");
+            Assert.AreEqual(
+                "alpha",
+                received.Value.GetSlot("ship"),
+                "carrying the slots ITS own match produced, not the winner's (F6)"
+            );
+            Assert.IsFalse(_recogniser.HasPendingCommand, "and the question is closed");
+        }
+
+        [Test]
+        public void Disambiguation_AnsweringWithTheWinnersOwnValue_FiresTheWinner()
+        {
+            // Index 0 is a choice too. The speaker who meant the first-registered intent still
+            // has to say something, and the word that identifies it is its own discriminator.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            Answer("mode");
+
+            Assert.IsTrue(received.HasValue);
+            Assert.AreEqual("set_mode", received.Value.Intent);
+        }
+
+        [Test]
+        public void Disambiguation_PendingAmbiguity_ExposesTheReasonAndTheChoices()
+        {
+            // F11. Without this the opt-in is unusable: OnCommandPending carries only the
+            // command, so an integrator already subscribed for requiresConfirmation would prompt
+            // "yes/no" — and "yes" does nothing here, so the pending would time out and, under
+            // DR-6, fire nothing. That is the exact failure the opt-in exists to prevent,
+            // reappearing inside the opt-in.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            VoxrPendingAmbiguity? seen = null;
+            _recogniser.OnCommandPending += _ => seen = _recogniser.PendingAmbiguity;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.IsTrue(seen.HasValue, "readable from inside the OnCommandPending handler");
+            CollectionAssert.AreEqual(
+                new[] { "mode", "level" },
+                seen.Value.DiscriminatingValues,
+                "index 0 is what would have fired with the flag off, then registration order"
+            );
+            CollectionAssert.AreEqual(
+                new[] { "set_mode", "set_level" },
+                System.Array.ConvertAll(seen.Value.Choices, c => c.Intent)
+            );
+            Assert.IsFalse(seen.Value.IsTruncated);
+        }
+
+        [Test]
+        public void Disambiguation_PendingAmbiguity_IsNullUnderAConfirmationPending()
+        {
+            // The other half of "HasValue is the reason signal". A confirmation pending must
+            // read as null, or the property tells the integrator to prompt for a choice that
+            // does not exist.
+            _recogniser.Configure(
+                MakeSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "self_destruct",
+                        new[] { new[] { "self", "destruct" } },
+                        requiresConfirmation: true
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+
+            _recogniser.InjectText("self destruct");
+
+            Assert.IsTrue(_recogniser.HasPendingCommand, "it is pending…");
+            Assert.IsNull(_recogniser.PendingAmbiguity, "…but not on an ambiguity");
+        }
+
+        [Test]
+        public void Disambiguation_ThreeWaySet_OffersAndAnswersAllThree()
+        {
+            // F19 through the recogniser. Under item 2's first-rival rule the third choice was
+            // never recorded, so "standby" would have gone unrecognised — on design §5.1's own
+            // example grammar.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking(
+                true,
+                new VoxrCommandDefinition(
+                    "set_standby",
+                    new[] { new[] { "set", "{ship}", "standby", "on" } }
+                )
+            );
+
+            VoxrPendingAmbiguity? seen = null;
+            _recogniser.OnCommandPending += _ => seen = _recogniser.PendingAmbiguity;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            CollectionAssert.AreEqual(
+                new[] { "mode", "level", "standby" },
+                seen.Value.DiscriminatingValues,
+                "three choices, not two"
+            );
+
+            Answer("standby");
+
+            Assert.IsTrue(received.HasValue, "and the third answer is understood");
+            Assert.AreEqual("set_standby", received.Value.Intent);
+        }
+
+        [Test]
+        public void Disambiguation_CancelApplies_ConfirmDoesNot()
+        {
+            // F9. Cancel keeps its precedence and its meaning. Confirm is inert — "yes" is not
+            // an answer to "which?" — and deliberately not a cancel either: leaving the pending
+            // live lets the speaker follow it with the actual answer inside the same window.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            int cancelledCount = 0,
+                firedCount = 0;
+            _recogniser.OnCommandCancelled += _ => cancelledCount++;
+            _recogniser.OnCommandRecognised += _ => firedCount++;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            Answer("yes");
+            Assert.AreEqual(0, firedCount, "confirm must not fire the winner");
+            Assert.AreEqual(0, cancelledCount, "and must not abandon the question either");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "the pending stays live for the answer");
+
+            Answer("level");
+            Assert.AreEqual(1, firedCount, "which the speaker can still give");
+
+            Assert.AreEqual(0, cancelledCount);
+        }
+
+        [Test]
+        public void Disambiguation_CancelWord_CancelsTheQuestion()
+        {
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            int cancelledCount = 0,
+                firedCount = 0;
+            _recogniser.OnCommandCancelled += _ => cancelledCount++;
+            _recogniser.OnCommandRecognised += _ => firedCount++;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            Answer("cancel");
+
+            Assert.AreEqual(1, cancelledCount);
+            Assert.AreEqual(0, firedCount);
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void Disambiguation_FullReUtterance_PreemptsAndFires()
+        {
+            // F8. Saying the whole thing is always available, and it goes through the ordinary
+            // parse path: the re-utterance is complete and unambiguous, so Step 4 preempts the
+            // pending before the choice check is ever reached.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            int cancelledCount = 0;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandCancelled += _ => cancelledCount++;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            _recogniser.InjectText("set alpha level on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.IsTrue(received.HasValue);
+            Assert.AreEqual("set_level", received.Value.Intent);
+            Assert.AreEqual(
+                1,
+                cancelledCount,
+                "the superseded question is genuinely abandoned, and says so"
+            );
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void Disambiguation_SecondAmbiguousUtterance_ReArmsTheQuestion()
+        {
+            // F8's other half, and an event the architecture's first draft did not account for.
+            // Step 4's completeness test knows nothing about ties, so a second ambiguous
+            // utterance ALSO reads as a complete new command and preempts — one
+            // OnCommandCancelled for the old question, then one OnCommandPending for the new.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            int pendingCount = 0,
+                cancelledCount = 0;
+            _recogniser.OnCommandPending += _ => pendingCount++;
+            _recogniser.OnCommandCancelled += _ => cancelledCount++;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(2, pendingCount, "asked again");
+            Assert.AreEqual(1, cancelledCount, "the first question was abandoned to ask it");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "and exactly one is live");
+            Assert.IsNotNull(_recogniser.PendingAmbiguity);
+        }
+
+        [Test]
+        public void Disambiguation_AnswerRequiringConfirmation_AsksWhichThenAsksAreYouSure()
+        {
+            // Complete used to read pending.Definition — the WINNER's — so a chosen rival's
+            // requiresConfirmation would have been taken from the wrong command: this
+            // destructive intent would have fired the moment it was named. Plan validation
+            // caught it; this pins the fix.
+            //
+            // The order is the only coherent one: you cannot confirm an intent you have not
+            // identified.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_scuttle",
+                        new[] { new[] { "set", "{ship}", "scuttle", "on" } },
+                        requiresConfirmation: true
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            int firedCount = 0;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                received = cmd;
+                firedCount++;
+            };
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            Answer("scuttle");
+
+            Assert.AreEqual(0, firedCount, "naming a destructive intent must not fire it");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "it asks again…");
+            Assert.IsNull(
+                _recogniser.PendingAmbiguity,
+                "…and the second question is a confirmation, not an ambiguity"
+            );
+
+            Answer("yes");
+
+            Assert.AreEqual(1, firedCount);
+            Assert.AreEqual("set_scuttle", received.Value.Intent);
+        }
+
+        [Test]
+        public void Disambiguation_WinnerRequiringConfirmation_DoesNotConfirmTheChosenRival()
+        {
+            // The same defect in the other direction: the winner requires confirmation and the
+            // chosen rival does not. Reading the winner's definition would have made the speaker
+            // confirm a benign command they had just explicitly named.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_scuttle",
+                        new[] { new[] { "set", "{ship}", "scuttle", "on" } },
+                        requiresConfirmation: true
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            Answer("mode");
+
+            Assert.IsTrue(received.HasValue, "the benign choice fires straight away");
+            Assert.AreEqual("set_mode", received.Value.Intent);
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void Disambiguation_UtteranceContainingAChoiceWord_IsNotReadAsTheAnswer()
+        {
+            // F7. The choice check reuses the whole-utterance matcher, so it is not a substring
+            // search: "set alpha mode on" is a full re-utterance and takes the parse path, not
+            // the choice path. Both routes fire set_mode here — what this pins is that the
+            // utterance is not silently truncated to its "mode" token.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking();
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            _recogniser.FlushPendingBuffer();
+            _recogniser.InjectText("set alpha mode on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.IsTrue(received.HasValue);
+            Assert.AreEqual("set_mode", received.Value.Intent);
+            Assert.AreEqual(
+                "set alpha mode on",
+                received.Value.RawText,
+                "the whole utterance was parsed, not read as the bare choice \"mode\""
+            );
+        }
     }
 }

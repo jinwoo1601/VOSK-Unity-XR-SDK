@@ -189,6 +189,39 @@ namespace VoXR.Commands
 
         public VoxrCommand? PendingCommand => _pending.PendingCommand;
 
+        /// <summary>
+        /// The ambiguity a pending command is waiting on, or <c>null</c> when there is no pending
+        /// command or it is waiting on something else (a confirmation, or a missing argument).
+        /// </summary>
+        /// <remarks>
+        /// <c>HasValue</c> is the reason signal. <c>OnCommandPending</c> carries only the command,
+        /// so an integrator subscribed for <c>requiresConfirmation</c> would otherwise treat a
+        /// "which did you mean?" as a "are you sure?" and prompt yes/no — which under a
+        /// disambiguation does nothing, leaving the pending to time out and fire nothing.
+        ///
+        /// Only ever non-null with <c>disambiguateSiblingTies</c> enabled. Read it while the
+        /// pending is live; the arrays are allocated once at entry and are safe to retain.
+        /// </remarks>
+        public VoxrPendingAmbiguity? PendingAmbiguity
+        {
+            get
+            {
+                var pending = _pending.Current;
+                if (
+                    !pending.HasValue
+                    || pending.Value.Reason != VoxrPendingReason.AwaitingDisambiguation
+                    || pending.Value.Choices == null
+                )
+                    return null;
+
+                return new VoxrPendingAmbiguity(
+                    pending.Value.Choices,
+                    pending.Value.ChoiceValues,
+                    pending.Value.ChoicesTruncated
+                );
+            }
+        }
+
         public void Configure(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands)
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
@@ -612,7 +645,11 @@ namespace VoXR.Commands
             if (_pending.HasPending)
             {
                 var ccResolution = _pending.TryHandleConfirmCancel(
-                    tokens, confirmVocabulary, cancelVocabulary);
+                    tokens,
+                    confirmVocabulary,
+                    cancelVocabulary,
+                    Time.time
+                );
                 if (ccResolution.Outcome != PendingOutcome.None)
                 {
                     InterpretResolution(ccResolution);
@@ -691,7 +728,14 @@ namespace VoXR.Commands
                 bool followUpIncomplete = IsIncomplete(followUpResult.Value);
                 var followUpRes = followUpIncomplete
                     ? _pending.AdvanceSlotFill(followUpResult.Value, Time.time)
-                    : _pending.Complete(followUpResult.Value, Time.time);
+                    // The pending's own definition: this path fills a slot on the command that
+                    // is already pending, so the winner IS the resolved command. Only the
+                    // disambiguation path resolves to a different one.
+                    : _pending.Complete(
+                        followUpResult.Value,
+                        _pending.Current.Value.Definition,
+                        Time.time
+                    );
 #if UNITY_EDITOR
                 // Read the re-armed pending BEFORE the resolution is interpreted. Interpreting it
                 // invokes OnCommandPending, whose subscribers may cancel, reconfigure, or disable
@@ -828,6 +872,58 @@ namespace VoXR.Commands
                     continue;
                 }
 
+                // Sibling tie — ask which intent was meant instead of firing the first-registered
+                // one (issue #74 item 3). AFTER the debounce check, because a command on cooldown
+                // should not raise a question the speaker then answers into a cooldown; BEFORE
+                // the confirmation check, because "which?" precedes "are you sure?" and Complete
+                // sequences the two for free once the choice resolves.
+                if (
+                    disambiguateSiblingTies
+                    && TryBuildAmbiguity(
+                        i,
+                        tokens,
+                        wordConfidence,
+                        out var choices,
+                        out var choiceValues,
+                        out var choiceDefs
+                    )
+                )
+                {
+                    // Without this the utterance reaches acceptedCount == 0 with the flag clear
+                    // and raises OnUnrecognisedSpeech — telling the integrator the speech was not
+                    // understood in the same frame it was asked to prompt about it.
+                    anyThresholdFiltered = true;
+
+                    var enterAmbRes = _pending.EnterPending(
+                        cmd,
+                        choiceDefs[0],
+                        Array.Empty<string>(),
+                        VoxrPendingReason.AwaitingDisambiguation,
+                        Time.time,
+                        out var cancelAmbRes,
+                        choices,
+                        choiceValues,
+                        choiceDefs,
+                        _parser.TiedSiblingBuffer[i].Truncated
+                    );
+                    InterpretResolution(cancelAmbRes);
+                    InterpretResolution(enterAmbRes);
+#if UNITY_EDITOR
+                    attempts.Add(
+                        BuildAttempt(
+                            cmd,
+                            parseDiag,
+                            i,
+                            tokens,
+                            diagWordConf,
+                            $"entered pending (awaiting disambiguation, {choices.Length} choices)",
+                            false
+                        )
+                    );
+#endif
+                    continue;
+                }
+
                 // Check RequiresConfirmation — enter pending instead of firing
                 if (_setManager.TryLookupCommand(cmd.Intent, out var confirmDef) &&
                     confirmDef.RequiresConfirmation)
@@ -882,6 +978,81 @@ namespace VoXR.Commands
             // Clear stale references
             Array.Clear(_acceptedBuf, 0, acceptedCount);
         }
+
+        // Builds the choice list for result i, or answers false and asks nothing.
+        //
+        // Allocates — three small arrays and one VoxrCommand per alternative — and that is
+        // deliberate: this runs once per AMBIGUITY, never per candidate, and everything it
+        // produces crosses into a public event where a subscriber can retain it. The parse path
+        // itself stays allocation-free (the parser records rivals into preallocated buffers);
+        // this is the boundary where that stops being true, following the same rule
+        // PendingCommandHandler already applies to anything reaching a subscriber.
+        bool TryBuildAmbiguity(
+            int i,
+            string[] tokens,
+            Dictionary<string, float> wordConfidence,
+            out VoxrCommand[] choices,
+            out string[] choiceValues,
+            out VoxrCommandDefinition[] choiceDefinitions
+        )
+        {
+            choices = null;
+            choiceValues = null;
+            choiceDefinitions = null;
+
+            var record = _parser.TiedSiblingBuffer[i];
+            if (record.RivalCount == 0)
+                return false;
+
+            var winner = _parser.ResultBuffer[i].Command;
+            if (!_setManager.TryLookupCommand(winner.Intent, out var winnerDef))
+                return false;
+
+            // Index 0 is always the candidate that would have fired with the flag off, so the
+            // order an integrator renders is the order registration would have produced.
+            _choiceBuf.Clear();
+            _choiceValueBuf.Clear();
+            _choiceDefBuf.Clear();
+            _choiceBuf.Add(winner);
+            _choiceValueBuf.Add(record.WinnerValue);
+            _choiceDefBuf.Add(winnerDef);
+
+            for (int n = 0; n < record.RivalCount; n++)
+            {
+                // A rival whose intent resolves to no definition is dropped rather than offered:
+                // it could be named in a prompt but not fired. Same judgement IsIncomplete makes
+                // about an intent with no definition — a tie we cannot fully describe is not a
+                // reason to fire nothing.
+                if (!_setManager.TryLookupCommand(_parser.RivalIntent(i, n), out var rivalDef))
+                    continue;
+
+                _choiceBuf.Add(
+                    _parser.BuildRivalCommand(
+                        i,
+                        n,
+                        _parser.ResultBuffer[i].Command.RawText,
+                        tokens,
+                        wordConfidence
+                    )
+                );
+                _choiceValueBuf.Add(_parser.TiedRival(i, n).Value);
+                _choiceDefBuf.Add(rivalDef);
+            }
+
+            // Fewer than two survivors is not a question. Fall through and fire the winner, as
+            // the flag-off path would.
+            if (_choiceBuf.Count < 2)
+                return false;
+
+            choices = _choiceBuf.ToArray();
+            choiceValues = _choiceValueBuf.ToArray();
+            choiceDefinitions = _choiceDefBuf.ToArray();
+            return true;
+        }
+
+        readonly List<VoxrCommand> _choiceBuf = new List<VoxrCommand>();
+        readonly List<string> _choiceValueBuf = new List<string>();
+        readonly List<VoxrCommandDefinition> _choiceDefBuf = new List<VoxrCommandDefinition>();
 
         // Whether a command is missing one of its own required arguments (issue #73). The flush
         // path's completeness condition, and the counterpart to the two COMPLETENESS conditions

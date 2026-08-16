@@ -333,9 +333,28 @@ namespace VoXR.Editor
             var p = pending.Value;
             EditorGUILayout.LabelField($"Intent: {p.Command.Intent}", EditorStyles.boldLabel);
 
-            string reason = p.Reason == VoxrPendingReason.PartialMatch
-                ? "Partial match \u2014 waiting for follow-up"
-                : "Awaiting confirmation";
+            // Three-way since issue #74 item 3. A two-way ternary here does not merely omit the
+            // new reason \u2014 it labels a disambiguation "Awaiting confirmation", which is exactly
+            // the confusion VoxrPendingAmbiguity exists to prevent, reproduced in this package's
+            // own tooling.
+            string reason;
+            switch (p.Reason)
+            {
+                case VoxrPendingReason.PartialMatch:
+                    reason = "Partial match \u2014 waiting for follow-up";
+                    break;
+                case VoxrPendingReason.AwaitingDisambiguation:
+                    reason =
+                        p.ChoiceValues != null
+                            ? "Awaiting disambiguation \u2014 say \""
+                                + string.Join("\" or \"", p.ChoiceValues)
+                                + "\""
+                            : "Awaiting disambiguation";
+                    break;
+                default:
+                    reason = "Awaiting confirmation";
+                    break;
+            }
             EditorGUILayout.LabelField($"Reason: {reason}");
 
             if (p.Command.Slots.Length > 0)

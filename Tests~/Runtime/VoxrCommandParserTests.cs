@@ -4998,8 +4998,8 @@ namespace VoXR.Tests.Runtime
             LogAssert.Expect(
                 UnityEngine.LogType.Warning,
                 // Asserted by where the message ENDS: the cap note is appended after the remedy,
-                // so "requiresConfirmation." being the last thing said is exactly "no cap note".
-                new Regex("differ only at element 3.*requiresConfirmation\\.$")
+                // so the remedy being the last thing said is exactly "no cap note".
+                new Regex("differ only at element 3.*ask the speaker which was meant\\.$")
             );
 
             var commands = new List<VoxrCommandDefinition>();

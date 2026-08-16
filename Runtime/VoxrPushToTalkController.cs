@@ -30,8 +30,17 @@ namespace VoXR
                  "before the first PressTalk. Disable if your code calls Initialise() elsewhere.")]
         [SerializeField] bool _initialiseOnStart = true;
 
-        [Tooltip("When enabled, ReleaseTalk also cancels any pending command awaiting " +
-                 "confirmation or follow-up slot-fill on the command recogniser.")]
+        // The enumeration is now all three reasons. ReleaseTalk flushes and then cancels, so with
+        // disambiguateSiblingTies on this also discards a disambiguation the flush just created —
+        // and after release the recogniser is not listening, so a pending that survived would
+        // have nobody to hear the answer. Left applying to all three by decision: the field's
+        // name is unqualified and discarding state on release is the safety-first default its
+        // whole purpose asks for.
+        [Tooltip(
+            "When enabled, ReleaseTalk also cancels any pending command on the command "
+                + "recogniser — awaiting confirmation, awaiting a follow-up slot-fill, or "
+                + "awaiting disambiguation of a sibling tie."
+        )]
         [SerializeField] bool _cancelPendingOnRelease = false;
 
         [Header("Events")]
