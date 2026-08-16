@@ -1640,6 +1640,79 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void Disambiguation_TrailingDiscriminator_AlsoAsksAndIsAnswerable()
+        {
+            // Design §7 item 1 asks for BOTH shapes, and the trailing one reaches the flush for
+            // a reason worth stating: issue #70's unmatched-required-tail flag drives the EAGER
+            // gate only, and the flush path ignores it by design — at the gate a required tail
+            // means the speaker may still be mid-utterance, so refusing costs latency; on the
+            // flush the transcript is final and refusing means firing nothing.
+            //
+            // So on "set alpha" both patterns lose their last element equally and tie, and this
+            // is the shape where asking replaces a coin flip with an answer.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            VoxrPendingAmbiguity? seen = null;
+            _recogniser.OnCommandPending += _ => seen = _recogniser.PendingAmbiguity;
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.IsTrue(seen.HasValue, "a trailing discriminator is asked about too");
+            CollectionAssert.AreEqual(new[] { "mode", "level" }, seen.Value.DiscriminatingValues);
+
+            Answer("level");
+
+            Assert.IsTrue(received.HasValue);
+            Assert.AreEqual("set_level", received.Value.Intent);
+            Assert.AreEqual("alpha", received.Value.GetSlot("ship"));
+        }
+
+        [Test]
+        public void Disambiguation_GeneratedGrammarJson_IsIdenticalAcrossTheFlag()
+        {
+            // F7, pinned rather than reasoned. The claim is that discriminating values need no
+            // grammar addition because they are already pattern literals — but that is a claim
+            // about the DECODER's vocabulary, and GetFollowUpGrammarWords is not flag-aware. If
+            // the reasoning is wrong the flag changes what VOSK can hear in BOTH configurations,
+            // which would break F2 in the one way the 699-corpus A/B cannot localise.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking(flag: false);
+            string withFlagOff = _recogniser.TestGrammarJson;
+
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureAsking(flag: true);
+            string withFlagOn = _recogniser.TestGrammarJson;
+
+            Assert.AreEqual(
+                withFlagOff,
+                withFlagOn,
+                "enabling disambiguation must not change one byte of what the decoder is told"
+            );
+            StringAssert.Contains("mode", withFlagOff, "…because the values are already in it");
+            StringAssert.Contains("level", withFlagOff);
+        }
+
+        [Test]
         public void Disambiguation_UtteranceContainingAChoiceWord_IsNotReadAsTheAnswer()
         {
             // F7. The choice check reuses the whole-utterance matcher, so it is not a substring
