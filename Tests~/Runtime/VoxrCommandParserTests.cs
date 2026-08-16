@@ -4165,6 +4165,210 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void SiblingWarning_MembersDisagreeingOnTheAuthoredIndex_NumberEachPattern()
+        {
+            // Issue #91, the asymmetric shape it was opened for. The set is keyed on the frame
+            // "switch to *", which is P1's reading with "?please" omitted — so the frame's
+            // discriminator index is 2 while the word sits at index 3 of the pattern the
+            // message QUOTES. One number cannot serve both members, and the number that shipped
+            // pointed an author at "to".
+            //
+            // The longest-frame preference does not rescue this one: it collapses two frames
+            // carrying the SAME members, and here P2 contributes no four-element form at all,
+            // so there is only ever one frame to choose from.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"\\?please switch to weapons\" \\(with its optional elements "
+                        + "omitted\\) at element 4 and \"switch to navigation\" at element 3 "
+                        + "that differ only at that element "
+                        + "\\(\"weapons\" or \"navigation\"\\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mode_weapons", SibP("?please", "switch", "to", "weapons")),
+                    Sib("mode_navigation", SibP("switch", "to", "navigation")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_SymmetricSetWithABarePattern_NumbersEachPatternToo()
+        {
+            // The symmetric case issue #91 explicitly carved out as already fixed by the
+            // longest-frame preference. That carve-out died with issue #90: member retention
+            // means the three-member set and the two-member set no longer carry the same
+            // members, so IndexOfSameMembers returns -1 and the preference never runs. Both
+            // sets are emitted, and the three-member one mixes authored indices 3, 3 and 2.
+            //
+            // Item 2's architecture §6.4 fixture, pinned here as the second half of F14.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'set_mode', 'set_level' and 'set_bare' have patterns "
+                        + "\"set \\?now mode on\" \\(with its optional elements omitted\\) at "
+                        + "element 3, \"set \\?now level on\" \\(with its optional elements "
+                        + "omitted\\) at element 3 and \"set mode on\" at element 2 that differ "
+                        + "only at that element \\(\"mode\" or \"level\"\\)"
+                )
+            );
+            // The four-element frame's two members DO agree, so it keeps the established
+            // shorter wording. That split is the point: only the messages that were wrong move.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'set_mode' and 'set_level' have patterns \"set \\?now mode on\" "
+                        + "and \"set \\?now level on\" that differ only at element 3 "
+                        + "\\(\"mode\" or \"level\"\\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("set_mode", SibP("set", "?now", "mode", "on")),
+                    Sib("set_level", SibP("set", "?now", "level", "on")),
+                    Sib("set_bare", SibP("set", "mode", "on")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_SameIntentDiscriminator_ReportsNoCancelCollision()
+        {
+            // F13. Item 1 reported every collision and left "whether a same-intent tie is ever
+            // routed to the speaker" for the later items; item 3 decided it — never routed,
+            // because the same command is dispatched either way. So a value only reachable
+            // within one intent can never be given as an answer, and warning about it is a
+            // knowingly false advisory.
+            //
+            // Same grammar as SiblingWarning_DiscriminatorCollidingWithCancel_IsAlsoReported
+            // but for the intents, which is what makes this the narrowing and not a new rule.
+            // The set is single-intent, so the sibling warning is withheld too and
+            // NoUnexpectedReceived is the whole assertion.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib(
+                        "mark_contact",
+                        SibP("mark", "contact", "friendly"),
+                        SibP("mark", "contact", "negative")
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_CancelCollisionReachableOnlyThroughOnePair_StillReports()
+        {
+            // The narrowing is per-PAIR, not per-set, and this is the shape that separates
+            // them. The set is cross-intent overall, but "negative" is answerable from exactly
+            // one member: the 'ident_hostile' one, whose only different-valued co-member
+            // ('ident_friendly') carries a different intent. The 'mark_contact' member carrying
+            // the same word is NOT answerable — its only different-valued co-member shares its
+            // intent.
+            //
+            // A set-level test would report it from the wrong member and print that member's
+            // element number. So would a per-value dedup that suppressed against any earlier
+            // member rather than against earlier REPORTABLE ones — 'mark_contact' comes first
+            // and would have swallowed the real collision.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intent 'ident_hostile' carries the discriminating value \"negative\" at "
+                        + "element 3, which is also in the default cancel vocabulary"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib(
+                        "mark_contact",
+                        SibP("mark", "contact", "negative"),
+                        SibP("mark", "contact", "friendly")
+                    ),
+                    Sib("ident_hostile", SibP("mark", "contact", "negative")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_CancelVocabularyOverridden_ReportsAgainstTheOverride()
+        {
+            // F12. The report is computed against the vocabulary that will actually run, so an
+            // author who resolved the collision by overriding cancelVocabulary is not told
+            // about it again — and one they INTRODUCED with that override is reported.
+            //
+            // The wording follows: naming "the default cancel vocabulary" here would be false,
+            // and "override cancelVocabulary" is not a remedy for someone who already has.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intent 'mark_bravo' carries the discriminating value \"bravo\" at element "
+                        + "3, which is also in the cancel vocabulary configured on "
+                        + "VoxrCommandRecogniser.*drop that word from cancelVocabulary"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mark_alpha", SibP("mark", "contact", "alpha")),
+                    Sib("mark_bravo", SibP("mark", "contact", "bravo")),
+                },
+                effectiveCancelVocabulary: new[] { "bravo", "scrub that" }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_CancelVocabularyOverrideResolvesTheCollision_ReportsNothing()
+        {
+            // The other direction, and the one that makes the plumbing worth doing: "negative"
+            // collides with the DEFAULT vocabulary, and this author replaced it. Reporting the
+            // collision anyway would send them to fix a grammar that is already correct.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("answer_affirmative", SibP("mark", "contact", "friendly")),
+                    Sib("answer_negative", SibP("mark", "contact", "negative")),
+                },
+                effectiveCancelVocabulary: new[] { "scrub that" }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void SiblingWarning_DiscriminatorsClearOfCancel_ReportNoCollision()
         {
             // The other half: the collision report must not fire on ordinary values, or it is
@@ -4507,6 +4711,425 @@ namespace VoXR.Tests.Runtime
             // returned false here, indistinguishable from a loss, so the incumbent kept the win
             // on registration order alone and nothing recorded that it had been a coin flip.
             Assert.AreEqual(VoxrCommandParser.CandidateOrder.Tied, Against(Cand()));
+        }
+
+        // ── The runtime sibling-tie record (issue #74 item 3, seam A) ───────────────────────
+        //
+        // Item 2 built this record inside ParseDiagnosticEntry, under #if UNITY_EDITOR, so the
+        // runtime path could read none of it. These pin the promoted version: it is n-ary, it
+        // resets per extraction round, it captures each rival's own slots, and it declines to
+        // ask questions it cannot phrase.
+        //
+        // Parser-level on purpose — the claim here IS about what the parser records. Whether the
+        // SPEAKER is ever asked is a recogniser-level claim, and item 2's review is the reason
+        // those are not tested here.
+
+        static VoxrSlotDefinition[] ShipSlot() =>
+            new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) };
+
+        static VoxrCommandDefinition ShipSib(string intent, string discriminator) =>
+            Sib(intent, SibP("set", "{ship}", discriminator, "on"));
+
+        [Test]
+        public void TiedSiblingRecord_MedialSiblingTie_RecordsTheRivalAndBothWords()
+        {
+            // The shape the whole design exists for: the speaker said one of these, VOSK dropped
+            // the discriminator, and the surviving evidence fits both exactly equally.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[] { ShipSib("set_mode", "mode"), ShipSib("set_level", "level") }
+            );
+
+            var results = parser.Parse("set alpha on", null);
+
+            Assert.AreEqual(1, results.Length, "the tie still resolves to one command");
+            Assert.AreEqual("set_mode", results[0].Command.Intent, "first-registered, as before");
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(1, record.RivalCount);
+            Assert.AreEqual("mode", record.WinnerValue, "the winner's own discriminating value");
+            Assert.IsFalse(record.Truncated);
+            Assert.AreEqual("level", parser.TiedRival(0, 0).Value, "what the speaker would say");
+            Assert.AreEqual("set_level", parser.RivalIntent(0, 0), "…to fire this instead");
+        }
+
+        [Test]
+        public void TiedSiblingRecord_NoTie_RecordsNoRival()
+        {
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[] { ShipSib("set_mode", "mode"), Sib("cease_fire", SibP("cease", "fire")) }
+            );
+
+            parser.Parse("set alpha mode on", null);
+
+            Assert.AreEqual(0, parser.TiedSiblingBuffer[0].RivalCount);
+        }
+
+        [Test]
+        public void TiedSiblingRecord_ThreeWaySet_RecordsTwoRivals()
+        {
+            // F19. Item 2's first-rival rule kept exactly one, which is the right size for an
+            // Editor diagnostic naming *a* rival and the wrong size for a vocabulary — design
+            // §5.1's own example ("set auto pilot on / off / standby") needs all of them, and
+            // under the old rule two of the three answers would have gone unrecognised.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[]
+                {
+                    ShipSib("set_mode", "mode"),
+                    ShipSib("set_level", "level"),
+                    ShipSib("set_standby", "standby"),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(2, record.RivalCount, "both rivals, not just the first");
+            Assert.IsFalse(record.Truncated);
+            CollectionAssert.AreEqual(
+                new[] { "level", "standby" },
+                new[] { parser.TiedRival(0, 0).Value, parser.TiedRival(0, 1).Value },
+                "registration order, deterministically — an integrator's prompt must not "
+                    + "reorder itself between sessions"
+            );
+        }
+
+        [Test]
+        public void TiedSiblingRecord_TwoRivalsSharingAValue_KeepsOnlyTheFirst()
+        {
+            // The pair test guarantees each rival differs from the WINNER; it says nothing about
+            // two rivals differing from each other. Answering "level" could not choose between
+            // these two, so offering it twice would be a question with no answer — item 1's F8,
+            // one level up.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[]
+                {
+                    ShipSib("set_mode", "mode"),
+                    ShipSib("set_level_a", "level"),
+                    ShipSib("set_level_b", "level"),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(1, record.RivalCount, "one offerable choice, not two spellings of it");
+            Assert.AreEqual("set_level_a", parser.RivalIntent(0, 0), "the first, as F8 does");
+            Assert.IsFalse(
+                record.Truncated,
+                "a duplicate that was never offerable is not something that failed to fit"
+            );
+        }
+
+        [Test]
+        public void TiedSiblingRecord_MultiCommandUtterance_ResetsBetweenRounds()
+        {
+            // Item 2's review caught these locals being hoisted out of the extraction loop, and
+            // its own review then recorded that no test pinned the reset (its GAP-3). This
+            // feature moves them, so it pins it: round 2 found no tie and must say so, not
+            // inherit round 1's rival and ask the speaker about a command they already got.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[]
+                {
+                    ShipSib("set_mode", "mode"),
+                    ShipSib("set_level", "level"),
+                    Sib("cease_fire", SibP("cease", "fire")),
+                }
+            );
+
+            var results = parser.Parse("set alpha on cease fire", null);
+
+            Assert.AreEqual(2, results.Length, "two commands extracted");
+            Assert.AreEqual(1, parser.TiedSiblingBuffer[0].RivalCount, "round 1 tied");
+            Assert.AreEqual(0, parser.TiedSiblingBuffer[1].RivalCount, "round 2 did not");
+        }
+
+        [Test]
+        public void TiedSiblingRecord_RivalCarriesItsOwnSlotMatches()
+        {
+            // F6. Siblings are element-wise equal but for one required literal, so the slots
+            // agree in every case anyone can construct — which is exactly why this is asserted
+            // rather than assumed. The alternative fires with the arguments ITS match produced.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[] { ShipSib("set_mode", "mode"), ShipSib("set_level", "level") }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var slots = parser.CopyRivalSlots(0, 0);
+            Assert.AreEqual(1, slots.Length);
+            Assert.AreEqual("ship", slots[0].Name);
+            Assert.AreEqual("alpha", slots[0].Value);
+        }
+
+        [Test]
+        public void TiedSiblingRecord_WinnerInTwoSets_AsksAboutOnlyOneOfThem()
+        {
+            // A pattern can belong to several sets, and AreSiblingRivals answers true on ANY
+            // shared one. Here "set the ship mode on" is a sibling of "…level on" at element 4
+            // and of "…mode off" at element 5, and on this transcript all three tie. Mixing them
+            // would offer "level" and "off" as answers to one question, with two different
+            // winner values — incoherent, and reachable rather than theoretical.
+            //
+            // The second ambiguity goes unasked. That is the same class as the rival cap, and it
+            // is stated rather than hidden.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("set_mode_on", SibP("set", "the", "ship", "mode", "on")),
+                    Sib("set_level_on", SibP("set", "the", "ship", "level", "on")),
+                    Sib("set_mode_off", SibP("set", "the", "ship", "mode", "off")),
+                }
+            );
+
+            parser.Parse("set the ship", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(1, record.RivalCount, "one question, not two merged into one list");
+            Assert.IsTrue(
+                record.Truncated,
+                "and the second ambiguity is REPORTED, not silently dropped — the comment above "
+                    + "used to claim this while nothing asserted it"
+            );
+            Assert.AreEqual("mode", record.WinnerValue);
+            Assert.AreEqual("level", parser.TiedRival(0, 0).Value);
+            Assert.AreEqual("set_level_on", parser.RivalIntent(0, 0));
+        }
+
+        [Test]
+        public void TiedSiblingRecord_MoreExtractionRoundsThanResults_DoesNotOverrun()
+        {
+            // The rival buffers are indexed by _resultCount and sized _resultBuf.Length slabs
+            // deep, so the "result buffer full" test has to stop the loop BEFORE the scan that
+            // writes them, not after it. It used to sit at the bottom of the round, which was
+            // harmless while the round's tie state was two plain ints and became an
+            // IndexOutOfRangeException the moment it was a buffer write.
+            //
+            // Not player-specific: the record write is not behind #if UNITY_EDITOR, so this
+            // throws in the Editor too. _resultBuf.Length is max(commands.Length, 1), so three
+            // rounds against two commands is the smallest case that reaches it.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[] { ShipSib("set_mode", "mode"), ShipSib("set_level", "level") }
+            );
+
+            VoxrCommandResult[] results = null;
+            Assert.DoesNotThrow(
+                () => results = parser.Parse("set alpha on set alpha on set alpha on", null),
+                "an utterance with more extraction rounds than the result buffer holds"
+            );
+            Assert.AreEqual(2, results.Length, "extraction stops at the buffer, not past it");
+        }
+
+        [Test]
+        public void TiedSiblingRecord_TruncatedRivalBesideAnAnswerableOne_ReportsTruncation()
+        {
+            // A truncated rival ties provably but cannot be NAMED, so it is never offered. When
+            // it is the ONLY tie that is harmless — no question is asked and the speaker re-utters
+            // anyway. When another rival makes a question happen, it is an answer they could have
+            // given that is missing from the list, and saying it matches nothing: the pending
+            // then times out and DR-6 fires nothing.
+            //
+            // So the flag has to cover it, exactly as it covers the cap and the two-set drop.
+            // A review caught this reporting IsTruncated == false while the Editor diagnostic
+            // named the missing rival in the same parse.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[]
+                {
+                    ShipSib("set_mode", "mode"),
+                    Sib(
+                        "set_level",
+                        SibP(
+                            "set",
+                            "{ship}",
+                            "level",
+                            "on",
+                            "?p",
+                            "?q",
+                            "?r",
+                            "?s",
+                            "?t",
+                            "?u",
+                            "?v"
+                        )
+                    ),
+                    ShipSib("set_standby", "standby"),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(1, record.RivalCount, "only the nameable rival is offered");
+            Assert.AreEqual("standby", parser.TiedRival(0, 0).Value);
+            Assert.IsTrue(
+                record.Truncated,
+                "and the integrator is told an answer is missing from the list"
+            );
+        }
+
+        [Test]
+        public void TiedSiblingRecord_TwoRivalsOfOneIntent_OfferOnlyTheFirst()
+        {
+            // The pair test guarantees each rival differs from the WINNER in both value and
+            // intent; it says nothing about the rivals differing from each other. Two patterns
+            // of ONE intent carrying different words pass the value dedup and would both be
+            // offered — asking the speaker to choose between two spellings of the same command,
+            // which is the round trip IsAnswerableRival's intent half exists to prevent.
+            //
+            // The cap makes it worse than cosmetic: four sibling patterns of one intent would
+            // take every slot and squeeze out the only genuinely different alternative.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[]
+                {
+                    ShipSib("set_mode", "mode"),
+                    Sib(
+                        "set_beta",
+                        SibP("set", "{ship}", "level", "on"),
+                        SibP("set", "{ship}", "report", "on")
+                    ),
+                    ShipSib("set_standby", "standby"),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(2, record.RivalCount, "one choice per intent, not per pattern");
+            Assert.IsTrue(
+                record.Truncated,
+                "and \"report\" is reported missing: it reaches set_beta and is not offered, so "
+                    + "a speaker who says it gets no match at all"
+            );
+            CollectionAssert.AreEqual(
+                new[] { "set_beta", "set_standby" },
+                new[] { parser.RivalIntent(0, 0), parser.RivalIntent(0, 1) },
+                "and the second intent still gets its slot"
+            );
+            Assert.AreEqual("level", parser.TiedRival(0, 0).Value, "the first spelling wins");
+        }
+
+        [Test]
+        public void TiedSiblingRecord_TruncatedExpansion_RecordsNoRivalThoughTheGateRefuses()
+        {
+            // The divergence architecture §2.4 asked for, and the reason the eager path keeps
+            // its own answer. Past MaxWarningExpansion a pattern is never expanded, so the
+            // fallback compares required elements only: it can confirm a tie but names no set,
+            // and therefore cannot say what word tells the two apart.
+            //
+            // A refusal needs no vocabulary; a question does. So the eager gate still refuses
+            // (TryEagerCommit_SiblingAnalysisTruncatedByTheExpansionCap_RefusesAnyway pins that,
+            // unedited) while the flush records nothing and fires the winner — the same outcome
+            // as with the flag off, which is the safe direction.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib(
+                        "shields_up",
+                        SibP(
+                            "engage",
+                            "?please",
+                            "?now",
+                            "?sir",
+                            "?kindly",
+                            "?quickly",
+                            "?really",
+                            "?just",
+                            "shields",
+                            "online"
+                        )
+                    ),
+                    Sib("weapons_up", SibP("engage", "weapons", "online")),
+                }
+            );
+
+            var results = parser.Parse("engage online", null);
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual(
+                0,
+                parser.TiedSiblingBuffer[0].RivalCount,
+                "a tie we cannot phrase a question about is not one we ask about"
+            );
+        }
+
+        [Test]
+        public void TiedSiblingRecord_SetLargerThanTheCap_OffersTheFirstNAndSaysSo()
+        {
+            // F19's "never silently truncated". The cap bounds a preallocated buffer, so a set
+            // spanning more values than it holds offers the first N — and Truncated is what
+            // stops that being a silent loss. The author was told at construction too, which is
+            // where they can still act on it (see SiblingWarning_SetLargerThanTheRivalCap_*).
+            var commands = new List<VoxrCommandDefinition>();
+            foreach (string v in new[] { "mode", "level", "standby", "trim", "gain", "bias" })
+                commands.Add(ShipSib("set_" + v, v));
+
+            var parser = new VoxrCommandParser(ShipSlot(), commands.ToArray());
+
+            parser.Parse("set alpha on", null);
+
+            var record = parser.TiedSiblingBuffer[0];
+            Assert.AreEqual(
+                VoxrCommandParser.MaxDisambiguationRivals,
+                record.RivalCount,
+                "the first N, filled to the cap"
+            );
+            Assert.IsTrue(record.Truncated, "and the overflow is reported, not dropped in silence");
+        }
+
+        [Test]
+        public void SiblingWarning_SetLargerThanTheRivalCap_TellsTheAuthorAtConstruction()
+        {
+            // The construction warning is what actually discharges F19's acceptance check: a
+            // boolean nothing reads is the silent cap wearing a flag. Set sizes are known here,
+            // it costs nothing per parse, and the author can still rename a literal.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "This set spans 6 discriminating values and runtime disambiguation offers "
+                        + "at most 5 choices, so the rest cannot be answered in one word"
+                )
+            );
+
+            var commands = new List<VoxrCommandDefinition>();
+            foreach (string v in new[] { "mode", "level", "standby", "trim", "gain", "bias" })
+                commands.Add(ShipSib("set_" + v, v));
+
+            var parser = new VoxrCommandParser(ShipSlot(), commands.ToArray());
+
+            Assert.IsNotNull(parser);
+        }
+
+        [Test]
+        public void SiblingWarning_SetWithinTheRivalCap_SaysNothingAboutIt()
+        {
+            // The other half: the cap note must not attach to every sibling warning, or it is
+            // noise on the shape the runtime handles perfectly well. Five values is exactly what
+            // one question can hold.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                // Asserted by where the message ENDS: the cap note is appended after the remedy,
+                // so the remedy being the last thing said is exactly "no cap note".
+                new Regex("differ only at element 3.*ask the speaker which was meant\\.$")
+            );
+
+            var commands = new List<VoxrCommandDefinition>();
+            foreach (string v in new[] { "mode", "level", "standby", "trim", "gain" })
+                commands.Add(ShipSib("set_" + v, v));
+
+            var parser = new VoxrCommandParser(ShipSlot(), commands.ToArray());
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
         }
     }
 }

@@ -345,5 +345,66 @@ namespace VoXR.Tests.Editor
                 "a rival sharing the winner's intent across two commands is still not a rival"
             );
         }
+
+        [Test]
+        public void LastParseDiagnostics_TruncatedSiblingTie_StillNamesTheRival()
+        {
+            // Past MaxWarningExpansion (6 optionals) a pattern is never expanded, so the sibling
+            // relation is established by comparing required elements instead — which proves the
+            // tie but names no set, and therefore no discriminating word. Issue #74 item 3 uses
+            // that to refuse the pair as a runtime CHOICE: there is no question to ask.
+            //
+            // The diagnostic is a different question — "was the winner decided by a coin flip,
+            // and against whom?" — and on this shape the answer is still yes. Deriving it from
+            // the choice list made it silently report null here, which the review caught and
+            // this pins: it reads a separate exemplar set on any sibling tie, offerable or not.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "shields_up",
+                        new[]
+                        {
+                            new[]
+                            {
+                                "engage",
+                                "?please",
+                                "?now",
+                                "?sir",
+                                "?kindly",
+                                "?quickly",
+                                "?really",
+                                "?just",
+                                "shields",
+                                "online",
+                            },
+                        }
+                    ),
+                    new VoxrCommandDefinition(
+                        "weapons_up",
+                        new[] { new[] { "engage", "weapons", "online" } }
+                    ),
+                }
+            );
+
+            parser.Parse("engage online", null);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.AreEqual(
+                "weapons_up",
+                diag[0].TiedSiblingIntent,
+                "the coin flip is still reported, exactly as it was before item 3"
+            );
+            Assert.AreEqual(0, diag[0].TiedSiblingPatternIndex);
+
+            // …and it is still refused as a choice, because it cannot be phrased as one.
+            Assert.AreEqual(
+                0,
+                parser.TiedSiblingBuffer[0].RivalCount,
+                "a tie we cannot phrase a question about is not one we ask about"
+            );
+        }
     }
 }

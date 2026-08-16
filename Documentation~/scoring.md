@@ -257,7 +257,7 @@ And below `minScore`, `allowPartialMatch` diverts to pending rather than rejecti
 
 ### What `OnUnrecognisedSpeech` actually means
 
-It does **not** mean "nothing matched". It fires whenever an utterance produced no accepted command, *except* when some candidate was dropped by `minConfidence` or by debounce — those two are the only filters that suppress it:
+It does **not** mean "nothing matched". It fires whenever an utterance produced no accepted command, *except* when some candidate was dropped by `minConfidence` or by debounce — those are the only filters that suppress it — joined since by a disambiguation diversion, when `disambiguateSiblingTies` is on:
 
 | Outcome | `OnUnrecognisedSpeech` |
 |---------|------------------------|

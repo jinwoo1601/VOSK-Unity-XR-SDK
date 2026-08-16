@@ -1255,6 +1255,148 @@ namespace VoXR.Tests.Runtime
             Assert.IsFalse(_recogniser.HasPendingCommand);
         }
 
+        // ======== AwaitingDisambiguation — the third reason (issue #74 item 3) ========
+        //
+        // Extends this file's reason × outcome matrix rather than starting a new one, which is
+        // itself the acceptance check for DR-4's argument: widening VoxrPendingCommand beat
+        // adding a parallel VoxrAmbiguousPending, and the evidence is that timeout, cancel,
+        // re-entry and disable-safety are solved once here rather than twice.
+
+        void ConfigureAmbiguous()
+        {
+            LogAssert.Expect(
+                LogType.Warning,
+                new System.Text.RegularExpressions.Regex("differ only at element 3")
+            );
+
+            // Before Configure: the flag is frozen into the parser there, and setting it after
+            // is invisible in the Editor because the parser records ties whenever the flag is set
+            // OR UNITY_EDITOR is defined.
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+        }
+
+        [Test]
+        public void TimeoutFireAsIs_OnADisambiguationPending_Cancels_ByDesign()
+        {
+            // DR-6, and the argument is semantic rather than a preference. FireAsIs means "the
+            // intent is known, fire it with the slots I have" — under ambiguity the INTENT
+            // itself is unknown, which is a different situation wearing the same flag. Firing
+            // the first-registered after a pause coin-flips anyway, merely later, which is
+            // incoherent with an integrator who opted in specifically to stop coin-flipping.
+            ConfigureAmbiguous();
+            _recogniser.PendingTimeout = 0.01f;
+            _recogniser.PendingTimeoutBehavior = VoxrPendingTimeoutBehavior.FireAsIs;
+
+            VoxrCommand? cancelled = null;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandCancelled += cmd => cancelled = cmd;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "the question was asked");
+
+            ForceTimeoutNow();
+
+            Assert.IsTrue(cancelled.HasValue, "an unanswered ambiguity is abandoned");
+            Assert.IsFalse(recognised.HasValue, "and fires nothing, even under FireAsIs");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void TimeoutFireAsIs_OnAConfirmationPending_StillFires()
+        {
+            // The control for the test above: FireAsIs is untouched under the other reasons, so
+            // the degrade is scoped to the one situation DR-6 argues about.
+            ConfigureSync(requiresConfirm: true);
+            _recogniser.PendingTimeout = 0.01f;
+            _recogniser.PendingTimeoutBehavior = VoxrPendingTimeoutBehavior.FireAsIs;
+
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            _recogniser.InjectText("launch missiles target hotel one");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+
+            ForceTimeoutNow();
+
+            Assert.IsTrue(recognised.HasValue, "as it has always done");
+            Assert.AreEqual("launch_weapon", recognised.Value.Intent);
+        }
+
+        [Test]
+        public void TimeoutCancel_OnADisambiguationPending_Cancels()
+        {
+            ConfigureAmbiguous();
+            _recogniser.PendingTimeout = 0.01f;
+            _recogniser.PendingTimeoutBehavior = VoxrPendingTimeoutBehavior.Cancel;
+
+            VoxrCommand? cancelled = null;
+            _recogniser.OnCommandCancelled += cmd => cancelled = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            ForceTimeoutNow();
+
+            Assert.IsTrue(cancelled.HasValue);
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
+        [Test]
+        public void Disambiguation_PendingHasNoUnfilledSlots_SoSlotFillNeverClaimsIt()
+        {
+            // §4.8 pinned rather than trusted. The reason it is safe is a two-step argument
+            // through issue #73 — a command missing a required argument is routed to PartialMatch
+            // before the fire path, so anything that reached the tie was complete — and a future
+            // change to either end could break it silently. TryFollowUpSlotFill returns null on
+            // an empty list, so an empty list is what has to hold.
+            ConfigureAmbiguous();
+
+            _recogniser.InjectText("set alpha on");
+
+            var pending = _recogniser.EditorPendingCommand;
+            Assert.IsTrue(pending.HasValue);
+            Assert.AreEqual(VoxrPendingReason.AwaitingDisambiguation, pending.Value.Reason);
+            Assert.IsTrue(
+                pending.Value.UnfilledSlots == null || pending.Value.UnfilledSlots.Length == 0,
+                "so the follow-up slot-fill path declines it and the choice arm gets the answer"
+            );
+        }
+
+        [Test]
+        public void Disambiguation_Reconfigure_CancelsItLikeAnyOtherPending()
+        {
+            // The DR-4 dividend, asserted: none of Cancel, the reconfigure cancels, or the
+            // disable path gained a reason branch, and this is what says so from outside.
+            ConfigureAmbiguous();
+
+            VoxrCommand? cancelled = null;
+            _recogniser.OnCommandCancelled += cmd => cancelled = cmd;
+
+            _recogniser.InjectText("set alpha on");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+
+            _recogniser.Configure(MakeSlots(), MakeCommands());
+
+            Assert.IsTrue(cancelled.HasValue, "reconfiguring abandons the question");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+        }
+
         // -------- Helpers --------
 
         void ForceTimeoutNow()
