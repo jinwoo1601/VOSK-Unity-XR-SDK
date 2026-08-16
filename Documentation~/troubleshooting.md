@@ -51,7 +51,7 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 
 ### A command fires but a slot value is missing
 
-The utterance had the slot value in it, the command fired, and `GetSlot` returns `""`. The cause is a **bare sibling pattern out-ranking the slot-filled one** after a required function word was dropped. [Coverage](command-recognition.md#coverage) closes the common case -- the bare pattern is charged for the words it leaves unexplained, so the slot-filled form wins and the argument survives -- but it does not close all of it.
+The utterance had the slot value in it, the command fired, and `GetSlot` returns `""`. The cause is a **bare pattern out-ranking the slot-filled one** after a required function word was dropped. [Coverage](command-recognition.md#coverage) closes the common case -- the bare pattern is charged for the words it leaves unexplained, so the slot-filled form wins and the argument survives -- but it does not close all of it.
 
 If you still see this, in this order:
 
@@ -67,7 +67,7 @@ It worked before, the transcript looks right, and the score in the log is lower 
 Work out `matched / elements` for the winning pattern. If the reported `score` is lower, the difference is the tokens outside the match.
 
 - **If you had tuned `coverageWeight` down, check the value survived the upgrade.** It was named `skippedWordPenalty` before #65. The component's own value migrates, but a prefab-*instance* override of the old name may not -- and a lost override silently restores the `1.0` default, which produces exactly this symptom.
-- Register the fuller phrasing as a sibling pattern, so the demotion has somewhere to land. This is the intended response.
+- Register the fuller phrasing as an additional pattern, so the demotion has somewhere to land. This is the intended response.
 - Bring natural trailing words into the grammar as optional literals (`?please`, `?now`).
 - Blunter: lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0` turns coverage off entirely -- back to pre-#31 scoring, and the discarded-argument bug above comes with it. **The two knobs have different lifetimes**, which matters if you are tuning live: `minScore` is read fresh on every parse, so an Inspector edit applies to the very next utterance. `coverageWeight` is captured when the parser is built, and nothing watches the field -- so a Play Mode edit does nothing until you call `RebuildParser()` (or `Configure`, `SetActiveSets`, `NotifySlotChanged`), or re-enter Play Mode. Drag it mid-session and you will wrongly conclude coverage was not the cause.
 - Measured cases and the shapes with no user-level workaround: [Known Limitations](../KNOWN_LIMITATIONS.md), plus worked example [B2](scoring.md#b2-the-same-demotion-with-nowhere-to-land).
@@ -90,7 +90,9 @@ The healthy-looking score is the tell: nothing went wrong with the match. The wo
 
 **The eager-flush gate no longer commits early on this shape.** Where the buffer fits two different intents exactly equally and they differ at one required word, it declines and waits out the full window instead of firing a coin flip mid-utterance. That covers the **middle**-of-pattern case the gate's tail rule cannot see — `set {ship} mode on` against `set {ship} level on`, heard as "set alpha on". The same command still fires, at the end of the window rather than immediately, so the wrong-command symptom above is unchanged; only its timing is.
 
-Fix by diverging by more than one word, or give the more destructive of the pair `requiresConfirmation`. Where both phrasings must exist verbatim, register the safer one first. See [Do not separate two commands by a single word](command-recognition.md#do-not-separate-two-commands-by-a-single-word).
+**The fix that actually resolves it: turn on `disambiguateSiblingTies`.** The gate above buys the decision one thing — it happens once, at the flush, on a final transcript — and that is where the recogniser can *ask*. (That gate needs `eagerFlushOnCompleteMatch`, which is off by default; the flag does not, and works either way.) With the flag on, an ambiguous utterance fires nothing, raises `OnCommandPending` with `PendingAmbiguity` set, and the speaker says the one distinguishing word (`weapons`, `navigation`) to settle it. It is off by default because it needs somewhere to put the question: with no `OnCommandPending` subscriber the command is lost rather than merely mis-picked. See [Ask instead of guessing](command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
+
+Where you cannot prompt, the grammar-side fixes still apply: diverge by more than one word, or give the more destructive of the pair `requiresConfirmation`. Where both phrasings must exist verbatim, register the safer one first. See [Do not separate two commands by a single word](command-recognition.md#do-not-separate-two-commands-by-a-single-word).
 
 ### A command reports nothing at all, though it clearly part-matched
 

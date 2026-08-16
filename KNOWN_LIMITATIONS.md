@@ -343,7 +343,7 @@ deliberate trade-offs rather than oversights.
   argument (#42) — but it applies whether or not a better sibling exists to win
   instead.
 - **Workaround**:
-  - Register the fuller phrasing as a sibling pattern, so the demotion has
+  - Register the fuller phrasing as an additional pattern, so the demotion has
     somewhere to land. This is the intended authoring response.
   - Mark natural trailing words optional (`?please`) to bring them into the
     grammar.
@@ -464,7 +464,7 @@ deliberate trade-offs rather than oversights.
   - Avoid registering commands that are exact prefixes of others when low latency
     matters — e.g. give the shorter command a distinct extra keyword.
 
-### A dropped required literal hands the utterance to the bare sibling pattern — where coverage cannot charge for it
+### A dropped required literal hands the utterance to the bare pattern — where coverage cannot charge for it
 
 > **Narrowed in v2.6.** Coverage (#65 §5.2) closed the common form of this: with
 > `["decelerate"]` and `["decelerate", "by", "{burn_level}"]` registered,
@@ -520,7 +520,9 @@ deliberate trade-offs rather than oversights.
 - **Symptom**: Two commands share every element but one — `switch to weapons` and
   `switch to navigation`, or `set {ship} mode on` and `set {ship} level on`. The
   speaker says one of them, VOSK drops the discriminating word, and the *other*
-  command fires. Not an early fire: the wrong command.
+  command fires. Not an early fire: the wrong command. (With
+  `disambiguateSiblingTies` on, the speaker is asked instead — see the remedy below.
+  This entry describes the default, which is off.)
 - **Repro**: Register both `["switch", "to", "weapons"]` and
   `["switch", "to", "navigation"]`, then feed the transcript "switch to". Both
   patterns score `(1 + 1 + 0) / 3` = 0.67, which clears the default `minScore`.
@@ -538,20 +540,24 @@ deliberate trade-offs rather than oversights.
   wrong sibling; it no longer does. The gate declines whenever the buffer fits two
   different intents equally and they differ at one required word, so the guess now
   happens once, at the flush, on both shapes.
-- **The eager refusal changes the timing, not the outcome.** The same command still
-  fires — at the end of `bufferWindow` rather than immediately. Deferring does not let
+- **The eager refusal changes the timing, not the outcome** (with the flag off, which
+  is the default). The same command still fires — at the end of `bufferWindow` rather
+  than immediately. Deferring does not let
   the missing word arrive: speech only ever appends to the buffer, and for a medial
   drop the position that word would have occupied is already behind the match. What it
   buys is that the decision is made once, on a final transcript — **which is where the
-  recogniser can ask you instead of guessing.**
+  recogniser can ask you instead of guessing.** (That refusal is an eager-gate rule and
+  needs `eagerFlushOnCompleteMatch`; the remedy below does not, and works on default
+  settings.)
 - **There is now a supported remedy: `disambiguateSiblingTies`.** With it on, a flush
   that ties this way stops guessing and asks. `OnCommandPending` raises with
   `PendingAmbiguity` set, carrying the competing commands and the one word that tells
   each apart; the speaker says that word and the right intent fires with its slots
   intact. Off by default, because an ambiguous utterance then fires *nothing* until it
   is answered — with no `OnCommandPending` subscriber that is worse than the coin flip.
-  See [Ask instead of guessing](Documentation~/command-recognition.md#ask-instead-of-guessing).
-  **The limitation below is what remains with the flag off**, which is the default.
+  See [Ask instead of guessing](Documentation~/command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
+  **What the rest of this entry describes is what remains with the flag off**, which
+  is the default.
 - **The parser now warns about this shape at construction**, in the Editor, naming
   the intents, the patterns as authored, the differing element and the competing
   values. It reports only what it can see going wrong: two patterns of *different*
@@ -577,25 +583,31 @@ deliberate trade-offs rather than oversights.
 
 ### A pattern with more than six optional elements is not checked for siblings
 
-- **Symptom**: A grammar carries the sibling shape above, but the eager-flush gate
-  commits early on it anyway, and no construction-time warning was logged — while an
-  otherwise identical grammar with one fewer optional element behaves correctly.
+- **Symptom**: A grammar carries the sibling shape above and **no construction-time
+  warning is logged** — while an otherwise identical grammar with one fewer optional
+  element warns as expected. With `disambiguateSiblingTies` on, the tie is also not
+  offered as a question. (The eager-flush gate still refuses on this repro, for the
+  reason below — but it is not exempt in general either.)
 - **Repro**: Register `["engage", "?a", "?b", "?c", "?d", "?e", "?f", "?g",
   "shields", "online"]` against `["engage", "weapons", "online"]` and say
   "engage online". Remove any one of the seven optionals and the same utterance
   behaves differently.
 - **Root cause**: Deciding whether two patterns are siblings means comparing every
   reading of each — a pattern with `N` optional elements has `2^N` of them — so past
-  six the parser stops expanding and compares the pattern only in its
-  all-optionals-present reading. That bound was set when the comparison fed nothing
-  but an Editor warning, where it cost recall on one message. It now also feeds the
-  eager gate, so an unexpanded pattern's sibling relations are *unknown* rather than
-  absent.
-- **What the parser does about it**: it does not assume. For an unexpanded pattern it
-  falls back to comparing required elements only — the all-optionals-omitted
-  reading — which catches the common case and, importantly, still refuses to claim a
-  hazard where none exists. A relation that appears only in some *middle* reading is
-  the part that stays invisible.
+  six the **set-building scan** stops expanding and takes the pattern only in its
+  all-optionals-present reading. It still builds a set from *that* reading — two
+  patterns carrying the same seven optionals and differing at one word are still
+  warned about — but a relation visible only in some other reading is never seen, and
+  the repro below is that case. That bound was set when the comparison fed nothing but
+  an Editor warning, where it cost recall on one message. It now also feeds runtime
+  behaviour, so an unexpanded pattern's relations are *unknown* rather than absent.
+- **What the parser does about it**: it does not assume, and this is a *second*
+  mechanism rather than the same one. Where the set-building scan gave up, the
+  **runtime pair test** falls back to comparing the two patterns' required elements —
+  the all-optionals-omitted reading — which is a real reading the matcher can produce.
+  So the eager gate still refuses to commit on such a pair. A relation visible only in
+  some *middle* reading is the part that stays invisible to both.
+- **Where seen**: repository test suite, eager-commit coverage for the expansion cap.
 - **With `disambiguateSiblingTies` on, such a rival is never offered as a choice.**
   That fallback proves the two patterns tie but cannot say *which word* tells them
   apart, and without that word there is no question to phrase. If it is the only rival,
@@ -629,12 +641,21 @@ deliberate trade-offs rather than oversights.
 - **Asymmetry worth knowing**: the *runtime* gate is not limited this way. It is
   handed your configured `minScore`, so it refuses to commit early on a short sibling
   tie that the warning stayed quiet about. The warning under-reports; the gate does
-  not. Both still leave the flush firing the first-registered pattern.
-- **Workaround**: If you run below the default `minScore`, treat short sibling pairs
-  as hazardous whether or not the Editor flagged them — the rule is that any two
-  patterns of different intents differing at exactly one required word can tie once
-  that word is dropped. Raising `minScore` back to `0.6` or above restores the
-  correspondence between what the warning reports and what can actually happen.
+  not. With `disambiguateSiblingTies` off, both still leave the flush firing the
+  first-registered pattern.
+- **Workaround**: Turn on `disambiguateSiblingTies`. Per the asymmetry above, the
+  runtime asks about a tie whose winner cleared your
+  **configured** `minScore` — so on the lowered threshold this entry is about, a short
+  tie the warning stayed quiet about is still routed to the speaker, provided the
+  runtime can name the distinguishing word (see the entry above). (At the default
+  0.6 the same pair is rejected on score and nothing fires, which is the outcome this
+  entry says is not the problem.) See
+  [Ambiguous commands](Documentation~/command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
+  Failing that: if you run below the default `minScore`, treat short sibling pairs as
+  hazardous whether or not the Editor flagged them — the rule is that any two patterns
+  of different intents differing at exactly one required word can tie once that word
+  is dropped. Raising `minScore` back to `0.6` or above restores the correspondence
+  between what the warning reports and what can actually happen.
 - **Note**: The reverse error would be worse. Warning unconditionally would put a
   "the wrong intent can fire" claim in front of every author running default
   settings, for grammars where nothing fires at all.

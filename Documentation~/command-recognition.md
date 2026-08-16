@@ -33,12 +33,13 @@ Threshold Filter
     |  confidence of -1 (no data) bypasses the minConfidence check
     |  partial matches with allowPartialMatch enter pending state
     v
-Pending Command Check
-    |  commands with requiresConfirmation enter pending state
-    |  follow-up speech fills missing slots or confirms/cancels
-    v
 Debounce
     |  suppresses duplicate intents within commandCooldown seconds
+    v
+Pending Command Check
+    |  sibling ties enter pending state when disambiguateSiblingTies is on
+    |  commands with requiresConfirmation enter pending state
+    |  follow-up speech fills missing slots, answers, or confirms/cancels
     v
 Events: OnCommandRecognised, OnCommandsRecognised, OnUnrecognisedSpeech
         OnCommandPending, OnCommandConfirmed, OnCommandCancelled
@@ -88,7 +89,7 @@ Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character w
 
 ### Never leave a required function word between a bare pattern and its slot
 
-If a command has a bare pattern *and* a sibling that extends it with one required literal followed by a slot, mark that literal optional:
+If a command has a bare pattern *and* a longer one that extends it with a required literal followed by a slot, mark that literal optional:
 
 ```csharp
 // Warned about -- a dropped "by" leaves the slot-filled form barely above the gate
@@ -123,7 +124,7 @@ The parser logs a validation warning at construction naming the literal and the 
 - **Over a run of required literals, not just one.** Dropping any single word in `decelerate by the {burn_level}` strands the value just as dropping `by` alone does.
 - **Over optional forms.** `fire {?quantity} {weapon}` is not literally a prefix of `fire {weapon} at {target}`, but it is once its own optional is omitted -- which is exactly the form the parser matches when no quantity is spoken. Patterns are expanded before comparison, as the eager-flush prefix analysis already does.
 
-The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild an Editor session makes and expansion is exponential. That costs recall on that pattern only.
+The one limit: a pattern carrying more than six optional elements is compared unexpanded, since this scan runs on every parser rebuild an Editor session makes and expansion is exponential. For *this* scan that costs recall on that pattern only. The same bound applies to the scan below, where it costs more, because those forms now decide whether the recogniser warns you and whether it can ask the speaker -- see `KNOWN_LIMITATIONS.md`.
 
 ### Do not separate two commands by a single word
 
@@ -142,7 +143,7 @@ new VoxrCommandDefinition("mode_navigation", new[] { new[] { "show", "navigation
 
 Say "switch to navigation", lose the last word, and the surviving `switch to` fits **both** patterns exactly equally: same start, same `(1 + 1 + 0) / 3` = 0.67, same consumed span, same literal count. Selection exhausts every key it has and falls through to its last — the order the patterns were registered in — so `mode_weapons` fires because it happens to be declared first. It fires consistently, not randomly, which is what makes it easy to miss in testing and easy to hit in the field.
 
-This is not a scoring bug and no threshold reaches it. The word that would have decided is exactly the word that went missing; the evidence is not weak but **absent**. What the parser can do is notice the shape before you ship it.
+This is not a scoring bug and no threshold reaches it. The word that would have decided is exactly the word that went missing; the evidence is not weak but **absent**. So there are two things to do about it, and this section covers both: notice the shape before you ship it, and — where you cannot design it away — [ask the speaker](#ambiguous-commands-ask-instead-of-guessing) rather than guess.
 
 **The differing word can sit anywhere.** A word at the *end* is caught by the eager-flush gate's tail rule, which refuses to commit a pattern whose trailing required element never matched. A word in the *middle* clears that rule, because the elements after it still match and the tail check resets:
 
@@ -166,18 +167,22 @@ The second exclusion has a cost worth knowing: the parser is built from the gram
 
 **Remedies**, in the order worth trying:
 
-1. **Make the two commands differ in more than one element.** This is the only fix that removes the tie rather than moving it: with two differing words, losing one still leaves the other to decide.
-2. **Give the more destructive of the pair `requiresConfirmation`**, so a coin flip costs a confirmation prompt rather than an action.
-3. **Turn on `disambiguateSiblingTies` and let the speaker settle it** — see below. This is the only remedy that keeps both phrasings *and* gets the right command; the others either change the grammar or pick a loser in advance.
-4. **Where both phrasings must exist verbatim and you cannot prompt, register the safer one first** — the tie-break is deterministic, so first-registered is what fires.
+1. **Make the two commands differ in more than one element.** The only fix that removes the tie rather than managing it: with two differing words, losing one still leaves the other to decide. Prefer it whenever the phrasing is yours to choose.
+2. **[Turn on `disambiguateSiblingTies`](#ambiguous-commands-ask-instead-of-guessing) and let the speaker settle it.** The only remedy that keeps both phrasings *and* gets the right command. Needs somewhere to put the question — see below.
+3. **Give the more destructive of the pair `requiresConfirmation`**, so a coin flip costs a confirmation prompt rather than an action. Worth doing *alongside* 2, not instead of it: the two combine into "which did you mean?" then "are you sure?".
+4. **Where both phrasings must exist verbatim and you cannot prompt, register the safer one first** — the tie-break is deterministic, so first-registered is what fires. This is choosing which way to lose, not a fix.
 
 Note what is *not* on that list. **Making the difference come earlier in the pattern does not help.** `weapons mode` and `navigation mode` differ at their first element instead of their last, and tie exactly as before — `(0 + 1) / 2` for both. What changes with a shorter pattern is only that the tie falls under `minScore`, so nothing fires instead of the wrong thing. That is an improvement, but a small and accidental one, and it disappears the moment the pattern grows: `weapons mode active` and `navigation mode active` tie at `0.67` and fire the first-registered again.
 
 One further warning fires if a discriminating value is also cancel vocabulary. Follow-up handling checks cancel before anything else, so if that ambiguity is routed back to the speaker, answering with that word would cancel rather than choose it. It is judged against *your* `cancelVocabulary` if you set one, and against the defaults (`cancel`, `abort`, `negative`, …) if you did not — so overriding the vocabulary to dodge a collision actually silences the warning, and a collision you introduce *with* an override is reported. It is also only raised for values that could really be offered as an answer: a value whose only same-set partners share its intent is never asked about, so it is never reported.
 
-## Ask instead of guessing
+---
+
+## Ambiguous Commands: Ask Instead of Guessing
 
 Everything above stops the recogniser committing to a coin flip early. It does not stop it coin-flipping at the end — the flush still picks the first-registered pattern. **`disambiguateSiblingTies` is what replaces that guess with a question.**
+
+**This is independent of `eagerFlushOnCompleteMatch`.** The refusal described above is an eager-gate rule and only applies when you have turned eager flush on; the flag below acts on the *flush* path, which every utterance takes. Eager flush is off by default — that does not exempt you from this hazard, and does not stop the flag fixing it.
 
 ```csharp
 // Inspector: Follow-Up / Pending Commands > Disambiguate Sibling Ties
@@ -192,7 +197,7 @@ The speaker says "set alpha mode on". VOSK drops `mode`. With the flag off, `set
 3. You prompt however suits your game — this package ships no speech synthesis and no UI.
 4. The speaker says **`level`**, one word. `set_level` fires with its slots intact (`ship = alpha`), through `OnCommandConfirmed` and then `OnCommandRecognised`.
 
-**If the chosen command sets `requiresConfirmation`, step 4 asks again instead of firing** — "which?" first, then "are you sure?", which is the only coherent order, since you cannot confirm an intent you have not identified. `OnCommandPending` raises a second time, `PendingAmbiguity` is now null (this question is a confirmation), and the confirm vocabulary resolves it. Worth planning for: remedy 2 above tells you to mark the more destructive sibling `requiresConfirmation`, so taking both remedies together is exactly what produces this two-stage exchange.
+**If the chosen command sets `requiresConfirmation`, step 4 asks again instead of firing** — "which?" first, then "are you sure?", which is the only coherent order, since you cannot confirm an intent you have not identified. `OnCommandPending` raises a second time, `PendingAmbiguity` is now null (this question is a confirmation), and the confirm vocabulary resolves it. Worth planning for: remedy 3 above tells you to mark the more destructive sibling `requiresConfirmation`, so taking both remedies together is exactly what produces this two-stage exchange.
 
 The answer needs no grammar work: discriminating values are pattern literals, so the decoder already knows them.
 
@@ -212,9 +217,9 @@ A sibling set is n-ary: `set auto pilot on` / `off` / `standby` offers three cho
 
 Past that — or where the winner is ambiguous in two different ways at once, or where a pattern carries too many optional elements to analyse fully — some intent that also matched will not be on the list. `PendingAmbiguity.IsTruncated` tells you, so you can word "…or say the whole command again", which is the only way to reach what is missing.
 
-### Where it will not help
+### Push-to-talk: one setting to check
 
-Under push-to-talk with **Cancel Pending On Release** set, release flushes *and then cancels* — so the question is created and destroyed in consecutive statements and the speaker is never asked. That is the documented meaning of that flag, and after release the recogniser is not listening for an answer anyway. Use one or the other.
+Under push-to-talk, **Cancel Pending On Release** discards the question the instant it is raised — release flushes, and the flush is what creates it. Leave that setting off and the question survives for the speaker to answer on their next press. See [Cancel Pending On Release](push-to-talk.md#cancel-pending-on-release) for the ordering and the timer arithmetic.
 
 ---
 
@@ -461,7 +466,9 @@ If the user says the same command twice quickly (or VOSK produces overlapping re
 
 ## Pending Commands
 
-Sometimes a command partially matches (some required slots are unfilled) or needs explicit confirmation before a high-consequence action fires. The pending command system handles both cases by holding the command in a "pending" state and listening for follow-up speech.
+Sometimes a command partially matches (some required slots are unfilled), or needs explicit confirmation before a high-consequence action fires, or cannot be told apart from another command at all. The pending command system handles all three by holding the command in a "pending" state and listening for follow-up speech.
+
+The third kind is [ambiguity](#ambiguous-commands-ask-instead-of-guessing), and it only ever arises with `disambiguateSiblingTies` enabled. Everything in this section applies to it — preemption, cancellation, `CancelPendingCommand()` — **with one exception, called out under Timeout Behaviour below.**
 
 ### Partial Match with Follow-Up Slot-Fill
 
@@ -515,6 +522,8 @@ Configure `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` on `VoxrCom
 - **Cancel** (default) -- the pending command is discarded and `OnCommandCancelled` fires.
 - **FireAsIs** -- the pending command fires with whatever slots were filled, even if some are still missing.
 
+**`FireAsIs` does not apply to a pending ambiguity, which always cancels.** The two settings answer different questions: `FireAsIs` means "the command is known, fire it with what I have", and under an ambiguity the *command itself* is what is unknown. Firing the first-registered candidate after a pause would be the same coin flip the question was asked to avoid, arriving later.
+
 ### The two ways an incomplete command still fires
 
 A command missing a required argument does not fire on the ordinary path: it is refused outright, or, with `allowPartialMatch`, held pending for slot-fill. Two opt-ins deliberately override that, and both hand your handler a command with arguments absent:
@@ -547,19 +556,19 @@ Confirm and cancel vocabulary words are automatically included in the VOSK gramm
 
 ### Programmatic Control
 
-Call `CancelPendingCommand()` to cancel the pending command from code (e.g. on a scene transition or mode switch). Check `HasPendingCommand` and `PendingCommand` to inspect the current pending state.
+Call `CancelPendingCommand()` to cancel the pending command from code (e.g. on a scene transition or mode switch). Check `HasPendingCommand` and `PendingCommand` to inspect the current pending state, and [`PendingAmbiguity`](api/data-types.md#voxrpendingambiguity) to tell an ambiguity from a confirmation — `OnCommandPending` carries no reason of its own, so that property is how you know which question you were asked.
 
 ---
 
 ## Unrecognised Speech
 
-When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in two situations:
+When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in three situations:
 
 1. **No pattern match** -- the parser could not match any command pattern against the transcript.
 2. **Every match fell under `minScore`** -- patterns matched, but no candidate scored high enough to fire.
 3. **A match was diverted to pending** -- a partial match or a `requiresConfirmation` command entered the pending state; `OnCommandPending` fires as well.
 
-It does **not** fire when a candidate was rejected by `minConfidence` or suppressed by `commandCooldown` debounce -- those two are dropped silently, on the reasoning that the user did say a valid command, just not confidently or not soon enough after the last one. See [the gates](scoring.md#what-onunrecognisedspeech-actually-means) for the full table.
+It does **not** fire in three others: a candidate rejected by `minConfidence`, one suppressed by `commandCooldown` debounce, or one diverted to a **disambiguation** pending. The first two are silent on the reasoning that the user did say a valid command, just not confidently or not soon enough after the last one. The third is silent because telling you the speech was not understood, in the same frame you were asked to prompt about it, is exactly the confusion `disambiguateSiblingTies` exists to remove. See [the gates](scoring.md#what-onunrecognisedspeech-actually-means) for the full table.
 
 The `string` parameter is the full buffered transcript (after utterance merging), exactly as VOSK transcribed it.
 
@@ -602,7 +611,7 @@ commandRecogniser.OnUnrecognisedSpeech += text =>
 
 `OnUnrecognisedSpeech` and `OnCommandRecognised`/`OnCommandsRecognised` are mutually exclusive per utterance: a transcript that produces at least one accepted command never also fires `OnUnrecognisedSpeech`.
 
-The converse does not hold. A transcript that produces *no* accepted command is silent when a candidate was filtered by `minConfidence` or debounce, so "no command fired" and "`OnUnrecognisedSpeech` fired" are not the same condition.
+The converse does not hold. A transcript that produces *no* accepted command is silent when a candidate was filtered by `minConfidence`, suppressed by debounce, or diverted to a disambiguation pending, so "no command fired" and "`OnUnrecognisedSpeech` fired" are not the same condition.
 
 ---
 

@@ -7,7 +7,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 ## Getting Started
 
 - [Getting Started](getting-started.md) -- Installation, model setup, quick start examples, and the recognition lifecycle
-- [Command Recognition](command-recognition.md) -- How utterances become commands: the full parsing pipeline from audio to events, including pending commands
+- [Command Recognition](command-recognition.md) -- How utterances become commands: the full parsing pipeline from audio to events, pending commands, and what to do when two commands are too alike to tell apart
 
 ## Guides
 
@@ -31,5 +31,5 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 ## Support
 
 - [Native Bridge](native-bridge.md) -- Building the C++ native bridge from source
-- [Troubleshooting](troubleshooting.md) -- Platform support table, common issues, and solutions
+- [Troubleshooting](troubleshooting.md) -- Platform support table, common issues, and solutions: start here if the wrong command fires, or none does
 - [Known Limitations](../KNOWN_LIMITATIONS.md) -- Full list of known constraints with repro steps, root causes, and workarounds
