@@ -1446,8 +1446,9 @@ namespace VoXR.Commands
                 + $"{set.DiscriminatorIndex + 1} ({JoinWith(values.ToArray(), "or")}). If that word is "
                 + "dropped, these patterns match the remainder equally — same score, same "
                 + "consumed span, same literal count — and selection falls through to "
-                + "registration order, so the wrong intent can fire. Diverge earlier, or mark "
-                + "the more destructive one requiresConfirmation.";
+                + "registration order, so the wrong intent can fire. Make them differ in more "
+                + "than one element — the only fix that removes the tie rather than moving it "
+                + "— or mark the more destructive one requiresConfirmation.";
         }
 
         static string BuildCancelCollisionWarning(SiblingSet set, SiblingMember member)

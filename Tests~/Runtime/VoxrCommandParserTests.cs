@@ -3875,6 +3875,37 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void SiblingWarning_NamesARemedyThatActuallyRemovesTheTie()
+        {
+            // The message shipped saying "Diverge earlier", which does not work — and this
+            // grammar is the counter-example. These two diverge at the very FIRST element and
+            // tie exactly as "switch to weapons" / "switch to navigation" does. WHERE the
+            // patterns differ is irrelevant; DR-1 puts the discriminator at any position
+            // precisely because one differing element is fatal wherever it sits. Only differing
+            // in MORE THAN ONE element removes the tie, which is what the guide has always said
+            // and what the message now says too.
+            //
+            // Pinned because a remedy that does not work is worse than none: an author who
+            // follows it rewrites the grammar, sees the same warning, and stops trusting it.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("differ in more than one element")
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mode_weapons", SibP("weapons", "mode", "now")),
+                    Sib("mode_navigation", SibP("navigation", "mode", "now")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void SiblingSets_SameIntent_IsDetectedButNotWarnedAbout()
         {
             // Within one intent the wrong INTENT cannot fire — the same command is dispatched
