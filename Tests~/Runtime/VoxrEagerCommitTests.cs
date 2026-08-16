@@ -1614,5 +1614,98 @@ namespace VoXR.Tests.Runtime
                 "an unanalysed pattern must not be reported as hazard-free"
             );
         }
+
+        [Test]
+        public void TryEagerCommit_TruncatedPatternAsTheRival_RefusesToo()
+        {
+            // The same shape as above with the registration order reversed, so the over-cap
+            // pattern arrives as the RIVAL rather than as the incumbent. Worth its own test
+            // because the guard reads
+            //     _siblingFormsTruncated[ci1][pi1] || _siblingFormsTruncated[ci2][pi2]
+            // and `||` short-circuits: with the truncated pattern always first, the right
+            // operand never evaluated and could have been deleted with both suites still green.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("weapons_up", P("engage", "weapons", "online")),
+                    Cmd(
+                        "shields_up",
+                        P(
+                            "engage",
+                            "?please",
+                            "?now",
+                            "?sir",
+                            "?kindly",
+                            "?quickly",
+                            "?really",
+                            "?just",
+                            "shields",
+                            "online"
+                        )
+                    )
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_TruncatedButProvablyNotSiblings_StillCommits()
+        {
+            // The truncated-analysis arm must not answer "rivals" blindly, and this is the case
+            // that caught it doing so. Both patterns reduce to the same required elements
+            // ["engage","online"], so their discriminator is the SAME word — they are
+            // duplicates, which item 1's requirements F8 keeps out of the runtime path, and
+            // FindSiblingSets returns zero sets for them at any optional count.
+            //
+            // A blanket "unknown means refuse" flipped this to None past 6 optionals, in a
+            // PLAYER build, violating requirements F10 ("a non-sibling tie does not trigger the
+            // refusal"). Comparing required elements instead decides it correctly: zero
+            // differing positions means duplicates, not siblings.
+            //
+            // The 6-optional control below is the same grammar under the cap, where the ordinary
+            // path reaches the same answer — so this test fails if the arm regresses, and not
+            // for some unrelated reason.
+            VoxrCommandParser Build(int optionals)
+            {
+                var fillers = new[]
+                {
+                    "?please",
+                    "?now",
+                    "?sir",
+                    "?kindly",
+                    "?quickly",
+                    "?really",
+                    "?just",
+                };
+                var pattern = new List<string> { "engage" };
+                for (int i = 0; i < optionals; i++)
+                    pattern.Add(fillers[i]);
+                pattern.Add("online");
+
+                return new VoxrCommandParser(
+                    Slots(),
+                    Commands(
+                        Cmd("shields_up", pattern.ToArray()),
+                        Cmd("weapons_up", P("engage", "online"))
+                    )
+                );
+            }
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                Build(6).TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f),
+                "under the cap these are duplicates, not siblings — no set, no refusal"
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                Build(7).TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f),
+                "and truncating the analysis must not invent a hazard that is provably absent"
+            );
+        }
     }
 }

@@ -1172,26 +1172,37 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void EagerFlush_SiblingTie_LateDiscriminatorSelectsTheRightIntent()
+        public void EagerFlush_SiblingTie_UnambiguousUtteranceIsUnaffected()
         {
-            // The other half, and the reason refusing is worth the latency at all: the window
-            // the refusal buys is where the missing word can still land. Here it does, and the
-            // flush selects on evidence the eager scan never had.
+            // A test asserting that the deferred window lets the missing word land used to sit
+            // here. It was removed rather than repaired: for a MEDIAL discriminator that
+            // scenario cannot happen. Reaching the sibling condition means the issue #70 tail
+            // condition passed, so an element after the dropped word already matched, and
+            // HandleResult only ever APPENDS to the buffer — nothing can fill a position the
+            // match has gone past. Design §5.8's "the missing word may still arrive" describes
+            // the trailing shape, which #70 refuses long before this feature is reached.
+            //
+            // What is worth pinning instead is the boundary: say the whole thing and the tie
+            // never forms, so the refusal costs nothing on unambiguous speech.
             LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
             ConfigureMedialSiblings();
 
             VoxrCommand? received = null;
-            _recogniser.OnCommandRecognised += cmd => received = cmd;
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                received = cmd;
+                fireCount++;
+            };
 
             _recogniser.InjectText("set alpha level on");
-            _recogniser.FlushPendingBuffer();
 
-            Assert.IsTrue(received.HasValue);
             Assert.AreEqual(
-                "set_level",
-                received.Value.Intent,
-                "not the first-registered — the discriminator decided it"
+                1,
+                fireCount,
+                "no tie, so the gate commits immediately exactly as it always did"
             );
+            Assert.AreEqual("set_level", received.Value.Intent, "and on the spoken intent");
         }
     }
 }

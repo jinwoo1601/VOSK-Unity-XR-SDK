@@ -870,8 +870,10 @@ namespace VoXR.Commands
         }
 
         // Whether a command is missing one of its own required arguments (issue #73). The flush
-        // path's completeness condition, and the counterpart to the two TryEagerCommit already
-        // enforces (#66, #70). Issue #77 added the third caller: the follow-up slot-fill exit,
+        // path's completeness condition, and the counterpart to the two COMPLETENESS conditions
+        // TryEagerCommit enforces (#66, #70) — that gate also refuses on an ambiguous sibling
+        // tie (#74), which is not a completeness question and has no flush-side counterpart
+        // here. Issue #77 added the third caller: the follow-up slot-fill exit,
         // whose input is not a parse result at all but a pending command merged with a fill.
         //
         // An intent with no definition in the active sets is treated as complete: we cannot read

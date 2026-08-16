@@ -298,5 +298,52 @@ namespace VoXR.Tests.Editor
                 "a same-intent rival must not shadow the cross-intent one"
             );
         }
+
+        [Test]
+        public void LastParseDiagnostics_SameIntentAcrossTwoCommands_IsNotTheRecordedRival()
+        {
+            // The intent test in AreSiblingRivals has two arms — `ci1 == ci2`, or two DISTINCT
+            // commands whose Intent strings match — and only the first was covered. Both
+            // existing fixtures put the same-intent rival in the same command, so they exit on
+            // the index comparison and the string comparison was never reached.
+            //
+            // Here "set_mode" is registered as two separate commands. The winner's first tied
+            // rival is the second set_mode command: a different command index, a different
+            // discriminating value, sharing the set — so the index arm does NOT reject it, and
+            // only the string arm keeps it out of the record. set_level, the genuine
+            // cross-intent hazard, is what should be named.
+            //
+            // The eager verdict cannot show this: the set is cross-intent, so set_level ties
+            // the winner too and the gate refuses either way. The recorded rival is where the
+            // per-pair rule is observable at all.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+
+            parser.Parse("set alpha on", null);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.AreEqual(
+                "set_level",
+                diag[0].TiedSiblingIntent,
+                "a rival sharing the winner's intent across two commands is still not a rival"
+            );
+        }
     }
 }
