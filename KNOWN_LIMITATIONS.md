@@ -529,13 +529,21 @@ deliberate trade-offs rather than oversights.
   its final key — registration order. The word that would have decided is exactly
   the one that went missing, so no scorer can recover the intent; the parser is
   guessing, and it guesses consistently rather than randomly.
-- **The differing word can sit anywhere, and a *medial* one is worse.** For a
-  trailing discriminator the eager-flush gate refuses the shape — it will not commit
-  a pattern whose trailing required element never matched — so only the final flush
-  guesses. A discriminator in the *middle* clears that guard, because the elements
-  after it still match and the gate's tail check resets: `set {ship} mode on` heard
-  as "set alpha on" scores `3 / 4` = 0.75, spans the buffer, and commits **early**
-  with the wrong sibling. Both paths guess; the medial one guesses sooner.
+- **The differing word can sit anywhere, and the eager gate now refuses on both
+  shapes.** For a *trailing* discriminator it always did — it will not commit a
+  pattern whose trailing required element never matched. A discriminator in the
+  *middle* clears that particular rule, because the elements after it still match and
+  the tail check resets: `set {ship} mode on` heard as "set alpha on" scores
+  `3 / 4` = 0.75 and spans the buffer. That case used to commit **early** with the
+  wrong sibling; it no longer does. The gate declines whenever the buffer fits two
+  different intents equally and they differ at one required word, so the guess now
+  happens once, at the flush, on both shapes.
+- **This changes the timing, not the outcome.** The same command still fires — at the
+  end of `bufferWindow` rather than immediately. Deferring does not let the missing
+  word arrive: speech only ever appends to the buffer, and for a medial drop the
+  position that word would have occupied is already behind the match. What it buys is
+  that the decision is made once, on a final transcript, which is where a future
+  release can ask you which command you meant.
 - **The parser now warns about this shape at construction**, in the Editor, naming
   the intents, the patterns as authored, the differing element and the competing
   values. It reports only what it can see going wrong: two patterns of *different*
@@ -557,6 +565,34 @@ deliberate trade-offs rather than oversights.
   already cleared the gate; reducing the miss cost extends it down to three-element
   patterns, which is where two-word-prefix grammars live.
 
+### A pattern with more than six optional elements is not checked for siblings
+
+- **Symptom**: A grammar carries the sibling shape above, but the eager-flush gate
+  commits early on it anyway, and no construction-time warning was logged — while an
+  otherwise identical grammar with one fewer optional element behaves correctly.
+- **Repro**: Register `["engage", "?a", "?b", "?c", "?d", "?e", "?f", "?g",
+  "shields", "online"]` against `["engage", "weapons", "online"]` and say
+  "engage online". Remove any one of the seven optionals and the same utterance
+  behaves differently.
+- **Root cause**: Deciding whether two patterns are siblings means comparing every
+  reading of each — a pattern with `N` optional elements has `2^N` of them — so past
+  six the parser stops expanding and compares the pattern only in its
+  all-optionals-present reading. That bound was set when the comparison fed nothing
+  but an Editor warning, where it cost recall on one message. It now also feeds the
+  eager gate, so an unexpanded pattern's sibling relations are *unknown* rather than
+  absent.
+- **What the parser does about it**: it does not assume. For an unexpanded pattern it
+  falls back to comparing required elements only — the all-optionals-omitted
+  reading — which catches the common case and, importantly, still refuses to claim a
+  hazard where none exists. A relation that appears only in some *middle* reading is
+  the part that stays invisible.
+- **Workaround**: Keep patterns under seven optional elements, which is well inside
+  normal authoring. If you need more, do not also rely on a single required word to
+  separate two intents — that combination is the one this cannot see.
+- **Note**: This bound (6) is deliberately lower than the one that governs
+  eager-flush eligibility (12), because the sibling comparison runs at construction
+  on every parser rebuild, where the eligibility analysis is lazy.
+
 ### The sibling warning is silent below the default `minScore`
 
 - **Symptom**: A grammar carries the sibling shape above, the wrong command fires,
@@ -573,6 +609,10 @@ deliberate trade-offs rather than oversights.
   with the grammar alone and is never handed the recogniser's configured threshold,
   so it judges against the default. Lower `minScore` far enough and those ties
   become live without the warning noticing.
+- **Asymmetry worth knowing**: the *runtime* gate is not limited this way. It is
+  handed your configured `minScore`, so it refuses to commit early on a short sibling
+  tie that the warning stayed quiet about. The warning under-reports; the gate does
+  not. Both still leave the flush firing the first-registered pattern.
 - **Workaround**: If you run below the default `minScore`, treat short sibling pairs
   as hazardous whether or not the Editor flagged them — the rule is that any two
   patterns of different intents differing at exactly one required word can tie once

@@ -144,12 +144,16 @@ Say "switch to navigation", lose the last word, and the surviving `switch to` fi
 
 This is not a scoring bug and no threshold reaches it. The word that would have decided is exactly the word that went missing; the evidence is not weak but **absent**. What the parser can do is notice the shape before you ship it.
 
-**The differing word can sit anywhere, and the middle is the dangerous place.** A word at the *end* is at least caught by the eager-flush gate, which refuses to commit a pattern whose trailing required element never matched — only the final flush guesses. A word in the *middle* clears that guard, because the elements after it still match and the gate's tail check resets:
+**The differing word can sit anywhere.** A word at the *end* is caught by the eager-flush gate's tail rule, which refuses to commit a pattern whose trailing required element never matched. A word in the *middle* clears that rule, because the elements after it still match and the tail check resets:
 
 ```
 set {ship} mode  on      "set alpha on"  ->  3/4 = 0.75, spans the buffer,
-set {ship} level on                          commits EARLY with the wrong sibling
+set {ship} level on                          and fits both intents exactly equally
 ```
+
+**The eager gate refuses to commit on either shape.** When two patterns of *different* intents tie on a buffer and differ only at one required word, firing early would commit a coin flip before the utterance is even over — so the gate declines and lets the buffer run its full window. The same command still fires; it fires at the end of the window rather than immediately.
+
+That does not *resolve* the ambiguity, and it is worth being clear why the wait helps at all. For a medial drop the missing word can never arrive: speech only ever appends to the buffer, and the position it would have occupied is already behind the match. What deferring buys is that the decision happens once, at the flush, where the transcript is final — which is where a future release can ask you which command you meant instead of guessing. Until then the flush picks the first-registered pattern, exactly as it always has.
 
 **What the warning reports, and what it does not.** It fires in the Editor at construction, naming the intents, the patterns as you wrote them, the element they differ at, and the competing values. It is deliberately narrow in two ways:
 
@@ -353,7 +357,8 @@ By default the buffer is purely time-driven: every command -- complete or not --
 - **Complete and unambiguous** -> fires immediately, with zero buffer latency.
 - **A prefix of a longer command**, or a **trailing slot that could still grow** (a multi-word enumerated value such as `"red"` -> `"red dragon"`, or a variable-length number sequence) -> keeps waiting the full window, so split commands are still recovered. "Prefix" is judged against slot vocabularies, not just pattern shape: a lone `{burn_level}` is *not* a prefix of `decelerate {burn_level}`, because no value of the slot begins with "decelerate".
 - **Missing a required slot** (the pattern's literals are all in, but an argument has not been spoken yet) -> keeps waiting the full window, even where the arithmetic leaves the partial match above `minScore`. Unlike the case above it never qualifies for the shortened `prefixHoldSeconds` hold, because it is not a complete match. An unspoken slot consumes no words, so such a buffer otherwise looks complete right up to the moment the missing words arrive.
-- **Still owing its last word** (the pattern's final required element has not been spoken yet, as in "switch to" against `switch to weapons`) -> keeps waiting the full window. A missing word consumes nothing, so such a buffer looks complete by every other measure; where a sibling command shares the prefix, committing would fire whichever of them happens to be registered first. A *medial* drop is different and still fires immediately: if a later element of the pattern went on to match, the buffer is not waiting on that word.
+- **Still owing its last word** (the pattern's final required element has not been spoken yet, as in "switch to" against `switch to weapons`) -> keeps waiting the full window. A missing word consumes nothing, so such a buffer looks complete by every other measure; where a sibling command shares the prefix, committing would fire whichever of them happens to be registered first.
+- **Ambiguous between two intents** -> keeps waiting the full window. Where the buffer fits two patterns of *different* intents exactly equally — same score, same span, same literal count — and they differ at just one required word, the winner would be decided by registration order alone. The gate declines rather than commit a coin flip early. This covers the *medial* drop the tail rule above cannot see: `set {ship} mode on` against `set {ship} level on`, heard as "set alpha on". The same command still fires at the end of the window. See [the one-word hazard](#do-not-separate-two-commands-by-a-single-word).
 - **Split command** -> fires as soon as its second half completes, instead of waiting another full window on top.
 - **Out-of-grammar preamble** (a station address such as "Helm, ...", reported by VOSK as `[unk]`) is skipped, so an addressed command commits as fast as the bare one. Only a *leading* run is skipped: anything left over at the end -- recognised or `[unk]` -- is treated as an in-progress tail and keeps waiting, as does a leading word VOSK did resolve.
 
