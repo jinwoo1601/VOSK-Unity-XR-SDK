@@ -239,6 +239,42 @@ namespace VoXR.Commands
         bool[][] _canCommitEarly;
         bool _canCommitEarlyComputed;
 
+        // Sibling-set lookup keyed by [commandIdx][patternIdx], which is the key design §5.1
+        // specifies and the reason SiblingMember carries those indices. Null at a pattern that
+        // belongs to no set — the common case; most patterns of the demo grammar are in none.
+        //
+        // The leaf is an ARRAY because one pattern can belong to several sets: ["a","b","c"] is
+        // a sibling of ["a","b","d"] at position 2 and of ["a","x","c"] at position 1, and a
+        // scalar id would silently keep one hazard and lose the other.
+        //
+        // Lazy for the reason _canCommitEarly is (see the note at the end of the constructor):
+        // a parser rebuilt on every slot change but never asked for an eager verdict should not
+        // pay for this. In the Editor the construction-time warning consumes the same lookup,
+        // so there it is built at construction and built ONCE — not once per consumer, which is
+        // what DR-2 asks for.
+        SiblingMembership[][][] _siblingMemberships;
+
+        // Per pattern: were its optional expansions truncated by MaxWarningExpansion? If so its
+        // sibling relations are unknown rather than absent, and AreSiblingRivals refuses on a
+        // cross-intent tie rather than claiming there is no hazard.
+        bool[][] _siblingFormsTruncated;
+        bool _siblingLookupComputed;
+
+        // Read only by the construction-time warning, which is [Conditional("UNITY_EDITOR")].
+        // Declared unconditionally because that attribute elides the CALL, not the method body,
+        // which still has to compile in a player — but ASSIGNED only in the Editor, so a player
+        // carries one null reference here rather than every frame and member array the grammar
+        // produced, for the parser's lifetime, with nothing able to read them.
+        //
+        // That asymmetry is exactly what CS0649 exists to report, and here it is a false
+        // positive: the only reader's only call site is elided in the same configuration that
+        // drops the assignment. Suppressed at the declaration rather than left to print into
+        // every consumer's player build — this package ships as source and compiles inside
+        // their projects, so its warnings become theirs.
+#pragma warning disable CS0649
+        List<SiblingSet> _siblingSets;
+#pragma warning restore CS0649
+
         // Pooled StringBuilder for TryMatchNumberSequence.
         readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
 
@@ -438,7 +474,7 @@ namespace VoXR.Commands
             // Appended last on purpose: VoxrCommandRecogniserInjectionTests queues ORDERED log
             // expectations across the two scans above, so a new scan between them would break
             // the queue rather than merely add to it.
-            WarnOnSiblingDiscriminator(commands);
+            WarnOnSiblingDiscriminator();
         }
 
         static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
@@ -539,7 +575,7 @@ namespace VoXR.Commands
         //
         // The scan mirrors what ParseInternal actually compares, which is why it is this wide:
         //   - ACROSS COMMANDS, not just within one. Selection runs over every pattern of every
-        //     command through a single IsBetterCandidate, so splitting the two phrasings across
+        //     command through a single CompareCandidate, so splitting the two phrasings across
         //     two intents reproduces the hazard exactly.
         //   - Over a RUN of required literals, not a single one. Dropping any one word in
         //     "decelerate by the {burn_level}" strands the value just as "by" alone does.
@@ -660,17 +696,32 @@ namespace VoXR.Commands
             }
         }
 
-        // Concrete forms of a pattern for the warning scan. Patterns with no optional elements
+        // Concrete forms of a pattern for the sibling scan. Patterns with no optional elements
         // are their own single form, with no copy. The expansion is capped well below
-        // MaxOptionalExpansion because this scan runs in the ctor — and so on every parser
-        // rebuild an editor session makes — where ComputeCanCommitEarly's expansion is lazy;
-        // past the cap the pattern is compared raw, costing recall on that one pattern only.
+        // MaxOptionalExpansion because in the Editor this scan runs from the ctor — and so on
+        // every parser rebuild a session makes — where ComputeCanCommitEarly's expansion is
+        // lazy; past the cap the pattern is compared raw.
+        //
+        // "Costing recall on that one pattern only" is how this read while the only consumer
+        // was a Debug.LogWarning. Since issue #74 item 2 the same forms feed a RUNTIME gate, so
+        // a truncated pattern is one whose sibling relations are unknown rather than absent —
+        // which is why EnsureSiblingLookup records the truncation per pattern and
+        // AreSiblingRivals refuses on a cross-intent tie involving one, instead of reporting no
+        // hazard from an analysis it never performed.
         const int MaxWarningExpansion = 6;
+
+        // Whether this pattern's optionals were too many to expand, so WarningForms handed back
+        // the raw decorated pattern instead of its readings. The single definition of that
+        // fact: EnsureSiblingLookup consults it to decide whether a pattern's sibling relations
+        // are KNOWN, and a second spelling of the same comparison could drift from this one
+        // without anything failing.
+        static bool ExpansionTruncated(string[] pattern) =>
+            CountOptionalElements(pattern) > MaxWarningExpansion;
 
         static List<string[]> WarningForms(string[] pattern)
         {
             int optionals = CountOptionalElements(pattern);
-            if (optionals == 0 || optionals > MaxWarningExpansion)
+            if (optionals == 0 || ExpansionTruncated(pattern))
                 return new List<string[]>(1) { pattern };
             return ExpandOptionals(pattern);
         }
@@ -818,7 +869,7 @@ namespace VoXR.Commands
         // Whether anything OUTSIDE the discriminator would credit MatchedRequired for this
         // form. If nothing does, the candidate misses one required element (the discriminator)
         // and matches none, so `MissedRequired > MatchedRequired` refuses it in
-        // IsBetterCandidate before any comparison key is reached — it can never be the rival
+        // CompareCandidate before any comparison key is reached — it can never be the rival
         // in a tie, whatever it scores.
         //
         // This is per FORM, not per set, because the two sides can differ here even when their
@@ -960,38 +1011,53 @@ namespace VoXR.Commands
                 if (members.Count < 2)
                     continue;
 
-                // One member per discriminating value: two patterns reaching the same literal
-                // are duplicates of each other, not siblings, which is what keeps
-                // author-duplicated patterns out of the report. Greedy and first-wins, so the
-                // survivor is the earliest registered and the result is stable across runs.
+                // EVERY pattern carrying the hazard is kept, and the set is emitted when at
+                // least two distinct discriminating values remain (issue #90).
                 //
-                // A per-(command, pattern) guard used to sit beside this, against a pattern
-                // being its own sibling. It became unreachable when frame comparison stopped
-                // folding optional literals: two same-length forms of ONE pattern differ only
-                // in which optionals they include, and with the "?" preserved those positions
-                // never compare equal — so the shift that used to align a required literal
-                // against a different one cannot happen, and an optional position can never be
-                // the discriminator anyway. Removed rather than kept as insurance against a
-                // mechanism the code no longer has.
+                // This used to keep one member per distinct value, which under-reported: with
+                // a:["mode","on"], b:["mode","on"], c:["mode","off"] the emitted set was
+                // {a,c} and b was never named, even though b<->c is exactly the hazard a<->c
+                // is. An author fixing what the warning named left the other half live. Worse,
+                // where the dropped member was the only one carrying a second intent, the
+                // survivors shared one intent and the same-intent filter then suppressed the
+                // set entirely — an under-report becoming no report at all, and invisible to
+                // the runtime lookup that consumes these sets.
+                //
+                // What keeps author-duplicated patterns out (item 1's requirements F8) is no
+                // this gate but the "distinct values" test below plus the per-PAIR test in
+                // AreSiblingRivals: two members sharing a value are duplicates of each other,
+                // not siblings, so they never form a rival pair.
+                //
+                // The exact-duplicate guard below is NOT the per-(command, pattern) arm that
+                // was removed at PR #92's review, and it is here for a different reason. That
+                // one guarded a pattern being its own sibling through a shift aligning a
+                // required literal against a different one — a mechanism the code no longer
+                // has, since frame comparison stopped folding optional literals. This one
+                // absorbs a pattern reaching one bucket TWICE: ExpandOptionals enumerates
+                // 2^optionals subsets without deduplicating, so ["a","?x","?x","b"] yields the
+                // form ["a","?x","b"] from two different masks, and both land here with the
+                // same (command, pattern, value). The old value gate hid that; keeping members
+                // exposes it, and the warning would name one pattern twice.
                 var kept = new List<SiblingMember>();
                 for (int i = 0; i < members.Count; i++)
                 {
-                    bool seen = false;
+                    bool duplicate = false;
                     for (int j = 0; j < kept.Count; j++)
                     {
                         if (
-                            string.Equals(kept[j].Value, members[i].Value, StringComparison.Ordinal)
+                            kept[j].CommandIndex == members[i].CommandIndex
+                            && kept[j].PatternIndex == members[i].PatternIndex
                         )
                         {
-                            seen = true;
+                            duplicate = true;
                             break;
                         }
                     }
-                    if (!seen)
+                    if (!duplicate)
                         kept.Add(members[i]);
                 }
 
-                if (kept.Count < 2)
+                if (DistinctValueCount(kept) < 2)
                     continue;
 
                 // One hazard can surface under several frames: a pattern pair carrying an
@@ -1058,6 +1124,30 @@ namespace VoXR.Commands
             }
         }
 
+        // A set is only a hazard if the members disagree about the discriminating word. Two
+        // patterns reaching the same literal are duplicates of each other — an authoring error
+        // this design leaves alone (item 1's requirements F8) — so a bucket whose members carry
+        // value has nothing to tie over.
+        static int DistinctValueCount(List<SiblingMember> members)
+        {
+            int distinct = 0;
+            for (int i = 0; i < members.Count; i++)
+            {
+                bool seenEarlier = false;
+                for (int j = 0; j < i; j++)
+                {
+                    if (string.Equals(members[j].Value, members[i].Value, StringComparison.Ordinal))
+                    {
+                        seenEarlier = true;
+                        break;
+                    }
+                }
+                if (!seenEarlier)
+                    distinct++;
+            }
+            return distinct;
+        }
+
         static int IndexOfSameMembers(List<SiblingSet> sets, List<SiblingMember> candidate)
         {
             for (int s = 0; s < sets.Count; s++)
@@ -1094,9 +1184,20 @@ namespace VoXR.Commands
         // messages pin them in editor Play Mode, where this package's Runtime suite runs, and
         // not in a built player.
         [System.Diagnostics.Conditional("UNITY_EDITOR")]
-        static void WarnOnSiblingDiscriminator(VoxrCommandDefinition[] commands)
+        // Takes no commands parameter, unlike the scans above: the sets come from
+        // EnsureSiblingLookup, whose member indices are into _commands, and resolving those
+        // indices against a different array passed by a future caller would silently mis-quote
+        // patterns or throw inside the message builder. One array, one source of truth.
+        void WarnOnSiblingDiscriminator()
         {
-            var sets = FindSiblingSets(commands);
+            // Consumes the shared lookup instead of calling FindSiblingSets again. DR-2 asks
+            // for ONE sibling-set computation consumed by the warning and by selection, and two
+            // calls per parser would be two — a cost no measurement here would have caught,
+            // since the A/B rig defines no UNITY_EDITOR and this [Conditional] caller elides
+            // there entirely. In a player that is exactly what happens: this call disappears
+            // and the lookup is instead built on the first eager check.
+            EnsureSiblingLookup();
+            var sets = _siblingSets;
 
             for (int s = 0; s < sets.Count; s++)
             {
@@ -1136,7 +1237,7 @@ namespace VoXR.Commands
                     !IsSingleIntent(set)
                     && ScoreAfterDroppingDiscriminator(set.Frame) >= DefaultMinScore
                 )
-                    UnityEngine.Debug.LogWarning(BuildSiblingWarning(commands, set));
+                    UnityEngine.Debug.LogWarning(BuildSiblingWarning(set));
 
                 // The collision report is NOT narrowed the same way, and the difference is
                 // deliberate. The intent filter above rests on the wrong-INTENT harm, which a
@@ -1146,6 +1247,11 @@ namespace VoXR.Commands
                 // speaker is left open for the later items to decide, so silencing this on
                 // their behalf would be guessing. It costs nothing to be wrong in this
                 // direction: one collision surfaced across the entire test corpus.
+                //
+                // Reported once per colliding VALUE, not once per member. Since issue #90 a
+                // value can be carried by several patterns, and the remedy — rename the literal,
+                // or override cancelVocabulary — is the same advice however many patterns spell
+                // it, so repeating it would be noise.
                 for (int m = 0; m < set.Members.Length; m++)
                 {
                     if (
@@ -1153,17 +1259,46 @@ namespace VoXR.Commands
                         < 0
                     )
                         continue;
+
+                    bool alreadyReported = false;
+                    for (int e = 0; e < m; e++)
+                    {
+                        if (
+                            string.Equals(
+                                set.Members[e].Value,
+                                set.Members[m].Value,
+                                StringComparison.Ordinal
+                            )
+                        )
+                        {
+                            alreadyReported = true;
+                            break;
+                        }
+                    }
+                    if (alreadyReported)
+                        continue;
+
                     UnityEngine.Debug.LogWarning(BuildCancelCollisionWarning(set, set.Members[m]));
                 }
             }
         }
 
-        // Callers always pass at least two parts: a reported set has at least two members and,
-        // after the same-intent filter, at least two distinct intents.
-        static string JoinWith(string[] parts, string conjunction)
+        // Callers normally pass at least two parts: a reported set clears the two-distinct-value
+        // gate in FindSiblingSets, and the same-intent filter leaves at least two intents. The
+        // pattern-text list is the one that can still collapse to one — see inside.
+        static string JoinWith(List<string> parts, string conjunction)
         {
+            // A single part needs no conjunction, and since issue #90 that is reachable: the
+            // three lists this renders are deduplicated for display, and two members carrying
+            // different discriminating values can still render identical pattern TEXT when an
+            // element holds more than one word ("a b" "c" and "a" "b" "c" both join to "a b c").
+            // Degenerate authoring, but it used to be structurally impossible and now is not.
+            // Zero is NOT handled: every caller appends at least its first member.
+            if (parts.Count == 1)
+                return parts[0];
+
             var sb = new StringBuilder();
-            for (int i = 0; i < parts.Length - 1; i++)
+            for (int i = 0; i < parts.Count - 1; i++)
             {
                 if (i > 0)
                     sb.Append(", ");
@@ -1172,7 +1307,7 @@ namespace VoXR.Commands
             return sb.Append(' ')
                 .Append(conjunction)
                 .Append(' ')
-                .Append(parts[parts.Length - 1])
+                .Append(parts[parts.Count - 1])
                 .ToString();
         }
 
@@ -1193,22 +1328,253 @@ namespace VoXR.Commands
             return true;
         }
 
-        static string BuildSiblingWarning(VoxrCommandDefinition[] commands, SiblingSet set)
+        // DR-1 applied to the two patterns' REQUIRED elements — their all-optionals-omitted
+        // readings — walked in place so nothing is materialised on the selection path.
+        //
+        // No normalization is needed and that is not an oversight: the only decoration frame
+        // comparison folds is {?slot} onto {slot}, and an optional slot is not a required
+        // element, so among the elements this walks there is nothing to fold.
+        //
+        // Used only when one side's expansion was truncated (see AreSiblingRivals). Equal
+        // required-length, differing at exactly one position, a required literal in both there.
+        static bool RequiredElementsAreSiblings(string[] a, string[] b)
+        {
+            int i = 0,
+                j = 0,
+                diffA = -1,
+                diffB = -1,
+                differences = 0;
+
+            while (true)
+            {
+                while (i < a.Length && !CreditsRequired(a[i]))
+                    i++;
+                while (j < b.Length && !CreditsRequired(b[j]))
+                    j++;
+                if (i >= a.Length || j >= b.Length)
+                    break;
+
+                if (!string.Equals(a[i], b[j], StringComparison.Ordinal))
+                {
+                    if (++differences > 1)
+                        return false;
+                    diffA = i;
+                    diffB = j;
+                }
+                i++;
+                j++;
+            }
+
+            // Both sides must have run out together, or the required lengths differ and DR-1's
+            // equal-length rule already excludes them.
+            while (i < a.Length && !CreditsRequired(a[i]))
+                i++;
+            while (j < b.Length && !CreditsRequired(b[j]))
+                j++;
+            if (i != a.Length || j != b.Length)
+                return false;
+
+            // Zero differences means duplicates, not siblings — item 1's requirements F8
+            // class, and the case a blind "true" got wrong.
+            if (differences != 1)
+                return false;
+
+            return IsRequiredLiteral(a[diffA]) && IsRequiredLiteral(b[diffB]);
+        }
+
+        // One pattern's membership of one sibling set. The value rides along so the pair test
+        // below never has to walk SiblingSet.Members looking for a matching (command, pattern).
+        readonly struct SiblingMembership
+        {
+            public readonly int SetId;
+            public readonly string Value;
+
+            public SiblingMembership(int setId, string value)
+            {
+                SetId = setId;
+                Value = value;
+            }
+        }
+
+        // Builds the runtime lookup on first use and caches it, exactly as EnsureCanCommitEarly
+        // does for the extendability precompute.
+        void EnsureSiblingLookup()
+        {
+            if (_siblingLookupComputed)
+                return;
+
+            var sets = FindSiblingSets(_commands);
+#if UNITY_EDITOR
+            // Retained only for the construction-time warning, which is the sole reader and is
+            // itself Editor-only. A player would otherwise hold every frame and member array
+            // for the parser's lifetime with nothing to read them.
+            _siblingSets = sets;
+#endif
+
+            var building = new List<SiblingMembership>[_commands.Length][];
+            _siblingFormsTruncated = new bool[_commands.Length][];
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                var patterns = _commands[ci].Patterns;
+                building[ci] = new List<SiblingMembership>[patterns.Length];
+                _siblingFormsTruncated[ci] = new bool[patterns.Length];
+
+                // Past MaxWarningExpansion, WarningForms hands back the raw decorated pattern
+                // instead of its expansions, so this pattern was only ever compared in its
+                // all-optionals-present reading and its sibling relations are UNKNOWN rather
+                // than absent. Recorded per pattern so AreSiblingRivals can refuse to claim
+                // otherwise — see the conservative arm there.
+                for (int pi = 0; pi < patterns.Length; pi++)
+                    _siblingFormsTruncated[ci][pi] = ExpansionTruncated(patterns[pi]);
+            }
+
+            for (int s = 0; s < sets.Count; s++)
+            {
+                // A set whose members all share an intent contains no cross-intent pair, and
+                // AreSiblingRivals requires one — so it can be skipped wholesale. This is a
+                // cheap pre-filter, NOT the rule: a set that survives it can still hold
+                // same-intent pairs, which is why the intent test below is per-pair.
+                if (IsSingleIntent(sets[s]))
+                    continue;
+
+                var members = sets[s].Members;
+                for (int m = 0; m < members.Length; m++)
+                {
+                    int ci = members[m].CommandIndex;
+                    int pi = members[m].PatternIndex;
+                    if ((uint)ci >= (uint)building.Length || (uint)pi >= (uint)building[ci].Length)
+                        continue;
+
+                    if (building[ci][pi] == null)
+                        building[ci][pi] = new List<SiblingMembership>();
+                    building[ci][pi].Add(new SiblingMembership(s, members[m].Value));
+                }
+            }
+
+            _siblingMemberships = new SiblingMembership[_commands.Length][][];
+            for (int ci = 0; ci < _commands.Length; ci++)
+            {
+                _siblingMemberships[ci] = new SiblingMembership[building[ci].Length][];
+                for (int pi = 0; pi < building[ci].Length; pi++)
+                    _siblingMemberships[ci][pi] = building[ci][pi]?.ToArray();
+            }
+
+            // Flag last, matching EnsureCanCommitEarly: a throw mid-build then retries rather
+            // than latching a half-built lookup.
+            _siblingLookupComputed = true;
+        }
+
+        // Whether two candidates that tied at selection are siblings whose discriminator went
+        // missing — the coin flip issue #74 is about. All three tests are load-bearing:
+        //
+        //   share a set   the sibling relation itself, so non-sibling ties (authoring errors,
+        //                 not speech ambiguity) stay out of the runtime path (design §5.3)
+        //   differ in value   two members carrying the same literal are duplicates of each
+        //                 other, not siblings — item 1's requirements F8 leaves those alone
+        //   differ in intent  the same command dispatches either way otherwise, so refusing
+        //                 would buy latency for nothing
+        //
+        // The intent test is per PAIR, not per set. Since issue #90 retains duplicate-valued
+        // members, a set can be cross-intent overall while a particular tied pair inside it
+        // shares an intent — one command contributing two patterns alongside a third from
+        // another. A set-level test alone would refuse on that pair.
+        //
+        // Allocation-free: both operands are prebuilt arrays, and the common case exits on the
+        // first null. Only ever called on a Tied comparison, which is rare.
+        bool AreSiblingRivals(int ci1, int pi1, int ci2, int pi2)
+        {
+            if (_siblingMemberships == null)
+                return false;
+            if (
+                (uint)ci1 >= (uint)_siblingMemberships.Length
+                || (uint)ci2 >= (uint)_siblingMemberships.Length
+            )
+                return false;
+            if (
+                (uint)pi1 >= (uint)_siblingMemberships[ci1].Length
+                || (uint)pi2 >= (uint)_siblingMemberships[ci2].Length
+            )
+                return false;
+
+            // Same command is necessarily the same intent; two distinct commands may still
+            // share one, so compare the strings rather than the indices alone.
+            if (
+                ci1 == ci2
+                || string.Equals(
+                    _commands[ci1].Intent,
+                    _commands[ci2].Intent,
+                    StringComparison.Ordinal
+                )
+            )
+                return false;
+
+            // Truncated-analysis arm. Past MaxWarningExpansion a pattern was never expanded
+            // over its optionals, so the frames it would have shared with a rival do not exist
+            // and the lookup above cannot tell "has no sibling" from "was never analysed".
+            // Without something here the two caps disagreed: ComputeCanCommitEarly abandons only
+            // past MaxOptionalExpansion, so a pattern with 7-12 optionals kept a live eager
+            // commit while its sibling relations silently went unanalysed, and the gate
+            // committed on precisely the coin flip this feature exists to refuse.
+            //
+            // It does NOT answer "true" blindly. An earlier version did, and that refused on
+            // pairs provably not siblings — two patterns whose discriminator is the SAME word
+            // are duplicates, which requirements F10 keeps out of the runtime path entirely.
+            // Instead, fall back to the one reading that survives truncation: DR-1 requires the
+            // discriminator to be a required literal, and required elements appear in EVERY
+            // expansion, so comparing the two patterns' required elements is exactly asking
+            // whether their all-optionals-omitted readings are siblings. That reading is real —
+            // matching handles optionals natively and never consults WarningForms.
+            //
+            // Partial, and deliberately so: a sibling relation existing only in a MID expansion
+            // is still missed. This narrows the over-approximation to something provable rather
+            // than closing the hole completely.
+            if (_siblingFormsTruncated[ci1][pi1] || _siblingFormsTruncated[ci2][pi2])
+                return RequiredElementsAreSiblings(
+                    _commands[ci1].Patterns[pi1],
+                    _commands[ci2].Patterns[pi2]
+                );
+
+            var a = _siblingMemberships[ci1][pi1];
+            var b = _siblingMemberships[ci2][pi2];
+            if (a == null || b == null)
+                return false;
+
+            for (int i = 0; i < a.Length; i++)
+            for (int j = 0; j < b.Length; j++)
+                if (
+                    a[i].SetId == b[j].SetId
+                    && !string.Equals(a[i].Value, b[j].Value, StringComparison.Ordinal)
+                )
+                    return true;
+
+            return false;
+        }
+
+        // Instance, and reading _commands directly, for the reason WarnOnSiblingDiscriminator
+        // above gives for dropping its own parameter: the member indices in `set` are indices
+        // into _commands, and this is the message builder that dereferences them. A caller
+        // handing in a different array would mis-quote patterns or throw here.
+        string BuildSiblingWarning(SiblingSet set)
         {
             var members = set.Members;
 
             // Report the patterns as authored, noting when a form omitted optionals, so an
             // author can find the text in their asset — the frame this set was keyed on is
             // normalized, and normalized text is not what they wrote.
-            var patternTexts = new string[members.Length];
-            var values = new string[members.Length];
+            // Deduplicated for the same reason the intent and value lists below are, and it
+            // became necessary for the same reason: since issue #90 two members can be distinct
+            // patterns of distinct intents carrying identical authored text. Printing it twice
+            // would have the message assert that patterns "differ only at element N" while two
+            // of the strings it just listed differ at no element at all.
+            var patternTexts = new List<string>(members.Length);
             for (int i = 0; i < members.Length; i++)
             {
-                string[] raw = commands[members[i].CommandIndex].Patterns[members[i].PatternIndex];
-                patternTexts[i] = "\"" + string.Join(" ", raw) + "\"";
+                string[] raw = _commands[members[i].CommandIndex].Patterns[members[i].PatternIndex];
+                string text = "\"" + string.Join(" ", raw) + "\"";
                 if (raw.Length != set.Frame.Length)
-                    patternTexts[i] += " (with its optional elements omitted)";
-                values[i] = "\"" + members[i].Value + "\"";
+                    text += " (with its optional elements omitted)";
+                if (!patternTexts.Contains(text))
+                    patternTexts.Add(text);
             }
 
             // One intent can contribute several patterns to a set — "cease fire" and "hold
@@ -1222,14 +1588,28 @@ namespace VoXR.Commands
                     intents.Add(quoted);
             }
 
+            // Values are deduplicated for the same reason, and it became necessary when the
+            // emission gate stopped dropping duplicate-valued members (issue #90): two patterns
+            // reaching the same literal are both named as patterns, but the CHOICE the speaker
+            // faces is between distinct words, so rendering ("on", "on" or "off") would be
+            // wrong about the question rather than merely repetitive.
+            var values = new List<string>(members.Length);
+            for (int i = 0; i < members.Length; i++)
+            {
+                string quoted = "\"" + members[i].Value + "\"";
+                if (!values.Contains(quoted))
+                    values.Add(quoted);
+            }
+
             // Authors count elements from one.
-            return $"[VoxrCommandParser] Intents {JoinWith(intents.ToArray(), "and")} have "
+            return $"[VoxrCommandParser] Intents {JoinWith(intents, "and")} have "
                 + $"patterns {JoinWith(patternTexts, "and")} that differ only at element "
                 + $"{set.DiscriminatorIndex + 1} ({JoinWith(values, "or")}). If that word is "
                 + "dropped, these patterns match the remainder equally — same score, same "
                 + "consumed span, same literal count — and selection falls through to "
-                + "registration order, so the wrong intent can fire. Diverge earlier, or mark "
-                + "the more destructive one requiresConfirmation.";
+                + "registration order, so the wrong intent can fire. Make them differ in more "
+                + "than one element — the only fix that removes the tie rather than moving it "
+                + "— or mark the more destructive one requiresConfirmation.";
         }
 
         static string BuildCancelCollisionWarning(SiblingSet set, SiblingMember member)
@@ -1296,6 +1676,7 @@ namespace VoXR.Commands
             int searchStart = 0;
 #if UNITY_EDITOR
             var diagnosticEntries = new List<ParseDiagnosticEntry>();
+            EnsureSiblingLookup();
 #endif
 
             while (searchStart < tokens.Length)
@@ -1308,6 +1689,14 @@ namespace VoXR.Commands
                 int bestEndIdx = 0;
                 int bestConsumedEndIdx = 0;
                 int bestSlotCount = 0;
+#if UNITY_EDITOR
+                // Declared HERE, with the round's other best* locals, and not beside
+                // diagnosticEntries above: selection restarts per extraction round, so a rival
+                // recorded in round 1 must not survive into round 2's diagnostic entry. Hoisting
+                // these out of the loop compiles and passes any single-command test.
+                int bestTiedSiblingCommandIdx = -1;
+                int bestTiedSiblingPatternIdx = -1;
+#endif
 
                 for (int ci = 0; ci < _commands.Length; ci++)
                 {
@@ -1326,16 +1715,16 @@ namespace VoXR.Commands
                                 searchStart
                             );
 
-                            if (
-                                IsBetterCandidate(
-                                    matchResult,
-                                    startIdx,
-                                    bestScore,
-                                    bestStartIdx,
-                                    bestConsumedEndIdx,
-                                    bestLiteralCount
-                                )
-                            )
+                            var order = CompareCandidate(
+                                matchResult,
+                                startIdx,
+                                bestScore,
+                                bestStartIdx,
+                                bestConsumedEndIdx,
+                                bestLiteralCount
+                            );
+
+                            if (order == CandidateOrder.Better)
                             {
                                 bestScore = matchResult.Score;
                                 bestLiteralCount = matchResult.LiteralCount;
@@ -1345,6 +1734,10 @@ namespace VoXR.Commands
                                 bestEndIdx = matchResult.EndIdx;
                                 bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                                 bestSlotCount = matchResult.SlotCount;
+#if UNITY_EDITOR
+                                bestTiedSiblingCommandIdx = -1;
+                                bestTiedSiblingPatternIdx = -1;
+#endif
                                 // Copy current match buffer into best buffer
                                 if (matchResult.SlotCount > 0)
                                 {
@@ -1355,6 +1748,30 @@ namespace VoXR.Commands
 #endif
                                 }
                             }
+#if UNITY_EDITOR
+                            // Editor-only, and inert: the flush fires the same command whether
+                            // or not a rival tied it. Recorded so the coin flip is inspectable
+                            // where today it is invisible, and so the pending path that will
+                            // ACT on it (issue #74 item 3) inherits a working record rather
+                            // than introducing one alongside a behaviour change.
+                            //
+                            // The eager path carries the same eight lines rather than sharing a
+                            // helper, and the reason is the loop locals, not the build config:
+                            // each loop owns its own incumbent and its own tie state, so a
+                            // shared routine would take them all by ref and read worse than the
+                            // duplication. Both copies must stay in step — the first-rival and
+                            // clear-on-adopt rules are the same rules — so a change to one is a
+                            // change to both.
+                            else if (
+                                order == CandidateOrder.Tied
+                                && bestTiedSiblingCommandIdx < 0
+                                && AreSiblingRivals(bestCommandIdx, bestPatternIdx, ci, pi)
+                            )
+                            {
+                                bestTiedSiblingCommandIdx = ci;
+                                bestTiedSiblingPatternIdx = pi;
+                            }
+#endif
                         }
                     }
                 }
@@ -1408,6 +1825,11 @@ namespace VoXR.Commands
                     PatternString = string.Join(" ", _commands[bestCommandIdx].Patterns[bestPatternIdx]),
                     SlotStartWords = diagStartWords,
                     SlotEndWords = diagEndWords,
+                        TiedSiblingIntent =
+                            bestTiedSiblingCommandIdx >= 0
+                                ? _commands[bestTiedSiblingCommandIdx].Intent
+                                : null,
+                        TiedSiblingPatternIndex = bestTiedSiblingPatternIdx,
                 });
 #endif
                 searchStart = bestEndIdx;
@@ -1563,7 +1985,10 @@ namespace VoXR.Commands
             AddPhrase(entries, words);
         }
 
-        struct MatchResult
+        // internal rather than private so CompareCandidate below can be internal: C# forbids a
+        // member more accessible than its parameter types. Nothing outside this file constructs
+        // one except the comparator's own tests.
+        internal struct MatchResult
         {
             public float Score;
             public int LiteralCount;
@@ -1625,10 +2050,35 @@ namespace VoXR.Commands
             public int MissedRequired;
         }
 
-        // Candidate ordering, shared by ParseInternal and TryEagerCommit so the eager
-        // verdict always names the pattern the subsequent flush will fire. Earliest start
-        // wins, then highest score, then the longer consumed span, then literal count,
-        // with registration order as the final deterministic fallback.
+        // How a candidate ranks against the current incumbent. Three states rather than the
+        // bool this used to return: "not better" conflated a clear loss with an exact tie, and
+        // an exact tie is not a ranking at all — it is the point where every key is exhausted
+        // and registration order decides (issue #74, design DR-3).
+        //
+        // Better is returned in exactly the cases the old bool returned true, so selection is
+        // bit-identical; Tied is carved out of what used to be false.
+        //
+        // The alternative — probing for equality at the call site — was rejected because it
+        // duplicates a key list that has already changed twice (#41 added span, #65 added the
+        // admission rule), and with both paths tie-aware it would have had to be maintained in
+        // two places. A key added here and forgotten there is a silent divergence.
+        internal enum CandidateOrder
+        {
+            Worse,
+            Tied,
+            Better,
+        }
+
+        // Candidate ordering, shared by ParseInternal and TryEagerCommit so the eager verdict
+        // never names a pattern the flush would not fire. Earliest start wins, then highest
+        // score, then the longer consumed span, then literal count, with registration order as
+        // the final deterministic fallback.
+        //
+        // That invariant read "the eager verdict always names the pattern the subsequent flush
+        // will fire" until issue #74's DR-5 had TryEagerCommit REFUSE on a sibling tie. The old
+        // wording assumed the eager path always names something; the restatement covers a
+        // refusal, which names nothing — exactly as the #66 and #70 conditions there already
+        // did. Restated deliberately, not broken (design §5.8).
         //
         // The span term is issue #41: a tailed pattern and its bare sibling
         // ("intercept track {track} {burn_level}" / "intercept track {track}") both score
@@ -1642,7 +2092,7 @@ namespace VoXR.Commands
         // count: it therefore also settles equal-score candidates whose literal counts
         // differ, which literal count used to decide on its own. That is a real behaviour
         // change beyond the order-dependent ties, not just a fallback for them.
-        static bool IsBetterCandidate(
+        internal static CandidateOrder CompareCandidate(
             in MatchResult candidate,
             int startIdx,
             float bestScore,
@@ -1652,7 +2102,7 @@ namespace VoXR.Commands
         )
         {
             if (candidate.Score <= 0f)
-                return false;
+                return CandidateOrder.Worse;
 
             // Admission: more evidence FOR the candidate than against it (issue #65, DR-7).
             //
@@ -1684,16 +2134,33 @@ namespace VoXR.Commands
             // question — whether a token may terminate another command's orphan run. The two
             // are deliberately one notch apart; see the reasoning there before aligning them.
             if (candidate.MissedRequired > candidate.MatchedRequired)
-                return false;
+                return CandidateOrder.Worse;
+
+            // No incumbent yet, NOT a tie with a worthless one. bestScore starts at
+            // float.MinValue in both loops and is written only from the adopt block, which the
+            // Score <= 0f floor above guards — so a real incumbent always carries a positive
+            // score and this test can only mean "nothing to compare against". Returning Tied
+            // here would record a rival that does not exist.
             if (bestScore <= 0f)
-                return true;
+                return CandidateOrder.Better;
+
             if (startIdx != bestStartIdx)
-                return startIdx < bestStartIdx;
+                return startIdx < bestStartIdx ? CandidateOrder.Better : CandidateOrder.Worse;
             if (candidate.Score != bestScore)
-                return candidate.Score > bestScore;
+                return candidate.Score > bestScore ? CandidateOrder.Better : CandidateOrder.Worse;
             if (candidate.ConsumedEndIdx != bestConsumedEndIdx)
-                return candidate.ConsumedEndIdx > bestConsumedEndIdx;
-            return candidate.LiteralCount > bestLiteralCount;
+                return candidate.ConsumedEndIdx > bestConsumedEndIdx
+                    ? CandidateOrder.Better
+                    : CandidateOrder.Worse;
+            if (candidate.LiteralCount != bestLiteralCount)
+                return candidate.LiteralCount > bestLiteralCount
+                    ? CandidateOrder.Better
+                    : CandidateOrder.Worse;
+
+            // Every key compared equal. The old bool ended at a strict > here and returned
+            // false, indistinguishable from a loss, so the incumbent silently kept the win on
+            // registration order and the tie was never recorded anywhere.
+            return CandidateOrder.Tied;
         }
 
 #if UNITY_EDITOR
@@ -1702,6 +2169,17 @@ namespace VoXR.Commands
             public string PatternString;
             public int[] SlotStartWords;
             public int[] SlotEndWords;
+
+            // The sibling that tied this command at selection, or null / -1 when none did.
+            // Null is the overwhelmingly common case: it is set only when the winner was
+            // decided by registration order over a rival differing on one dropped word.
+            //
+            // Nothing reads this to make a decision — the flush fires the same command either
+            // way. It exists because the coin flip is otherwise invisible: a score of 0.67 in
+            // the log looks entirely healthy, and the winner is correct by every rule the
+            // parser has. Issue #74 item 3 is what will act on it.
+            public string TiedSiblingIntent;
+            public int TiedSiblingPatternIndex;
         }
 
         internal ParseDiagnosticEntry[] LastParseDiagnostics;
@@ -1732,7 +2210,7 @@ namespace VoXR.Commands
             int literalCount = 0;
             int slotCount = 0;
             // Evidence for and against, counted over REQUIRED elements only (DR-7). These
-            // feed the admission rule in IsBetterCandidate, not the score.
+            // feed the admission rule in CompareCandidate, not the score.
             int matchedRequired = 0;
             int missedRequired = 0;
             bool missedRequiredSlot = false;
@@ -1855,7 +2333,7 @@ namespace VoXR.Commands
             // to 1.0 can beat it. See DefaultCoverageWeight for what the weight means.
             //
             // Adding to the denominator cannot change the sign of a negative rawScore, so the
-            // Score <= 0f floors above and in IsBetterCandidate behave exactly as before; and
+            // Score <= 0f floors above and in CompareCandidate behave exactly as before; and
             // since rawScore <= denominator always holds, a strictly larger denominator keeps
             // the score inside [0, 1].
             //
@@ -2211,7 +2689,7 @@ namespace VoXR.Commands
         //
         // That threshold is the whole of what keeps this from being the "crude widening" the
         // design refused, and it is deliberately one notch STRONGER than DR-7's admission rule
-        // (`missed <= matched`, IsBetterCandidate:1120). DR-7 asks "is this a candidate at
+        // (`missed <= matched`, CompareCandidate's admission rule). DR-7 asks "is this a candidate at
         // all?" — a question answered for a candidate that may still lose its round and never
         // fire. Terminating another command's orphan run is a bigger claim: it moves score off
         // a candidate that IS firing, so it takes strictly more evidence for than against.
@@ -2508,6 +2986,16 @@ namespace VoXR.Commands
                 return EagerCommitVerdict.None;
 
             EnsureCanCommitEarly();
+
+            // Only when the extendability analysis survived. A null _canCommitEarly returns
+            // HoldExtendable below before any verdict can consult a sibling rival, so building
+            // the lookup for such a grammar is work nothing can read — and it is not small:
+            // measured at 1.2 ms and ~1.2 MB on a grammar that abandons, against 0.03 ms and
+            // 219 B without it. AreSiblingRivals already answers false on a null lookup, so the
+            // recording below simply never fires.
+            if (_canCommitEarly != null)
+                EnsureSiblingLookup();
+
             BuildCoverageTables(tokens);
 
             float bestScore = float.MinValue;
@@ -2519,6 +3007,24 @@ namespace VoXR.Commands
             int bestConsumedEndIdx = 0;
             bool bestMissedRequiredSlot = false;
             bool bestHasUnmatchedRequiredTail = false;
+
+            // The first sibling rival found tying the current incumbent, or -1. Cleared
+            // whenever a new incumbent is adopted: Tied means the whole key tuple compared
+            // equal, so a candidate that beats the incumbent beats everything tied with it and
+            // the recorded rival is stale by construction.
+            //
+            // The FIRST sibling rival rather than the most recent rival of any kind, and that
+            // matters: a winner can be tied by several candidates, only some of them siblings.
+            // Keeping "the last thing that tied" and testing sibling-ness afterwards would drop
+            // a sibling rival whenever a non-sibling happened to be enumerated after it.
+            //
+            // Both indices, though this method reads only the first and only as a flag: design
+            // §5.3 asks each selection loop to record "whether an equally-good rival was seen
+            // and WHICH PATTERN it was", and ParseInternal's copy does consume both. Kept in
+            // step so the two loops record the same thing; a bool here would make them differ
+            // in shape for no gain, since the verdict names nothing either way (DR-5).
+            int bestTiedSiblingCommandIdx = -1;
+            int bestTiedSiblingPatternIdx = -1;
 
             for (int ci = 0; ci < _commands.Length; ci++)
             {
@@ -2533,16 +3039,16 @@ namespace VoXR.Commands
                         // searchStart is 0: this scan mirrors ParseInternal's first round.
                         var matchResult = TryMatchScored(tokens, startIdx, patterns[pi], 0);
 
-                        if (
-                            IsBetterCandidate(
-                                matchResult,
-                                startIdx,
-                                bestScore,
-                                bestStartIdx,
-                                bestConsumedEndIdx,
-                                bestLiteralCount
-                            )
-                        )
+                        var order = CompareCandidate(
+                            matchResult,
+                            startIdx,
+                            bestScore,
+                            bestStartIdx,
+                            bestConsumedEndIdx,
+                            bestLiteralCount
+                        );
+
+                        if (order == CandidateOrder.Better)
                         {
                             bestScore = matchResult.Score;
                             bestLiteralCount = matchResult.LiteralCount;
@@ -2553,6 +3059,17 @@ namespace VoXR.Commands
                             bestEndIdx = matchResult.EndIdx;
                             bestMissedRequiredSlot = matchResult.MissedRequiredSlot;
                             bestHasUnmatchedRequiredTail = matchResult.HasUnmatchedRequiredTail;
+                            bestTiedSiblingCommandIdx = -1;
+                            bestTiedSiblingPatternIdx = -1;
+                        }
+                        else if (
+                            order == CandidateOrder.Tied
+                            && bestTiedSiblingCommandIdx < 0
+                            && AreSiblingRivals(bestCommandIdx, bestPatternIdx, ci, pi)
+                        )
+                        {
+                            bestTiedSiblingCommandIdx = ci;
+                            bestTiedSiblingPatternIdx = pi;
                         }
                     }
                 }
@@ -2562,7 +3079,7 @@ namespace VoXR.Commands
                 return EagerCommitVerdict.None;
 
             // Note one condition that is NOT listed below because it has already run: the
-            // admission rule in IsBetterCandidate (issue #65, DR-7) refuses any candidate
+            // admission rule in CompareCandidate (issue #65, DR-7) refuses any candidate
             // whose missed required elements outnumber its matched ones, so nothing that
             // sparse ever reaches these checks or the score gate above. The eager scan
             // inherits it by sharing the comparator with ParseInternal.
@@ -2601,8 +3118,14 @@ namespace VoXR.Commands
             // miss is genuinely safe: "launch all missiles hotel one" against
             // ["launch", "{?quantity}", "{weapon}", "target", "{target}"] drops the "target"
             // function word, yet fills every slot and still lands its final element on the
-            // last token of the buffer. Nothing the speaker says next was owed to it, so it
-            // commits early exactly as before.
+            // last token of the buffer. Nothing the speaker says next was owed to it, so
+            // COMPLETENESS is satisfied and this condition lets it through.
+            //
+            // That is not the same as safe. This condition is silent about AMBIGUITY, and a
+            // medial drop between two cross-intent siblings is exactly the case it lets past
+            // (issue #74 design §2.8). The sibling condition at the end of this method is what
+            // catches that; it sits there rather than here so that it can refuse a Commit
+            // without also lengthening a HoldExtendable.
             if (bestHasUnmatchedRequiredTail)
                 return EagerCommitVerdict.None;
 
@@ -2645,9 +3168,38 @@ namespace VoXR.Commands
 
             // Guarded accessor: the indices come from a separate scan, so route through the
             // bounds-checked path rather than indexing raw.
-            return CanCommitEarly(bestCommandIdx, bestPatternIdx)
-                ? EagerCommitVerdict.Commit
-                : EagerCommitVerdict.HoldExtendable;
+            if (!CanCommitEarly(bestCommandIdx, bestPatternIdx))
+                return EagerCommitVerdict.HoldExtendable;
+
+            // Last, and deliberately last: a sibling tie means the buffer fits two intents
+            // exactly equally, so the winner was picked by registration order alone. Refuse
+            // rather than fire on that (design DR-5, §5.8).
+            //
+            // Note what refusing does NOT buy, because the design's own wording oversells it.
+            // §5.8 says "the missing word may still arrive" — true of the TRAILING shape, which
+            // the #70 condition above already refuses. It is false here: reaching this line
+            // means #70 passed, so an element AFTER the dropped discriminator already matched,
+            // and results only ever append to the buffer. The word cannot land in a position
+            // the match has gone past. It was spoken and lost.
+            //
+            // What refusing buys is that the decision moves to the flush, where the transcript
+            // is final and item 3 can ASK which intent was meant instead of guessing. Until
+            // then the same intent fires, a buffer window later.
+            //
+            // This is still the natural extension of the #70 tail condition to the case #70
+            // structurally cannot reach: that one covers a discriminator the speaker has not
+            // said yet, this one a discriminator the recogniser dropped mid-utterance.
+            //
+            // It sits AFTER both HoldExtendable returns on purpose. Placed beside #70 it would
+            // also convert HoldExtendable into None — lengthening the wait from
+            // prefixHoldSeconds to the full bufferWindow on a buffer that was never going to
+            // commit early anyway. There is nothing to refuse when nothing was being offered,
+            // and a refusal must not lengthen a wait it is not responsible for. Here the only
+            // transition it introduces is Commit -> None.
+            if (bestTiedSiblingCommandIdx >= 0)
+                return EagerCommitVerdict.None;
+
+            return EagerCommitVerdict.Commit;
         }
 
         bool[][] ComputeCanCommitEarly()

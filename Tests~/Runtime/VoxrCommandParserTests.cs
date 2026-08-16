@@ -3224,7 +3224,7 @@ namespace VoXR.Tests.Runtime
         public void Admission_FragmentCannotPreEmptRoundOne_SkippedWordChargeSurvives()
         {
             // The sharpest harm: a fragment that wins round 1 on EARLIEST START — which
-            // IsBetterCandidate ranks above score — consumes the leading tokens, which moves
+            // CompareCandidate ranks above score — consumes the leading tokens, which moves
             // the origin issue #31 charges skipped words from. The genuine command then looks
             // like it started clean and scores a full 1.0.
             //
@@ -3716,6 +3716,145 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(0, sets.Count, "score-equivalent is not admission-equivalent");
         }
 
+        // ---------- Duplicate-valued members are kept, not dropped (issue #90) ----------
+
+        [Test]
+        public void SiblingSets_DuplicateValuedMember_IsRetained()
+        {
+            // Issue #90's example. The gate used to keep one member per distinct value, so
+            // set_b was dropped and never named — even though set_b <-> set_c is exactly the
+            // hazard set_a <-> set_c is. All three are now members; two distinct values.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_a", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_b", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_c", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count);
+            Assert.AreEqual(3, sets[0].Members.Length, "the duplicate-valued member is kept");
+            CollectionAssert.AreEqual(
+                new[] { "set_a", "set_b", "set_c" },
+                Array.ConvertAll(sets[0].Members, m => m.Intent)
+            );
+            CollectionAssert.AreEqual(
+                new[] { "mode", "mode", "level" },
+                Array.ConvertAll(sets[0].Members, m => m.Value)
+            );
+        }
+
+        [Test]
+        public void SiblingSets_ShadowedCrossIntentMember_IsNoLongerSuppressed()
+        {
+            // Issue #90's sharper variant, and the one that reaches the runtime. set_mode
+            // contributes BOTH values, so the old first-wins-by-value dedup dropped set_level
+            // entirely; the survivors then shared one intent and the same-intent filter
+            // suppressed the set outright — an under-report becoming no report at all. The
+            // real hazard, set_mode's "mode" pattern against set_level, was invisible.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib(
+                        "set_mode",
+                        SibP("set", "{ship}", "mode", "on"),
+                        SibP("set", "{ship}", "level", "on")
+                    ),
+                    Sib("set_level", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count);
+            Assert.AreEqual(3, sets[0].Members.Length);
+            Assert.IsFalse(
+                VoxrCommandParser.IsSingleIntent(sets[0]),
+                "set_level must survive, or the same-intent filter hides a real hazard"
+            );
+        }
+
+        [Test]
+        public void SiblingSets_IdenticalPatternsAcrossIntents_AreStillNotASet()
+        {
+            // Requirements F8 still holds after issue #90: two patterns reaching the SAME
+            // literal are duplicates of each other, not siblings. Keeping members did not
+            // widen the relation — the "at least two distinct values" gate is what excludes
+            // them now, in place of the old per-value dedup.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("set_a", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_b", SibP("set", "{ship}", "mode", "on")),
+                }
+            );
+
+            Assert.AreEqual(0, sets.Count);
+        }
+
+        [Test]
+        public void SiblingSets_DuplicatedOptionalElement_DoesNotDoubleCountAPattern()
+        {
+            // ExpandOptionals enumerates 2^optionals subsets without deduplicating, so a
+            // pattern carrying the same optional twice yields the identical expanded form from
+            // two different masks. Both reach one bucket with the same (command, pattern,
+            // value). The old per-value dedup hid that; keeping members exposes it, and without
+            // the exact-duplicate guard the warning would name one pattern twice.
+            // The rival must share the frame, or "dup" never forms a set at all and this test
+            // passes without exercising anything.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("dup", SibP("set", "?now", "?now", "mode", "on")),
+                    Sib("other", SibP("set", "?now", "level", "on")),
+                }
+            );
+
+            Assert.AreEqual(1, sets.Count, "the fixture must actually produce a set");
+            Assert.AreEqual(
+                2,
+                sets[0].Members.Length,
+                "'dup' reaches this bucket from two identical expansions and must be named once"
+            );
+
+            var seen = new List<string>();
+            foreach (var m in sets[0].Members)
+            {
+                string key = m.CommandIndex + ":" + m.PatternIndex;
+                Assert.IsFalse(seen.Contains(key), "one pattern reached this set twice: " + key);
+                seen.Add(key);
+            }
+        }
+
+        [Test]
+        public void SiblingSets_OneHazardUnderTwoFrames_WithAnExtraMember_StaysTwoSets()
+        {
+            // A consequence of keeping members, accepted rather than fixed (architecture §6.4).
+            // IndexOfSameMembers collapses two frames of one hazard by comparing member lists,
+            // and that comparison only worked because the old gate normalised every bucket to
+            // one member per value. Here "set * on" collects a, b AND c while "set ?now * on"
+            // collects only a and b, so the lists differ and both sets survive.
+            //
+            // Two warnings for what an author may read as one problem — accepted because the
+            // sets genuinely implicate different patterns, and collapsing them would have to
+            // discard c, which is issue #90 again one level up. Pinned so the next maintainer
+            // meets a decision rather than a bug.
+            var sets = VoxrCommandParser.FindSiblingSets(
+                new[]
+                {
+                    Sib("a", SibP("set", "?now", "mode", "on")),
+                    Sib("b", SibP("set", "?now", "level", "on")),
+                    Sib("c", SibP("set", "mode", "on")),
+                }
+            );
+
+            Assert.AreEqual(2, sets.Count);
+            CollectionAssert.AreEquivalent(
+                new[] { 2, 3 },
+                Array.ConvertAll(sets.ToArray(), s => s.Members.Length),
+                "the shorter frame picks up the third pattern; the longer one does not"
+            );
+        }
+
         [Test]
         public void SiblingWarning_CrossIntent_NamesIntentsPatternsAndValues()
         {
@@ -3732,6 +3871,72 @@ namespace VoXR.Tests.Runtime
             var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), SwitchSiblings());
 
             Assert.IsNotNull(parser, "the shape is a warning, not an error");
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_TwoIntentsSharingPatternText_NameThatTextOnce()
+        {
+            // Since issue #90 a set retains duplicate-valued members, so two members can be
+            // distinct patterns of distinct intents carrying identical authored text. Printing
+            // it once per member had the message assert that the patterns it listed "differ
+            // only at element 3" while two of those strings differed at no element at all —
+            // self-contradictory on its face.
+            //
+            // Every intent is still named, because every intent is genuinely implicated; only
+            // the repeated rendering of one pattern's text collapses. Same rule the intent and
+            // value lists already followed.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'set_a', 'set_b' and 'set_c' have patterns "
+                        + "\"set \\{ship\\} mode on\" and \"set \\{ship\\} level on\" "
+                        + "that differ only at element 3"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    Sib("set_a", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_b", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_c", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_NamesARemedyThatActuallyRemovesTheTie()
+        {
+            // The message shipped saying "Diverge earlier", which does not work — and this
+            // grammar is the counter-example. These two diverge at the very FIRST element and
+            // tie exactly as "switch to weapons" / "switch to navigation" does. WHERE the
+            // patterns differ is irrelevant; DR-1 puts the discriminator at any position
+            // precisely because one differing element is fatal wherever it sits. Only differing
+            // in MORE THAN ONE element removes the tie, which is what the guide has always said
+            // and what the message now says too.
+            //
+            // Pinned because a remedy that does not work is worse than none: an author who
+            // follows it rewrites the grammar, sees the same warning, and stops trusting it.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("differ in more than one element")
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mode_weapons", SibP("weapons", "mode", "now")),
+                    Sib("mode_navigation", SibP("navigation", "mode", "now")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
             LogAssert.NoUnexpectedReceived();
         }
 
@@ -4099,9 +4304,18 @@ namespace VoXR.Tests.Runtime
             // deleting it would break no other test — the scan would simply start running in
             // built players, silently, where its output cannot be seen. Pinned by reflection
             // the way the coverage-weight rename is.
+            //
+            // Both binding flags, deliberately. The scan became an INSTANCE method when it
+            // started consuming the shared sibling lookup rather than recomputing the sets
+            // (issue #74 item 2, so the Editor computes them once rather than twice), and this
+            // lookup went null on Static alone. Whether the method is static is not what this
+            // test is about — the attribute is — so the search is made indifferent to it rather
+            // than re-pinned to the current answer, which would break again on the next move.
             var scan = typeof(VoxrCommandParser).GetMethod(
                 "WarnOnSiblingDiscriminator",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+                System.Reflection.BindingFlags.NonPublic
+                    | System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.Static
             );
 
             Assert.IsNotNull(scan, "the construction-time sibling scan");
@@ -4131,6 +4345,168 @@ namespace VoXR.Tests.Runtime
 
             Assert.IsNotNull(parser);
             LogAssert.NoUnexpectedReceived();
+        }
+
+        // ---------- Three-state candidate ordering (issue #74, design DR-3) ----------
+        //
+        // These assert the comparator directly rather than through a selection result, because
+        // two of its outcomes cannot be observed from one: a candidate refused by the score
+        // floor and one refused by DR-7's admission rule both simply fail to win, and a TIE is
+        // invisible from the winner alone — which is the whole defect DR-3 addresses.
+        //
+        // The keys, in order: start index (lower wins), score (higher), consumed span (higher),
+        // literal count (higher). Equal on all four is Tied.
+
+        // Sentinels as the two selection loops actually initialise them. Named rather than
+        // inlined so the "no incumbent" tests below are obviously about that state.
+        const float NoIncumbentScore = float.MinValue;
+        const int NoIncumbentStartIdx = int.MaxValue;
+
+        static VoxrCommandParser.MatchResult Cand(
+            float score = 0.75f,
+            int consumedEndIdx = 4,
+            int literalCount = 2,
+            int matchedRequired = 3,
+            int missedRequired = 0
+        ) =>
+            new VoxrCommandParser.MatchResult
+            {
+                Score = score,
+                ConsumedEndIdx = consumedEndIdx,
+                LiteralCount = literalCount,
+                MatchedRequired = matchedRequired,
+                MissedRequired = missedRequired,
+            };
+
+        // The incumbent every "beaten by" case below is compared against: start 0, score 0.75,
+        // span 4, two literals.
+        static VoxrCommandParser.CandidateOrder Against(
+            VoxrCommandParser.MatchResult candidate,
+            int startIdx = 0
+        ) => VoxrCommandParser.CompareCandidate(candidate, startIdx, 0.75f, 0, 4, 2);
+
+        [Test]
+        public void CompareCandidate_ZeroScore_IsWorse()
+        {
+            // The floor runs before everything, including admission.
+            Assert.AreEqual(VoxrCommandParser.CandidateOrder.Worse, Against(Cand(score: 0f)));
+        }
+
+        [Test]
+        public void CompareCandidate_MissedRequiredExceedsMatched_IsWorse()
+        {
+            // DR-7 admission (issue #65). Refused before any comparison key, which is what lets
+            // the eager gate treat "was a tie recorded?" as already excluding inadmissible
+            // rivals — see TryEagerCommit's sibling condition.
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Worse,
+                Against(Cand(matchedRequired: 1, missedRequired: 2))
+            );
+        }
+
+        [Test]
+        public void CompareCandidate_NoIncumbent_IsBetter()
+        {
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Better,
+                VoxrCommandParser.CompareCandidate(
+                    Cand(),
+                    0,
+                    NoIncumbentScore,
+                    NoIncumbentStartIdx,
+                    0,
+                    -1
+                )
+            );
+        }
+
+        [Test]
+        public void CompareCandidate_NoIncumbent_IsNeverTied()
+        {
+            // The trap this whole enum invites: reached by falling through the equality chain
+            // instead of testing the sentinel first, a first candidate whose keys happen to
+            // equal the initial values would report Tied and record a rival that does not
+            // exist. Keys set to the sentinels deliberately.
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Better,
+                VoxrCommandParser.CompareCandidate(
+                    Cand(consumedEndIdx: 0, literalCount: -1),
+                    NoIncumbentStartIdx,
+                    NoIncumbentScore,
+                    NoIncumbentStartIdx,
+                    0,
+                    -1
+                )
+            );
+        }
+
+        [Test]
+        public void CompareCandidate_StartIndex_OutranksEveryOtherKey()
+        {
+            // Earlier start wins even while losing on all three lower keys...
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Better,
+                VoxrCommandParser.CompareCandidate(
+                    Cand(score: 0.1f, consumedEndIdx: 1, literalCount: 0),
+                    0,
+                    0.75f,
+                    3,
+                    4,
+                    2
+                )
+            );
+            // ...and a later start loses even while winning on all three.
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Worse,
+                VoxrCommandParser.CompareCandidate(
+                    Cand(score: 1f, consumedEndIdx: 9, literalCount: 5),
+                    3,
+                    0.75f,
+                    0,
+                    4,
+                    2
+                )
+            );
+        }
+
+        [Test]
+        public void CompareCandidate_Score_DecidesWhenStartsAgree()
+        {
+            Assert.AreEqual(VoxrCommandParser.CandidateOrder.Better, Against(Cand(score: 0.8f)));
+            Assert.AreEqual(VoxrCommandParser.CandidateOrder.Worse, Against(Cand(score: 0.7f)));
+        }
+
+        [Test]
+        public void CompareCandidate_ConsumedSpan_DecidesWhenScoresAgree()
+        {
+            // Issue #41's key, and note it sits ABOVE literal count.
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Better,
+                Against(Cand(consumedEndIdx: 5, literalCount: 0))
+            );
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Worse,
+                Against(Cand(consumedEndIdx: 3, literalCount: 9))
+            );
+        }
+
+        [Test]
+        public void CompareCandidate_LiteralCount_DecidesLast()
+        {
+            Assert.AreEqual(
+                VoxrCommandParser.CandidateOrder.Better,
+                Against(Cand(literalCount: 3))
+            );
+            Assert.AreEqual(VoxrCommandParser.CandidateOrder.Worse, Against(Cand(literalCount: 1)));
+        }
+
+        [Test]
+        public void CompareCandidate_EveryKeyEqual_IsTied()
+        {
+            // The outcome that did not exist before DR-3. The old bool ended at a strict > and
+            // returned false here, indistinguishable from a loss, so the incumbent kept the win
+            // on registration order alone and nothing recorded that it had been a coin flip.
+            Assert.AreEqual(VoxrCommandParser.CandidateOrder.Tied, Against(Cand()));
         }
     }
 }

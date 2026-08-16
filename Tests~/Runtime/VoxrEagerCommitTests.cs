@@ -1169,7 +1169,7 @@ namespace VoXR.Tests.Runtime
         public void TryEagerCommit_AdmissionRefusesASparseCandidate_ReturnsNone()
         {
             // DR-7 is a refusal reason at this gate too — TryEagerCommit and ParseInternal
-            // share IsBetterCandidate, so the admission rule applies before any of the
+            // share CompareCandidate, so the admission rule applies before any of the
             // conditions this method documents. Nothing else covers that inheritance.
             //
             // "launch mark" against a five-literal pattern matches 2 and misses 3, so DR-7
@@ -1308,8 +1308,17 @@ namespace VoXR.Tests.Runtime
             );
 
         [Test]
-        public void TryEagerCommit_MedialSiblingDiscriminator_CommitsOnAnUndecidableBuffer()
+        public void TryEagerCommit_MedialSiblingDiscriminator_RefusesOnTheTie()
         {
+            // THIS TEST WAS INVERTED, and the inversion is the feature. Backlog item 1 landed it
+            // asserting Commit, to confirm design §2.8's reasoned-but-unobserved claim that a
+            // medial discriminator slips every condition. It did. DR-5 then acts on that
+            // finding: the gate now REFUSES, deferring to the flush.
+            //
+            // The commentary below describes the conditions as they still are — every one of
+            // them is still satisfied, which is exactly why a condition testing for the TIE had
+            // to be added rather than an existing one tightened.
+            //
             // "set alpha on" — the discriminating word elided. Walking the conditions in the
             // order TryEagerCommit applies them:
             //
@@ -1336,9 +1345,10 @@ namespace VoXR.Tests.Runtime
             LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
 
             Assert.AreEqual(
-                EagerCommitVerdict.Commit,
+                EagerCommitVerdict.None,
                 MedialSiblingParser().TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f),
-                "design §2.8: a medial discriminator slips every condition and commits early"
+                "DR-5: the buffer fits both intents equally, so the gate refuses rather than "
+                    + "committing on evidence that cannot distinguish them"
             );
         }
 
@@ -1380,6 +1390,321 @@ namespace VoXR.Tests.Runtime
                 "set_level",
                 reversed[0].Command.Intent,
                 "the same utterance fires the other intent purely because it was declared first"
+            );
+        }
+
+        // ---------- What the sibling refusal must NOT touch (issue #74, DR-5) ----------
+        //
+        // Every fixture here is MEDIAL or LEADING over a frame worth at least three. A trailing
+        // discriminator on a two-element frame is refused twice over before the sibling
+        // condition is reached — at minScore for scoring 0.5, and again by the issue #70 tail
+        // condition — so it would go green whatever the sibling condition did, and evidence
+        // nothing.
+
+        static VoxrSlotDefinition[] ShipSlot() =>
+            Slots(new VoxrSlotDefinition("ship", new[] { "alpha" }));
+
+        [Test]
+        public void TryEagerCommit_SiblingTieOnAnExtendablePattern_StillHoldsExtendable()
+        {
+            // The sibling condition sits AFTER both HoldExtendable returns, and this is why.
+            // "set alpha on" ties set_mode against set_level, but set_mode is a prefix of
+            // set_more, so CanCommitEarly already refuses to commit and the gate holds for the
+            // short prefixHoldSeconds window.
+            //
+            // Placed beside the issue #70 condition instead, the refusal would convert that
+            // hold into None and stretch the wait to the full bufferWindow — lengthening a wait
+            // on a buffer that was never going to commit early. Nothing is being refused when
+            // nothing was being offered.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                Commands(
+                    Cmd("set_mode", P("set", "{ship}", "mode", "on")),
+                    Cmd("set_level", P("set", "{ship}", "level", "on")),
+                    Cmd("set_more", P("set", "{ship}", "mode", "on", "now"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f),
+                "the refusal must not lengthen a wait it is not responsible for"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_SameIntentSiblingTie_StillCommits()
+        {
+            // Two phrasings of ONE command. Whichever wins, the same intent is dispatched with
+            // the same slots, so the wrong-intent harm cannot occur and refusing would buy
+            // latency for nothing. No warning either — the author-facing scan suppresses
+            // same-intent sets for the same reason.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                Commands(
+                    Cmd(
+                        "set_mode",
+                        P("set", "{ship}", "mode", "on"),
+                        P("set", "{ship}", "level", "on")
+                    )
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_NonSiblingTie_StillCommits()
+        {
+            // These two tie at selection but differ at TWO positions, so they are not siblings.
+            // Design §5.3 restricts the action to sibling rivals deliberately: a non-sibling tie
+            // is an authoring accident, not a dropped word, and routing it through the runtime
+            // path would widen this feature into something it is not.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                Commands(
+                    Cmd("set_a", P("set", "{ship}", "mode", "on")),
+                    Cmd("set_b", P("set", "{ship}", "level", "off"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_IdenticalPatternsAcrossIntents_StillCommit()
+        {
+            // Two intents registering the identical pattern differ at ZERO positions, not one,
+            // so they are duplicates rather than siblings — an authoring error requirements F8
+            // leaves alone. They still tie and still coin-flip; this feature does not claim to
+            // fix that, and pinning it keeps a future loosening of the pair test from silently
+            // absorbing the class.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                Commands(
+                    Cmd("set_a", P("set", "{ship}", "mode", "on")),
+                    Cmd("set_b", P("set", "{ship}", "mode", "on"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_ShadowedCrossIntentMember_Refuses()
+        {
+            // Issue #90's runtime consequence, and the reason that fix had to land before this
+            // one. set_mode contributes BOTH discriminating values, so the old first-wins-by-
+            // value dedup dropped set_level from the set entirely; the survivors then shared one
+            // intent and the same-intent filter suppressed the set outright. The hazard was
+            // invisible to this lookup and the gate committed early on the coin flip.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                Commands(
+                    Cmd(
+                        "set_mode",
+                        P("set", "{ship}", "mode", "on"),
+                        P("set", "{ship}", "level", "on")
+                    ),
+                    Cmd("set_level", P("set", "{ship}", "level", "on"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("set alpha on"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_LeadingTwoElementTie_RefusesForScoreAtDefaultAndForTheTieBelowIt()
+        {
+            // The asymmetry between this gate and the author-facing warning, pinned rather than
+            // left to be discovered. "cease fire" / "resume fire" lose their discriminator to
+            // leave "fire", scoring 1/2 = 0.5. The warning is SILENT about this pair because it
+            // must judge against a default minScore the constructor cannot see, and 0.5 is under
+            // it — documented in KNOWN_LIMITATIONS.
+            //
+            // This gate is handed the real configured threshold, so it judges exactly rather
+            // than predicting. At the 0.6 default the score condition refuses first and the
+            // sibling condition is never reached. Lower the threshold and the tie becomes live —
+            // and the gate refuses it, on a pair the author was never warned about.
+            //
+            // The discriminator is LEADING, not trailing, so the issue #70 tail condition does
+            // not take it: "fire" is the last element and it matched.
+            // No LogAssert.Expect: this pair is precisely the one the warning stays quiet about,
+            // which is the point of the test.
+            VoxrCommandParser Build() =>
+                new VoxrCommandParser(
+                    Slots(),
+                    Commands(
+                        Cmd("cease_fire", P("cease", "fire")),
+                        Cmd("resume_fire", P("resume", "fire"))
+                    )
+                );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                Build().TryEagerCommit(Tok("fire"), null, 0.6f, 0.4f),
+                "at the default the score condition refuses, not the sibling one"
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                Build().TryEagerCommit(Tok("fire"), null, 0.4f, 0.4f),
+                "below the default the tie is live, and the sibling condition is what refuses"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_SiblingAnalysisTruncatedByTheExpansionCap_RefusesAnyway()
+        {
+            // Past MaxWarningExpansion (6) optionals, WarningForms hands back the raw decorated
+            // pattern instead of expanding it, so the frame this pattern shares with its rival
+            // is never built and the sibling lookup holds nothing for it. That is "unknown",
+            // not "no hazard" — and the two are indistinguishable to a lookup that only records
+            // what it found.
+            //
+            // Left unguarded this opened a silent window: ComputeCanCommitEarly abandons only
+            // past 12 optionals, so a pattern with 7-12 kept a live eager commit while its
+            // sibling relations went unanalysed, and the gate committed on exactly the coin
+            // flip DR-5 exists to refuse. Drop one filler below and this same grammar refuses
+            // through the ordinary path.
+            //
+            // The refusal here is the direction ComputeCanCommitEarly already fails in when it
+            // gives up: never Commit on an analysis that was not performed.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd(
+                        "shields_up",
+                        P(
+                            "engage",
+                            "?please",
+                            "?now",
+                            "?sir",
+                            "?kindly",
+                            "?quickly",
+                            "?really",
+                            "?just",
+                            "shields",
+                            "online"
+                        )
+                    ),
+                    Cmd("weapons_up", P("engage", "weapons", "online"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f),
+                "an unanalysed pattern must not be reported as hazard-free"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_TruncatedPatternAsTheRival_RefusesToo()
+        {
+            // The same shape as above with the registration order reversed, so the over-cap
+            // pattern arrives as the RIVAL rather than as the incumbent. Worth its own test
+            // because the guard reads
+            //     _siblingFormsTruncated[ci1][pi1] || _siblingFormsTruncated[ci2][pi2]
+            // and `||` short-circuits: with the truncated pattern always first, the right
+            // operand never evaluated and could have been deleted with both suites still green.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("weapons_up", P("engage", "weapons", "online")),
+                    Cmd(
+                        "shields_up",
+                        P(
+                            "engage",
+                            "?please",
+                            "?now",
+                            "?sir",
+                            "?kindly",
+                            "?quickly",
+                            "?really",
+                            "?just",
+                            "shields",
+                            "online"
+                        )
+                    )
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f)
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_TruncatedButProvablyNotSiblings_StillCommits()
+        {
+            // The truncated-analysis arm must not answer "rivals" blindly, and this is the case
+            // that caught it doing so. Both patterns reduce to the same required elements
+            // ["engage","online"], so their discriminator is the SAME word — they are
+            // duplicates, which item 1's requirements F8 keeps out of the runtime path, and
+            // FindSiblingSets returns zero sets for them at any optional count.
+            //
+            // A blanket "unknown means refuse" flipped this to None past 6 optionals, in a
+            // PLAYER build, violating requirements F10 ("a non-sibling tie does not trigger the
+            // refusal"). Comparing required elements instead decides it correctly: zero
+            // differing positions means duplicates, not siblings.
+            //
+            // The 6-optional control below is the same grammar under the cap, where the ordinary
+            // path reaches the same answer — so this test fails if the arm regresses, and not
+            // for some unrelated reason.
+            VoxrCommandParser Build(int optionals)
+            {
+                var fillers = new[]
+                {
+                    "?please",
+                    "?now",
+                    "?sir",
+                    "?kindly",
+                    "?quickly",
+                    "?really",
+                    "?just",
+                };
+                var pattern = new List<string> { "engage" };
+                for (int i = 0; i < optionals; i++)
+                    pattern.Add(fillers[i]);
+                pattern.Add("online");
+
+                return new VoxrCommandParser(
+                    Slots(),
+                    Commands(
+                        Cmd("shields_up", pattern.ToArray()),
+                        Cmd("weapons_up", P("engage", "online"))
+                    )
+                );
+            }
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                Build(6).TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f),
+                "under the cap these are duplicates, not siblings — no set, no refusal"
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                Build(7).TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f),
+                "and truncating the analysis must not invent a hazard that is provably absent"
             );
         }
     }
