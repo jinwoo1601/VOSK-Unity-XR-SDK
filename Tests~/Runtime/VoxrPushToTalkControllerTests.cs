@@ -265,5 +265,54 @@ namespace VoXR.Tests.Runtime
             _go = null;
             yield return null;
         }
+
+        [Test]
+        public void ReleaseTalk_SiblingTieDeferredByTheEagerGate_StillFires()
+        {
+            // Issue #74 DR-5 has the eager gate refuse on a sibling tie, so a buffer that used
+            // to commit early now waits. Releasing the trigger is the one path where "waits"
+            // could have meant "is discarded" — OnTalkEnded calls CancelPendingCommand as well
+            // as FlushPendingBuffer, and only the order between them keeps the command alive.
+            //
+            // The discriminator is MEDIAL: a trailing one is refused by the issue #70 tail
+            // condition instead, so it would not exercise the sibling refusal at all.
+            LogAssert.Expect(
+                LogType.Warning,
+                new System.Text.RegularExpressions.Regex("differ only at element 3")
+            );
+
+            _command.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+            _command.BufferWindow = 1.5f;
+            _command.CommandCooldown = 0f;
+            _command.EagerFlushOnCompleteMatch = true;
+
+            VoxrCommand? received = null;
+            _command.OnCommandRecognised += cmd => received = cmd;
+
+            _controller.PressTalk();
+            _command.InjectText("set alpha on");
+            Assert.IsFalse(received.HasValue, "the tie must defer rather than commit early");
+
+            _controller.ReleaseTalk();
+
+            Assert.IsTrue(
+                received.HasValue,
+                "releasing must flush the deferred command, not discard it"
+            );
+            Assert.AreEqual("set_mode", received.Value.Intent);
+        }
     }
 }

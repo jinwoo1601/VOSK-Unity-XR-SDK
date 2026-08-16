@@ -3875,6 +3875,41 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void SiblingWarning_TwoIntentsSharingPatternText_NameThatTextOnce()
+        {
+            // Since issue #90 a set retains duplicate-valued members, so two members can be
+            // distinct patterns of distinct intents carrying identical authored text. Printing
+            // it once per member had the message assert that the patterns it listed "differ
+            // only at element 3" while two of those strings differed at no element at all —
+            // self-contradictory on its face.
+            //
+            // Every intent is still named, because every intent is genuinely implicated; only
+            // the repeated rendering of one pattern's text collapses. Same rule the intent and
+            // value lists already followed.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'set_a', 'set_b' and 'set_c' have patterns "
+                        + "\"set \\{ship\\} mode on\" and \"set \\{ship\\} level on\" "
+                        + "that differ only at element 3"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    Sib("set_a", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_b", SibP("set", "{ship}", "mode", "on")),
+                    Sib("set_c", SibP("set", "{ship}", "level", "on")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void SiblingWarning_NamesARemedyThatActuallyRemovesTheTie()
         {
             // The message shipped saying "Diverge earlier", which does not work — and this

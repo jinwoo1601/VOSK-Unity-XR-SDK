@@ -253,8 +253,19 @@ namespace VoXR.Commands
         // so there it is built at construction and built ONCE — not once per consumer, which is
         // what DR-2 asks for.
         SiblingMembership[][][] _siblingMemberships;
-        List<SiblingSet> _siblingSets;
+
+        // Per pattern: were its optional expansions truncated by MaxWarningExpansion? If so its
+        // sibling relations are unknown rather than absent, and AreSiblingRivals refuses on a
+        // cross-intent tie rather than claiming there is no hazard.
+        bool[][] _siblingFormsTruncated;
         bool _siblingLookupComputed;
+
+        // Read only by the construction-time warning, which is [Conditional("UNITY_EDITOR")].
+        // Declared unconditionally because that attribute elides the CALL, not the method body,
+        // which still has to compile in a player — but ASSIGNED only in the Editor, so a player
+        // carries one null reference here rather than every frame and member array the grammar
+        // produced, for the parser's lifetime, with nothing able to read them.
+        List<SiblingSet> _siblingSets;
 
         // Pooled StringBuilder for TryMatchNumberSequence.
         readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
@@ -455,7 +466,7 @@ namespace VoXR.Commands
             // Appended last on purpose: VoxrCommandRecogniserInjectionTests queues ORDERED log
             // expectations across the two scans above, so a new scan between them would break
             // the queue rather than merely add to it.
-            WarnOnSiblingDiscriminator(commands);
+            WarnOnSiblingDiscriminator();
         }
 
         static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
@@ -677,11 +688,18 @@ namespace VoXR.Commands
             }
         }
 
-        // Concrete forms of a pattern for the warning scan. Patterns with no optional elements
+        // Concrete forms of a pattern for the sibling scan. Patterns with no optional elements
         // are their own single form, with no copy. The expansion is capped well below
-        // MaxOptionalExpansion because this scan runs in the ctor — and so on every parser
-        // rebuild an editor session makes — where ComputeCanCommitEarly's expansion is lazy;
-        // past the cap the pattern is compared raw, costing recall on that one pattern only.
+        // MaxOptionalExpansion because in the Editor this scan runs from the ctor — and so on
+        // every parser rebuild a session makes — where ComputeCanCommitEarly's expansion is
+        // lazy; past the cap the pattern is compared raw.
+        //
+        // "Costing recall on that one pattern only" is how this read while the only consumer
+        // was a Debug.LogWarning. Since issue #74 item 2 the same forms feed a RUNTIME gate, so
+        // a truncated pattern is one whose sibling relations are unknown rather than absent —
+        // which is why EnsureSiblingLookup records the truncation per pattern and
+        // AreSiblingRivals refuses on a cross-intent tie involving one, instead of reporting no
+        // hazard from an analysis it never performed.
         const int MaxWarningExpansion = 6;
 
         static List<string[]> WarningForms(string[] pattern)
@@ -1150,7 +1168,11 @@ namespace VoXR.Commands
         // messages pin them in editor Play Mode, where this package's Runtime suite runs, and
         // not in a built player.
         [System.Diagnostics.Conditional("UNITY_EDITOR")]
-        void WarnOnSiblingDiscriminator(VoxrCommandDefinition[] commands)
+        // Takes no commands parameter, unlike the scans above: the sets come from
+        // EnsureSiblingLookup, whose member indices are into _commands, and resolving those
+        // indices against a different array passed by a future caller would silently mis-quote
+        // patterns or throw inside the message builder. One array, one source of truth.
+        void WarnOnSiblingDiscriminator()
         {
             // Consumes the shared lookup instead of calling FindSiblingSets again. DR-2 asks
             // for ONE sibling-set computation consumed by the warning and by selection, and two
@@ -1199,7 +1221,7 @@ namespace VoXR.Commands
                     !IsSingleIntent(set)
                     && ScoreAfterDroppingDiscriminator(set.Frame) >= DefaultMinScore
                 )
-                    UnityEngine.Debug.LogWarning(BuildSiblingWarning(commands, set));
+                    UnityEngine.Debug.LogWarning(BuildSiblingWarning(_commands, set));
 
                 // The collision report is NOT narrowed the same way, and the difference is
                 // deliberate. The intent filter above rests on the wrong-INTENT harm, which a
@@ -1245,10 +1267,19 @@ namespace VoXR.Commands
             }
         }
 
-        // Callers always pass at least two parts: a reported set has at least two members and,
-        // after the same-intent filter, at least two distinct intents.
+        // Callers normally pass at least two parts: a reported set clears the two-distinct-value
+        // gate in FindSiblingSets, and the same-intent filter leaves at least two intents. The
+        // pattern-text list is the one that can still collapse to one — see inside.
         static string JoinWith(string[] parts, string conjunction)
         {
+            // A single part needs no conjunction, and since issue #90 that is reachable: the
+            // three lists this renders are deduplicated for display, and two members carrying
+            // different discriminating values can still render identical pattern TEXT when an
+            // element holds more than one word ("a b" "c" and "a" "b" "c" both join to "a b c").
+            // Degenerate authoring, but it used to be structurally impossible and now is not.
+            if (parts.Length <= 1)
+                return parts.Length == 1 ? parts[0] : string.Empty;
+
             var sb = new StringBuilder();
             for (int i = 0; i < parts.Length - 1; i++)
             {
@@ -1300,24 +1331,43 @@ namespace VoXR.Commands
         {
             if (_siblingLookupComputed)
                 return;
-            _siblingLookupComputed = true;
 
-            _siblingSets = FindSiblingSets(_commands);
+            var sets = FindSiblingSets(_commands);
+#if UNITY_EDITOR
+            // Retained only for the construction-time warning, which is the sole reader and is
+            // itself Editor-only. A player would otherwise hold every frame and member array
+            // for the parser's lifetime with nothing to read them.
+            _siblingSets = sets;
+#endif
 
             var building = new List<SiblingMembership>[_commands.Length][];
+            _siblingFormsTruncated = new bool[_commands.Length][];
             for (int ci = 0; ci < _commands.Length; ci++)
-                building[ci] = new List<SiblingMembership>[_commands[ci].Patterns.Length];
+            {
+                var patterns = _commands[ci].Patterns;
+                building[ci] = new List<SiblingMembership>[patterns.Length];
+                _siblingFormsTruncated[ci] = new bool[patterns.Length];
 
-            for (int s = 0; s < _siblingSets.Count; s++)
+                // Past MaxWarningExpansion, WarningForms hands back the raw decorated pattern
+                // instead of its expansions, so this pattern was only ever compared in its
+                // all-optionals-present reading and its sibling relations are UNKNOWN rather
+                // than absent. Recorded per pattern so AreSiblingRivals can refuse to claim
+                // otherwise — see the conservative arm there.
+                for (int pi = 0; pi < patterns.Length; pi++)
+                    _siblingFormsTruncated[ci][pi] =
+                        CountOptionalElements(patterns[pi]) > MaxWarningExpansion;
+            }
+
+            for (int s = 0; s < sets.Count; s++)
             {
                 // A set whose members all share an intent contains no cross-intent pair, and
                 // AreSiblingRivals requires one — so it can be skipped wholesale. This is a
                 // cheap pre-filter, NOT the rule: a set that survives it can still hold
                 // same-intent pairs, which is why the intent test below is per-pair.
-                if (IsSingleIntent(_siblingSets[s]))
+                if (IsSingleIntent(sets[s]))
                     continue;
 
-                var members = _siblingSets[s].Members;
+                var members = sets[s].Members;
                 for (int m = 0; m < members.Length; m++)
                 {
                     int ci = members[m].CommandIndex;
@@ -1338,6 +1388,10 @@ namespace VoXR.Commands
                 for (int pi = 0; pi < building[ci].Length; pi++)
                     _siblingMemberships[ci][pi] = building[ci][pi]?.ToArray();
             }
+
+            // Flag last, matching EnsureCanCommitEarly: a throw mid-build then retries rather
+            // than latching a half-built lookup.
+            _siblingLookupComputed = true;
         }
 
         // Whether two candidates that tied at selection are siblings whose discriminator went
@@ -1372,11 +1426,6 @@ namespace VoXR.Commands
             )
                 return false;
 
-            var a = _siblingMemberships[ci1][pi1];
-            var b = _siblingMemberships[ci2][pi2];
-            if (a == null || b == null)
-                return false;
-
             // Same command is necessarily the same intent; two distinct commands may still
             // share one, so compare the strings rather than the indices alone.
             if (
@@ -1387,6 +1436,26 @@ namespace VoXR.Commands
                     StringComparison.Ordinal
                 )
             )
+                return false;
+
+            // Conservative arm. Past MaxWarningExpansion a pattern was never expanded over its
+            // optionals, so the frames it would have shared with a rival do not exist and the
+            // lookup cannot distinguish "has no sibling" from "was never analysed". Two
+            // different intents tying on the same buffer is the exact evidence DR-5 refuses on,
+            // so refuse rather than commit on an analysis that was not performed.
+            //
+            // This is the direction ComputeCanCommitEarly already fails in when it abandons
+            // (null => HoldExtendable, never Commit). Without it the two caps disagreed: a
+            // pattern with 7-12 optionals kept a live eager commit while its sibling relations
+            // silently went unanalysed, so the gate committed on precisely the coin flip this
+            // feature exists to refuse. Costs latency only where a grammar is both over-cap and
+            // actually tying across intents.
+            if (_siblingFormsTruncated[ci1][pi1] || _siblingFormsTruncated[ci2][pi2])
+                return true;
+
+            var a = _siblingMemberships[ci1][pi1];
+            var b = _siblingMemberships[ci2][pi2];
+            if (a == null || b == null)
                 return false;
 
             for (int i = 0; i < a.Length; i++)
@@ -1407,13 +1476,20 @@ namespace VoXR.Commands
             // Report the patterns as authored, noting when a form omitted optionals, so an
             // author can find the text in their asset — the frame this set was keyed on is
             // normalized, and normalized text is not what they wrote.
-            var patternTexts = new string[members.Length];
+            // Deduplicated for the same reason the intent and value lists below are, and it
+            // became necessary for the same reason: since issue #90 two members can be distinct
+            // patterns of distinct intents carrying identical authored text. Printing it twice
+            // would have the message assert that patterns "differ only at element N" while two
+            // of the strings it just listed differ at no element at all.
+            var patternTexts = new List<string>(members.Length);
             for (int i = 0; i < members.Length; i++)
             {
                 string[] raw = commands[members[i].CommandIndex].Patterns[members[i].PatternIndex];
-                patternTexts[i] = "\"" + string.Join(" ", raw) + "\"";
+                string text = "\"" + string.Join(" ", raw) + "\"";
                 if (raw.Length != set.Frame.Length)
-                    patternTexts[i] += " (with its optional elements omitted)";
+                    text += " (with its optional elements omitted)";
+                if (!patternTexts.Contains(text))
+                    patternTexts.Add(text);
             }
 
             // One intent can contribute several patterns to a set — "cease fire" and "hold
@@ -1442,7 +1518,7 @@ namespace VoXR.Commands
 
             // Authors count elements from one.
             return $"[VoxrCommandParser] Intents {JoinWith(intents.ToArray(), "and")} have "
-                + $"patterns {JoinWith(patternTexts, "and")} that differ only at element "
+                + $"patterns {JoinWith(patternTexts.ToArray(), "and")} that differ only at element "
                 + $"{set.DiscriminatorIndex + 1} ({JoinWith(values.ToArray(), "or")}). If that word is "
                 + "dropped, these patterns match the remainder equally — same score, same "
                 + "consumed span, same literal count — and selection falls through to "
@@ -1594,9 +1670,13 @@ namespace VoXR.Commands
                             // ACT on it (issue #74 item 3) inherits a working record rather
                             // than introducing one alongside a behaviour change.
                             //
-                            // The eager path keeps its own copy of this rather than sharing:
-                            // that one must run in a player build, since the refusal is not
-                            // behind any flag.
+                            // The eager path carries the same eight lines rather than sharing a
+                            // helper, and the reason is the loop locals, not the build config:
+                            // each loop owns its own incumbent and its own tie state, so a
+                            // shared routine would take them all by ref and read worse than the
+                            // duplication. Both copies must stay in step — the first-rival and
+                            // clear-on-adopt rules are the same rules — so a change to one is a
+                            // change to both.
                             else if (
                                 order == CandidateOrder.Tied
                                 && bestTiedSiblingCommandIdx < 0
@@ -2843,6 +2923,12 @@ namespace VoXR.Commands
             // matters: a winner can be tied by several candidates, only some of them siblings.
             // Keeping "the last thing that tied" and testing sibling-ness afterwards would drop
             // a sibling rival whenever a non-sibling happened to be enumerated after it.
+            //
+            // Both indices, though this method reads only the first and only as a flag: design
+            // §5.3 asks each selection loop to record "whether an equally-good rival was seen
+            // and WHICH PATTERN it was", and ParseInternal's copy does consume both. Kept in
+            // step so the two loops record the same thing; a bool here would make them differ
+            // in shape for no gain, since the verdict names nothing either way (DR-5).
             int bestTiedSiblingCommandIdx = -1;
             int bestTiedSiblingPatternIdx = -1;
 
@@ -2938,8 +3024,14 @@ namespace VoXR.Commands
             // miss is genuinely safe: "launch all missiles hotel one" against
             // ["launch", "{?quantity}", "{weapon}", "target", "{target}"] drops the "target"
             // function word, yet fills every slot and still lands its final element on the
-            // last token of the buffer. Nothing the speaker says next was owed to it, so it
-            // commits early exactly as before.
+            // last token of the buffer. Nothing the speaker says next was owed to it, so
+            // COMPLETENESS is satisfied and this condition lets it through.
+            //
+            // That is not the same as safe. This condition is silent about AMBIGUITY, and a
+            // medial drop between two cross-intent siblings is exactly the case it lets past
+            // (issue #74 design §2.8). The sibling condition at the end of this method is what
+            // catches that; it sits there rather than here so that it can refuse a Commit
+            // without also lengthening a HoldExtendable.
             if (bestHasUnmatchedRequiredTail)
                 return EagerCommitVerdict.None;
 

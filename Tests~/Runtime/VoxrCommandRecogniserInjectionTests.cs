@@ -1104,5 +1104,94 @@ namespace VoXR.Tests.Runtime
                 "and it really was omitted — this is not passing for the wrong reason"
             );
         }
+
+        // -------- Sibling tie defers the eager commit (issue #74, DR-5) --------
+        //
+        // The parser-level tests in VoxrEagerCommitTests call TryEagerCommit directly, which
+        // returns a verdict and therefore cannot show what happens AFTER a refusal. These two
+        // cover the claim that matters most about this feature — that refusing costs latency
+        // and nothing else, so nothing which fires today stops firing.
+        //
+        // The discriminator must be MEDIAL. A trailing one is already refused by the issue #70
+        // tail condition, so a fixture built on one would go green without exercising the
+        // sibling condition at all.
+
+        void ConfigureMedialSiblings()
+        {
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+        }
+
+        [Test]
+        public void EagerFlush_SiblingTie_DefersToTheWindowThenStillFires()
+        {
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureMedialSiblings();
+
+            VoxrCommand? received = null;
+            int fireCount = 0;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                received = cmd;
+                fireCount++;
+            };
+
+            // "set alpha on" fits set_mode and set_level exactly equally. Before DR-5 this
+            // eager-fired immediately on the coin flip.
+            _recogniser.InjectText("set alpha on");
+            Assert.AreEqual(
+                0,
+                fireCount,
+                "an undecidable buffer must not commit early — the dropped word may still arrive"
+            );
+
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(1, fireCount, "and it must still fire: the refusal costs latency only");
+            Assert.AreEqual(
+                "set_mode",
+                received.Value.Intent,
+                "the same intent the flush has always chosen, by registration order"
+            );
+            Assert.AreEqual("alpha", received.Value.GetSlot("ship"), "with its slots intact");
+        }
+
+        [Test]
+        public void EagerFlush_SiblingTie_LateDiscriminatorSelectsTheRightIntent()
+        {
+            // The other half, and the reason refusing is worth the latency at all: the window
+            // the refusal buys is where the missing word can still land. Here it does, and the
+            // flush selects on evidence the eager scan never had.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+            ConfigureMedialSiblings();
+
+            VoxrCommand? received = null;
+            _recogniser.OnCommandRecognised += cmd => received = cmd;
+
+            _recogniser.InjectText("set alpha level on");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.IsTrue(received.HasValue);
+            Assert.AreEqual(
+                "set_level",
+                received.Value.Intent,
+                "not the first-registered — the discriminator decided it"
+            );
+        }
     }
 }

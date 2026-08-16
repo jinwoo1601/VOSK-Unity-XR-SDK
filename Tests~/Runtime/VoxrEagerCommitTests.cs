@@ -1530,7 +1530,7 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void TryEagerCommit_LeadingTwoElementTie_RefusesOnlyBelowDefaultMinScore()
+        public void TryEagerCommit_LeadingTwoElementTie_RefusesForScoreAtDefaultAndForTheTieBelowIt()
         {
             // The asymmetry between this gate and the author-facing warning, pinned rather than
             // left to be discovered. "cease fire" / "resume fire" lose their discriminator to
@@ -1566,6 +1566,52 @@ namespace VoXR.Tests.Runtime
                 EagerCommitVerdict.None,
                 Build().TryEagerCommit(Tok("fire"), null, 0.4f, 0.4f),
                 "below the default the tie is live, and the sibling condition is what refuses"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_SiblingAnalysisTruncatedByTheExpansionCap_RefusesAnyway()
+        {
+            // Past MaxWarningExpansion (6) optionals, WarningForms hands back the raw decorated
+            // pattern instead of expanding it, so the frame this pattern shares with its rival
+            // is never built and the sibling lookup holds nothing for it. That is "unknown",
+            // not "no hazard" — and the two are indistinguishable to a lookup that only records
+            // what it found.
+            //
+            // Left unguarded this opened a silent window: ComputeCanCommitEarly abandons only
+            // past 12 optionals, so a pattern with 7-12 kept a live eager commit while its
+            // sibling relations went unanalysed, and the gate committed on exactly the coin
+            // flip DR-5 exists to refuse. Drop one filler below and this same grammar refuses
+            // through the ordinary path.
+            //
+            // The refusal here is the direction ComputeCanCommitEarly already fails in when it
+            // gives up: never Commit on an analysis that was not performed.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd(
+                        "shields_up",
+                        P(
+                            "engage",
+                            "?please",
+                            "?now",
+                            "?sir",
+                            "?kindly",
+                            "?quickly",
+                            "?really",
+                            "?just",
+                            "shields",
+                            "online"
+                        )
+                    ),
+                    Cmd("weapons_up", P("engage", "weapons", "online"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("engage online"), null, 0.6f, 0.4f),
+                "an unanalysed pattern must not be reported as hazard-free"
             );
         }
     }
