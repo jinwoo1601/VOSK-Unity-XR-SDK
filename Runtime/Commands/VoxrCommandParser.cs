@@ -2425,14 +2425,26 @@ namespace VoXR.Commands
             {
                 var kept = _tiedRivalBuf[firstRival + r];
                 if (
-                    !IsAnswerableRival(
+                    IsAnswerableRival(
                         kept.Value,
                         _commands[kept.CommandIndex].Intent,
                         rivalValue,
                         rivalIntent
                     )
                 )
-                    return; // Indistinguishable from a choice already offered. Nothing lost.
+                    continue;
+
+                // Same WORD as a choice already offered: a second spelling of one answer, and
+                // saying it picks the choice that is already there. Nothing is lost.
+                if (string.Equals(kept.Value, rivalValue, StringComparison.Ordinal))
+                    return;
+
+                // Same INTENT, different word. Only one of the two words reaches this command,
+                // so a speaker who says the other gets no match and the pending times out — an
+                // answer they could have given that is not on the list, which is exactly what
+                // Truncated reports.
+                tiedTruncated = true;
+                return;
             }
 
             if (tiedRivalCount >= MaxDisambiguationRivals)

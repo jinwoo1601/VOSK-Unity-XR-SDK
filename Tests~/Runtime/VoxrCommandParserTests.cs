@@ -5004,6 +5004,11 @@ namespace VoXR.Tests.Runtime
 
             var record = parser.TiedSiblingBuffer[0];
             Assert.AreEqual(2, record.RivalCount, "one choice per intent, not per pattern");
+            Assert.IsTrue(
+                record.Truncated,
+                "and \"report\" is reported missing: it reaches set_beta and is not offered, so "
+                    + "a speaker who says it gets no match at all"
+            );
             CollectionAssert.AreEqual(
                 new[] { "set_beta", "set_standby" },
                 new[] { parser.RivalIntent(0, 0), parser.RivalIntent(0, 1) },

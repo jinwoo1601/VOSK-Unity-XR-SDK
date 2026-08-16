@@ -153,7 +153,9 @@ set {ship} level on                          and fits both intents exactly equal
 
 **The eager gate refuses to commit on either shape.** When two patterns of *different* intents tie on a buffer and differ only at one required word, firing early would commit a coin flip before the utterance is even over — so the gate declines and lets the buffer run its full window. The same command still fires; it fires at the end of the window rather than immediately.
 
-That does not *resolve* the ambiguity, and it is worth being clear why the wait helps at all. For a medial drop the missing word can never arrive: speech only ever appends to the buffer, and the position it would have occupied is already behind the match. What deferring buys is that the decision happens once, at the flush, where the transcript is final — which is where a future release can ask you which command you meant instead of guessing. Until then the flush picks the first-registered pattern, exactly as it always has.
+That does not *resolve* the ambiguity, and it is worth being clear why the wait helps at all — because the obvious reason is the wrong one. Deferring does **not** give the missing word a chance to arrive: speech only ever appends to the buffer, and for a medial drop the position that word would have occupied is already behind the match. It can never land.
+
+What deferring buys is exactly one thing: the decision happens once, at the flush, on a final transcript — **which is where the recogniser can ask you instead of guessing.** Turn `disambiguateSiblingTies` on and it does. Leave it off and the flush picks the first-registered pattern, exactly as it always has.
 
 **What the warning reports, and what it does not.** It fires in the Editor at construction, naming the intents, the patterns as you wrote them, the element they differ at, and the competing values. It is deliberately narrow in two ways:
 
@@ -166,11 +168,53 @@ The second exclusion has a cost worth knowing: the parser is built from the gram
 
 1. **Make the two commands differ in more than one element.** This is the only fix that removes the tie rather than moving it: with two differing words, losing one still leaves the other to decide.
 2. **Give the more destructive of the pair `requiresConfirmation`**, so a coin flip costs a confirmation prompt rather than an action.
-3. **Where both phrasings must exist verbatim, register the safer one first** — the tie-break is deterministic, so first-registered is what fires.
+3. **Turn on `disambiguateSiblingTies` and let the speaker settle it** — see below. This is the only remedy that keeps both phrasings *and* gets the right command; the others either change the grammar or pick a loser in advance.
+4. **Where both phrasings must exist verbatim and you cannot prompt, register the safer one first** — the tie-break is deterministic, so first-registered is what fires.
 
 Note what is *not* on that list. **Making the difference come earlier in the pattern does not help.** `weapons mode` and `navigation mode` differ at their first element instead of their last, and tie exactly as before — `(0 + 1) / 2` for both. What changes with a shorter pattern is only that the tie falls under `minScore`, so nothing fires instead of the wrong thing. That is an improvement, but a small and accidental one, and it disappears the moment the pattern grows: `weapons mode active` and `navigation mode active` tie at `0.67` and fire the first-registered again.
 
-One further warning fires if a discriminating value is also in the default cancel vocabulary (`cancel`, `abort`, `negative`). Follow-up handling checks cancel before anything else, so if that ambiguity is ever routed back to the speaker to resolve, answering with that word would cancel rather than choose it. Rename the literal, or override `cancelVocabulary`.
+One further warning fires if a discriminating value is also cancel vocabulary. Follow-up handling checks cancel before anything else, so if that ambiguity is routed back to the speaker, answering with that word would cancel rather than choose it. It is judged against *your* `cancelVocabulary` if you set one, and against the defaults (`cancel`, `abort`, `negative`, …) if you did not — so overriding the vocabulary to dodge a collision actually silences the warning, and a collision you introduce *with* an override is reported. It is also only raised for values that could really be offered as an answer: a value whose only same-set partners share its intent is never asked about, so it is never reported.
+
+## Ask instead of guessing
+
+Everything above stops the recogniser committing to a coin flip early. It does not stop it coin-flipping at the end — the flush still picks the first-registered pattern. **`disambiguateSiblingTies` is what replaces that guess with a question.**
+
+```csharp
+// Inspector: Follow-Up / Pending Commands > Disambiguate Sibling Ties
+set_mode  : ["set", "{ship}", "mode",  "on"]
+set_level : ["set", "{ship}", "level", "on"]
+```
+
+The speaker says "set alpha mode on". VOSK drops `mode`. With the flag off, `set_mode` fires because it was declared first — and would have fired even if they had said `level`. With the flag on:
+
+1. Nothing fires. `OnCommandPending` raises, carrying the candidate that *would* have fired.
+2. `PendingAmbiguity` is non-null, and carries the competing commands with the one word that tells each apart: `mode` or `level`.
+3. You prompt however suits your game — this package ships no speech synthesis and no UI.
+4. The speaker says **`level`**, one word. `set_level` fires with its slots intact (`ship = alpha`), through `OnCommandConfirmed` and then `OnCommandRecognised`.
+
+**If the chosen command sets `requiresConfirmation`, step 4 asks again instead of firing** — "which?" first, then "are you sure?", which is the only coherent order, since you cannot confirm an intent you have not identified. `OnCommandPending` raises a second time, `PendingAmbiguity` is now null (this question is a confirmation), and the confirm vocabulary resolves it. Worth planning for: remedy 2 above tells you to mark the more destructive sibling `requiresConfirmation`, so taking both remedies together is exactly what produces this two-stage exchange.
+
+The answer needs no grammar work: discriminating values are pattern literals, so the decoder already knows them.
+
+**Off by default, and that is not timidity.** The flag makes an ambiguous utterance fire *nothing* until it is answered. With no `OnCommandPending` subscriber the speaker is never prompted, the pending times out, and the command is lost — worse than the coin flip it replaced. Turn it on when you have somewhere to put the question.
+
+### What answering looks like
+
+- **A discriminating value** picks that choice. Matched as a *whole* utterance, so "set alpha mode on" is a re-utterance that preempts the question, not an answer to it — both work, they just take different routes.
+- **Cancel** works, and keeps its precedence. A value that is also a cancel word cancels rather than choosing; the construction warning above tells you when your grammar has one.
+- **"Yes" does nothing.** It is not an answer to "which?" — but it is not an abandonment either, so the question stays open for the real answer.
+- **Silence** cancels. Even with `pendingTimeoutBehavior = FireAsIs`: there the *intent* is unknown rather than the arguments, and firing the first-registered after a pause is the same coin flip, merely later.
+- **Saying it all again** works, and preempts the question. A second *ambiguous* utterance re-asks it.
+
+### Three or more, and what does not fit
+
+A sibling set is n-ary: `set auto pilot on` / `off` / `standby` offers three choices, and each one-word answer fires its own intent. The runtime offers the winner plus up to four alternatives.
+
+Past that — or where the winner is ambiguous in two different ways at once, or where a pattern carries too many optional elements to analyse fully — some intent that also matched will not be on the list. `PendingAmbiguity.IsTruncated` tells you, so you can word "…or say the whole command again", which is the only way to reach what is missing.
+
+### Where it will not help
+
+Under push-to-talk with **Cancel Pending On Release** set, release flushes *and then cancels* — so the question is created and destroyed in consecutive statements and the speaker is never asked. That is the documented meaning of that flag, and after release the recogniser is not listening for an answer anyway. Use one or the other.
 
 ---
 
@@ -358,7 +402,7 @@ By default the buffer is purely time-driven: every command -- complete or not --
 - **A prefix of a longer command**, or a **trailing slot that could still grow** (a multi-word enumerated value such as `"red"` -> `"red dragon"`, or a variable-length number sequence) -> keeps waiting the full window, so split commands are still recovered. "Prefix" is judged against slot vocabularies, not just pattern shape: a lone `{burn_level}` is *not* a prefix of `decelerate {burn_level}`, because no value of the slot begins with "decelerate".
 - **Missing a required slot** (the pattern's literals are all in, but an argument has not been spoken yet) -> keeps waiting the full window, even where the arithmetic leaves the partial match above `minScore`. Unlike the case above it never qualifies for the shortened `prefixHoldSeconds` hold, because it is not a complete match. An unspoken slot consumes no words, so such a buffer otherwise looks complete right up to the moment the missing words arrive.
 - **Still owing its last word** (the pattern's final required element has not been spoken yet, as in "switch to" against `switch to weapons`) -> keeps waiting the full window. A missing word consumes nothing, so such a buffer looks complete by every other measure; where a sibling command shares the prefix, committing would fire whichever of them happens to be registered first.
-- **Ambiguous between two intents** -> keeps waiting the full window. Where the buffer fits two patterns of *different* intents exactly equally — same score, same span, same literal count — and they differ at just one required word, the winner would be decided by registration order alone. The gate declines rather than commit a coin flip early. This covers the *medial* drop the tail rule above cannot see: `set {ship} mode on` against `set {ship} level on`, heard as "set alpha on". The same command still fires at the end of the window. See [the one-word hazard](#do-not-separate-two-commands-by-a-single-word).
+- **Ambiguous between two intents** -> keeps waiting the full window. Where the buffer fits two patterns of *different* intents exactly equally — same score, same span, same literal count — and they differ at just one required word, the winner would be decided by registration order alone. The gate declines rather than commit a coin flip early. This covers the *medial* drop the tail rule above cannot see: `set {ship} mode on` against `set {ship} level on`, heard as "set alpha on". The same command still fires at the end of the window — or, with `disambiguateSiblingTies` on, the speaker is asked which they meant. See [the one-word hazard](#do-not-separate-two-commands-by-a-single-word).
 - **Split command** -> fires as soon as its second half completes, instead of waiting another full window on top.
 - **Out-of-grammar preamble** (a station address such as "Helm, ...", reported by VOSK as `[unk]`) is skipped, so an addressed command commits as fast as the bare one. Only a *leading* run is skipped: anything left over at the end -- recognised or `[unk]` -- is treated as an in-progress tail and keeps waiting, as does a leading word VOSK did resolve.
 

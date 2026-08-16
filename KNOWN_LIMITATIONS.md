@@ -538,24 +538,34 @@ deliberate trade-offs rather than oversights.
   wrong sibling; it no longer does. The gate declines whenever the buffer fits two
   different intents equally and they differ at one required word, so the guess now
   happens once, at the flush, on both shapes.
-- **This changes the timing, not the outcome.** The same command still fires — at the
-  end of `bufferWindow` rather than immediately. Deferring does not let the missing
-  word arrive: speech only ever appends to the buffer, and for a medial drop the
-  position that word would have occupied is already behind the match. What it buys is
-  that the decision is made once, on a final transcript, which is where a future
-  release can ask you which command you meant.
+- **The eager refusal changes the timing, not the outcome.** The same command still
+  fires — at the end of `bufferWindow` rather than immediately. Deferring does not let
+  the missing word arrive: speech only ever appends to the buffer, and for a medial
+  drop the position that word would have occupied is already behind the match. What it
+  buys is that the decision is made once, on a final transcript — **which is where the
+  recogniser can ask you instead of guessing.**
+- **There is now a supported remedy: `disambiguateSiblingTies`.** With it on, a flush
+  that ties this way stops guessing and asks. `OnCommandPending` raises with
+  `PendingAmbiguity` set, carrying the competing commands and the one word that tells
+  each apart; the speaker says that word and the right intent fires with its slots
+  intact. Off by default, because an ambiguous utterance then fires *nothing* until it
+  is answered — with no `OnCommandPending` subscriber that is worse than the coin flip.
+  See [Ask instead of guessing](Documentation~/command-recognition.md#ask-instead-of-guessing).
+  **The limitation below is what remains with the flag off**, which is the default.
 - **The parser now warns about this shape at construction**, in the Editor, naming
   the intents, the patterns as authored, the differing element and the competing
   values. It reports only what it can see going wrong: two patterns of *different*
   intents (within one intent the same command dispatches either way), where the tie
   would actually clear the default `minScore`. See the note below for what that
   second condition costs.
-- **Workaround**: Make the two commands differ in **more than one element**, so
-  losing one word still leaves another to decide (`arm weapons` / `show navigation`,
-  not `switch to weapons` / `switch to navigation`). Failing that, give the more
-  destructive of the pair `requiresConfirmation`, or — where both phrasings must
-  exist verbatim — register the safer one first, since the tie-break is
-  deterministic.
+- **Workaround**: Turn on `disambiguateSiblingTies` and prompt from
+  `OnCommandPending`, which is the only remedy that keeps both phrasings and still
+  gets the right command. Where you cannot prompt: make the two commands differ in
+  **more than one element**, so losing one word still leaves another to decide
+  (`arm weapons` / `show navigation`, not `switch to weapons` /
+  `switch to navigation`); or give the more destructive of the pair
+  `requiresConfirmation`; or — where both phrasings must exist verbatim — register the
+  safer one first, since the tie-break is deterministic.
 - **What does not work**: moving the difference *earlier* in the pattern.
   `weapons mode` and `navigation mode` tie exactly as the longer pair does; all that
   changes is that a two-element tie scores `0.5` and falls under `minScore`, so
@@ -586,6 +596,13 @@ deliberate trade-offs rather than oversights.
   reading — which catches the common case and, importantly, still refuses to claim a
   hazard where none exists. A relation that appears only in some *middle* reading is
   the part that stays invisible.
+- **With `disambiguateSiblingTies` on, such a rival is never offered as a choice.**
+  That fallback proves the two patterns tie but cannot say *which word* tells them
+  apart, and without that word there is no question to phrase. If it is the only rival,
+  the flush fires the winner exactly as it would with the flag off; if another rival
+  makes a question happen anyway, the unnameable one is missing from the list and
+  `PendingAmbiguity.IsTruncated` says so, so you can offer "…or say the whole command
+  again".
 - **Workaround**: Keep patterns under seven optional elements, which is well inside
   normal authoring. If you need more, do not also rely on a single required word to
   separate two intents — that combination is the one this cannot see.
