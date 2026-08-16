@@ -2,7 +2,7 @@
 // Purpose:  MonoBehaviour facade: speech-to-command pipeline with buffer, debounce, pending, grammar
 // Layer:    Runtime.Commands
 // Owns:     VoxrCommandRecogniser (public MonoBehaviour)
-// Depends:  VoxrSpeechRecogniser, VoxrCommandParser, VoxrCommand, VoxrCommandDefinition, VoxrSlotDefinition, VoxrPendingCommand, VoxrMatchDiagnostics
+// Depends:  VoxrSpeechRecogniser, VoxrCommandParser, VoxrCommand, VoxrCommandDefinition, VoxrSlotDefinition, VoxrPendingCommand, VoxrPendingAmbiguity, VoxrMatchDiagnostics
 // ============================================================================
 using System;
 using System.Collections.Generic;
@@ -212,7 +212,10 @@ namespace VoXR.Commands
                 if (
                     !pending.HasValue
                     || pending.Value.Reason != VoxrPendingReason.AwaitingDisambiguation
-                    || pending.Value.Choices == null
+                    // Guards ChoiceValues, the same field TryHandleConfirmCancel checks, so the
+                    // two readers of this record cannot disagree about what "present" means and
+                    // hand out an ambiguity whose DiscriminatingValues is null.
+                    || pending.Value.ChoiceValues == null
                 )
                     return null;
 
@@ -724,6 +727,11 @@ namespace VoXR.Commands
             // parsers mid-loop.
             var parser = _parser;
             var resultBuf = parser.ResultBuffer;
+            // Snapshotting the parser does not make this loop re-entrant. These are the
+            // parser's pooled arrays, not copies, so a subscriber that answers one of the events
+            // below by calling InjectText synchronously re-enters ParseInternal on this same
+            // instance and overwrites them mid-walk. That is pre-existing and unsupported;
+            // handlers should queue rather than inject.
             for (int i = 0; i < resultCount; i++)
             {
                 var cmd = resultBuf[i].Command;
@@ -1011,14 +1019,6 @@ namespace VoXR.Commands
 
         // Builds the choice list for result i, or answers false and asks nothing.
         //
-        // Allocates — three small arrays and one VoxrCommand per alternative — and that is
-        // deliberate: this runs once per AMBIGUITY, never per candidate, and everything it
-        // produces crosses into a public event where a subscriber can retain it. The parse path
-        // itself stays allocation-free (the parser records rivals into preallocated buffers);
-        // this is the boundary where that stops being true, following the same rule
-        // PendingCommandHandler already applies to anything reaching a subscriber.
-        // Builds the choice list for result i, or answers false and asks nothing.
-        //
         // `parser` is passed in rather than read from the field, and that is load-bearing: the
         // Step 7 loop raises public events between iterations, and a subscriber is allowed to
         // call Configure — which sets _parser to null — or SetActiveSets, which installs a new
@@ -1058,12 +1058,16 @@ namespace VoXR.Commands
 
             // Index 0 is always the candidate that would have fired with the flag off, so the
             // order an integrator renders is the order registration would have produced.
-            _choiceBuf.Clear();
-            _choiceValueBuf.Clear();
-            _choiceDefBuf.Clear();
-            _choiceBuf.Add(winner);
-            _choiceValueBuf.Add(record.WinnerValue);
-            _choiceDefBuf.Add(winnerDef);
+            // Locals, not pooled fields. This runs once per ambiguity and allocates three
+            // arrays at the end regardless, so pooling bought nothing measurable while keeping
+            // the winner's and rivals' commands alive after the question resolved — the exact
+            // staleness the Step 7 tail clears out of _acceptedBuf.
+            var choiceBuf = new List<VoxrCommand>(1 + record.RivalCount);
+            var valueBuf = new List<string>(1 + record.RivalCount);
+            var defBuf = new List<VoxrCommandDefinition>(1 + record.RivalCount);
+            choiceBuf.Add(winner);
+            valueBuf.Add(record.WinnerValue);
+            defBuf.Add(winnerDef);
 
             for (int n = 0; n < record.RivalCount; n++)
             {
@@ -1107,25 +1111,21 @@ namespace VoXR.Commands
                     continue;
                 }
 
-                _choiceBuf.Add(parser.BuildRivalCommand(i, n, tokens, wordConfidence));
-                _choiceValueBuf.Add(parser.TiedRival(i, n).Value);
-                _choiceDefBuf.Add(rivalDef);
+                choiceBuf.Add(parser.BuildRivalCommand(i, n, tokens, wordConfidence));
+                valueBuf.Add(parser.TiedRival(i, n).Value);
+                defBuf.Add(rivalDef);
             }
 
             // Fewer than two survivors is not a question. Fall through and fire the winner, as
             // the flag-off path would.
-            if (_choiceBuf.Count < 2)
+            if (choiceBuf.Count < 2)
                 return false;
 
-            choices = _choiceBuf.ToArray();
-            choiceValues = _choiceValueBuf.ToArray();
-            choiceDefinitions = _choiceDefBuf.ToArray();
+            choices = choiceBuf.ToArray();
+            choiceValues = valueBuf.ToArray();
+            choiceDefinitions = defBuf.ToArray();
             return true;
         }
-
-        readonly List<VoxrCommand> _choiceBuf = new List<VoxrCommand>();
-        readonly List<string> _choiceValueBuf = new List<string>();
-        readonly List<VoxrCommandDefinition> _choiceDefBuf = new List<VoxrCommandDefinition>();
 
         // Whether a command is missing one of its own required arguments (issue #73). The flush
         // path's completeness condition, and the counterpart to the two COMPLETENESS conditions

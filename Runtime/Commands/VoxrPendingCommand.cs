@@ -64,6 +64,12 @@ namespace VoXR.Commands
         internal static readonly string[] DefaultCancel =
             { "cancel", "abort", "negative", "belay that", "never mind" };
 
+        // The one definition of "an unset or empty override means the default". Both the runtime
+        // matcher and the parser's construction-time collision report resolve through this, so
+        // the report cannot predict against a different vocabulary than the one that runs.
+        internal static string[] Resolve(string[] configured, string[] fallback) =>
+            configured != null && configured.Length > 0 ? configured : fallback;
+
         internal static void AddPhraseWords(System.Collections.Generic.HashSet<string> set, string[] phrases)
         {
             foreach (string phrase in phrases)

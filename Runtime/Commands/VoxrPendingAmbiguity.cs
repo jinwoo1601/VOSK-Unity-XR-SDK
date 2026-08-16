@@ -50,10 +50,18 @@ namespace VoXR.Commands
         public readonly string[] DiscriminatingValues;
 
         /// <summary>
-        /// True when the sibling set held more values than the runtime offers as choices, so the
-        /// remaining intents are reachable only by saying the whole command again. Worth
-        /// mentioning in the prompt when set.
+        /// True when an intent that also matched is <em>not</em> on this list, so
+        /// <see cref="Choices"/> is not the whole set of things the speaker might have meant.
+        /// Worth wording into the prompt — "…or say the whole command again" — because that
+        /// re-utterance is the only way to reach what is missing.
         /// </summary>
+        /// <remarks>
+        /// Deliberately does not say <em>why</em> one was dropped, because there are several
+        /// reasons and none of them is actionable by the speaker: the sibling set held more
+        /// values than the runtime offers as choices; the winner belonged to two sibling sets at
+        /// once and only one question can be asked; or a tie was provable but could not be
+        /// phrased as a question (a pattern with too many optional elements to analyse fully).
+        /// </remarks>
         public readonly bool IsTruncated;
 
         internal VoxrPendingAmbiguity(

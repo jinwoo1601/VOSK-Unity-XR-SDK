@@ -105,10 +105,10 @@ namespace VoXR.Commands
             if (!_pendingCommand.HasValue)
                 return PendingResolution.NoAction();
 
-            string[] effectiveCancel = cancelVocab != null && cancelVocab.Length > 0
-                ? cancelVocab : VoxrFollowUpVocabulary.DefaultCancel;
-            string[] effectiveConfirm = confirmVocab != null && confirmVocab.Length > 0
-                ? confirmVocab : VoxrFollowUpVocabulary.DefaultConfirm;
+            string[] effectiveCancel = VoxrFollowUpVocabulary.Resolve(
+                cancelVocab, VoxrFollowUpVocabulary.DefaultCancel);
+            string[] effectiveConfirm = VoxrFollowUpVocabulary.Resolve(
+                confirmVocab, VoxrFollowUpVocabulary.DefaultConfirm);
 
             // Cancel first, under every reason. That order is what gives design §5.5's
             // collision its direction — a discriminating value that IS a cancel word cancels
@@ -138,6 +138,12 @@ namespace VoXR.Commands
                         // DR-4's dividend, and it is what sequences "which?" before "are you
                         // sure?". Complete reads _pendingCommand itself, so it is not cleared
                         // here.
+                        //
+                        // The chosen alternative is not re-tested for completeness. Issue #73's
+                        // gate proved the WINNER complete before the flush could route here, and
+                        // a rival missing a required slot takes RequiredSlotMissPenalty and
+                        // could not have tied on score — so the shape is unreachable. Stated
+                        // because the property is asserted of one candidate and used on another.
                         return Complete(
                             pending.Choices[i],
                             pending.ChoiceDefinitions[i],
@@ -285,8 +291,8 @@ namespace VoXR.Commands
         // WINNER's definition while the speaker may have chosen a rival, so reading
         // pending.Definition here would take the confirmation decision from the wrong command: a
         // destructive rival marked requiresConfirmation would fire without asking, or a benign
-        // one would be gratuitously confirmed because the winner required it. The two existing
-        // callers pass pending.Definition and are unchanged in behaviour.
+        // one would be gratuitously confirmed because the winner required it. The one
+        // pre-existing caller passes pending.Definition and is unchanged in behaviour.
         internal PendingResolution Complete(
             VoxrCommand completed,
             VoxrCommandDefinition resolvedDefinition,

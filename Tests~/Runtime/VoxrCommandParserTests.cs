@@ -4892,9 +4892,39 @@ namespace VoXR.Tests.Runtime
 
             var record = parser.TiedSiblingBuffer[0];
             Assert.AreEqual(1, record.RivalCount, "one question, not two merged into one list");
+            Assert.IsTrue(
+                record.Truncated,
+                "and the second ambiguity is REPORTED, not silently dropped — the comment above "
+                    + "used to claim this while nothing asserted it"
+            );
             Assert.AreEqual("mode", record.WinnerValue);
             Assert.AreEqual("level", parser.TiedRival(0, 0).Value);
             Assert.AreEqual("set_level_on", parser.RivalIntent(0, 0));
+        }
+
+        [Test]
+        public void TiedSiblingRecord_MoreExtractionRoundsThanResults_DoesNotOverrun()
+        {
+            // The rival buffers are indexed by _resultCount and sized _resultBuf.Length slabs
+            // deep, so the "result buffer full" test has to stop the loop BEFORE the scan that
+            // writes them, not after it. It used to sit at the bottom of the round, which was
+            // harmless while the round's tie state was two plain ints and became an
+            // IndexOutOfRangeException the moment it was a buffer write.
+            //
+            // Not player-specific: the record write is not behind #if UNITY_EDITOR, so this
+            // throws in the Editor too. _resultBuf.Length is max(commands.Length, 1), so three
+            // rounds against two commands is the smallest case that reaches it.
+            var parser = new VoxrCommandParser(
+                ShipSlot(),
+                new[] { ShipSib("set_mode", "mode"), ShipSib("set_level", "level") }
+            );
+
+            VoxrCommandResult[] results = null;
+            Assert.DoesNotThrow(
+                () => results = parser.Parse("set alpha on set alpha on set alpha on", null),
+                "an utterance with more extraction rounds than the result buffer holds"
+            );
+            Assert.AreEqual(2, results.Length, "extraction stops at the buffer, not past it");
         }
 
         [Test]

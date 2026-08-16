@@ -98,14 +98,13 @@ namespace VoXR.Commands
         // caught when these locals were hoisted out of the extraction loop.
         public int RivalCount;
 
-        // The ONE sibling set this question is about. A pattern can belong to several sets —
-        // ["a","b","c"] is a sibling of ["a","b","d"] at position 2 and of ["a","x","c"] at
-        // position 1 — so without fixing the set, an n-ary rival list could mix a rival that
-        // differs at position 2 with one that differs at position 1: two different questions,
-        // two different winner values, presented as one choice list.
-        public int SetId;
-
-        // The winner's own value in that set.
+        // The winner's own value in the ONE sibling set this question is about.
+        //
+        // The set's id is deliberately NOT carried here. It is round state, not a property of
+        // the answer — the "one question at a time" rule (a pattern can belong to several sets,
+        // so ["a","b","c"] is a sibling of ["a","b","d"] at position 2 and of ["a","x","c"] at
+        // position 1) is enforced while the round runs, and nothing downstream has any use for
+        // the id once the choices are fixed.
         public string WinnerValue;
 
         // Shared by every tied candidate, because CompareCandidate returns Tied only when
@@ -440,9 +439,8 @@ namespace VoXR.Commands
 #endif
             _cancelVocabularyIsOverridden =
                 effectiveCancelVocabulary != null && effectiveCancelVocabulary.Length > 0;
-            _effectiveCancelVocabulary = _cancelVocabularyIsOverridden
-                ? effectiveCancelVocabulary
-                : VoxrFollowUpVocabulary.DefaultCancel;
+            _effectiveCancelVocabulary = VoxrFollowUpVocabulary.Resolve(
+                effectiveCancelVocabulary, VoxrFollowUpVocabulary.DefaultCancel);
             // Rejects negatives and NaN, and also non-finite positives: at +infinity a
             // candidate with nothing unexplained computes 0 * infinity = NaN, and NaN slips
             // through every `<= 0f` floor because those comparisons are false for NaN.
@@ -605,15 +603,23 @@ namespace VoXR.Commands
 
             // Parallel to _resultBuf, and preallocated with it: the flush loop is the innermost
             // path over every (command, pattern, startIdx) triple, so recording a rival must not
-            // allocate there. Sized unconditionally rather than under _recordSiblingTies purely
-            // for constructor simplicity — the recording site's first conjunct is already
-            // _recordSiblingTies, so nothing can reach these when they are unallocated, and no
-            // hot-path null check would be needed either way.
-            _tiedSiblingBuf = new TiedSiblingRecord[_resultBuf.Length];
-            _tiedRivalBuf = new TiedSiblingRival[_resultBuf.Length * MaxDisambiguationRivals];
-            _rivalSlotBuf = new VoxrSlotMatch[
-                _resultBuf.Length * MaxDisambiguationRivals * _maxSlotsPerPattern
-            ];
+            // allocate there.
+            //
+            // Left NULL when nothing will record, which is what DR-7's "costs a flag-off player
+            // nothing" asks for at the rebuild as well as at the parse. _rivalSlotBuf is
+            // commands x 4 x maxSlots VoxrSlotMatch — tens of KB on a large grammar, re-made on
+            // every NotifySlotChanged() and never read. Every reader is downstream of
+            // _recordSiblingTies (the recording branch tests it first, and the recogniser only
+            // reaches TiedSiblingBuffer with disambiguateSiblingTies set, which is what makes
+            // _recordSiblingTies true in a player), so no hot-path null check is needed.
+            if (_recordSiblingTies)
+            {
+                _tiedSiblingBuf = new TiedSiblingRecord[_resultBuf.Length];
+                _tiedRivalBuf = new TiedSiblingRival[_resultBuf.Length * MaxDisambiguationRivals];
+                _rivalSlotBuf = new VoxrSlotMatch[
+                    _resultBuf.Length * MaxDisambiguationRivals * _maxSlotsPerPattern
+                ];
+            }
 
             // _canCommitEarly is computed lazily on the first eager check (issue #25), so
             // callers who leave eager flush off never pay the O(2^optionals)+O(forms^2)
@@ -1447,8 +1453,7 @@ namespace VoXR.Commands
                 // counterpart _DoesNotFire). Warning "the wrong intent can fire" there is
                 // false, and the remedy it offers is inert when no command fires at all.
                 //
-                // Judged against the DEFAULT, because the parser constructor is handed only
-                // (slots, commands, coverageWeight, additionalGrammarWords) and cannot see the
+                // Judged against the DEFAULT, because the parser constructor is never handed the
                 // recogniser's configured minScore. An author who lowers it below (D-1)/D
                 // makes these ties live and gets no warning — a real limitation, stated in
                 // KNOWN_LIMITATIONS rather than papered over. Erring the other way would put
@@ -2254,10 +2259,16 @@ namespace VoXR.Commands
                                 // given and will not be offered, so it is reported exactly as the
                                 // cap is (F19 — never silently truncated). This is what the
                                 // comment here used to promise and the code did not do.
-                                if (nameable && !sameQuestion)
+                                if (!nameable)
+                                {
+                                    // Nothing to record and nothing to report yet — see the
+                                    // Truncated resolution where the record is written.
+                                }
+                                else if (!sameQuestion)
+                                {
                                     tiedTruncated = true;
-
-                                if (nameable && sameQuestion)
+                                }
+                                else
                                     RecordTiedRival(
                                         ci,
                                         pi,
@@ -2308,20 +2319,27 @@ namespace VoXR.Commands
 
                 // Written BEFORE _resultCount advances, so index i of _tiedSiblingBuf describes
                 // index i of _resultBuf — the alignment the recogniser relies on when it walks
-                // the two in lockstep. Written unconditionally, including RivalCount = 0, so a
+                // the two in lockstep. Written on every round, including RivalCount = 0, so a
                 // round that found no tie clears whatever the previous round left here.
-                _tiedSiblingBuf[_resultCount] = new TiedSiblingRecord
+                //
+                // Under the same gate as the buffers themselves: with nothing recording, they
+                // are null and nothing downstream reads them.
+                if (_recordSiblingTies)
                 {
-                    RivalCount = tiedRivalCount,
-                    SetId = tiedSetId,
-                    WinnerValue = tiedWinnerValue,
-                    StartIdx = bestStartIdx,
+                    _tiedSiblingBuf[_resultCount] = new TiedSiblingRecord
+                    {
+                        RivalCount = tiedRivalCount,
+                        WinnerValue = tiedWinnerValue,
+                        StartIdx = bestStartIdx,
 
-                    // An unnameable rival only counts as truncation once a question is actually
-                    // being asked — otherwise the flush fires the winner and re-uttering is what
-                    // the speaker does regardless, which is what the flag would have told them.
-                    Truncated = tiedTruncated || (sawUnnameableRival && tiedRivalCount > 0),
-                };
+                        // An unnameable rival counts as truncation only once a question is
+                        // actually being asked — otherwise the flush fires the winner and
+                        // re-uttering is what the speaker does anyway, which is all the flag
+                        // would have told them. Resolved here rather than at the rejection so
+                        // the two rivals' arrival order cannot change the answer.
+                        Truncated = tiedTruncated || (sawUnnameableRival && tiedRivalCount > 0),
+                    };
+                }
 
                 _resultBuf[_resultCount++] = new VoxrCommandResult(command);
 #if UNITY_EDITOR
@@ -2491,7 +2509,7 @@ namespace VoXR.Commands
         // Rival n's intent, so the recogniser can resolve its definition before offering it as
         // a choice — and drop it from the list if that lookup fails.
         internal string RivalIntent(int resultIdx, int n) =>
-            _commands[_tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n].CommandIndex].Intent;
+            _commands[TiedRival(resultIdx, n).CommandIndex].Intent;
 
         // The command that fires if the speaker picks rival n — built here rather than in the
         // recogniser because _slotNames and the confidence span both live on this side.
@@ -2511,7 +2529,7 @@ namespace VoXR.Commands
             Dictionary<string, float> wordConfidence
         )
         {
-            var rival = _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n];
+            var rival = TiedRival(resultIdx, n);
             return new VoxrCommand(
                 _commands[rival.CommandIndex].Intent,
                 CopyRivalSlots(resultIdx, n),
