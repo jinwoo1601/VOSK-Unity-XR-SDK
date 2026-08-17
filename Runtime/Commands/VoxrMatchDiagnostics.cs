@@ -49,9 +49,29 @@ namespace VoXR.Commands
 
         public readonly bool IsAccepted;
 
+        /// <summary>
+        /// The equally-good rival this attempt beat on registration order alone, as
+        /// <c>intent (pattern N)</c>, or null when nothing tied it. Optional because most
+        /// attempts are not built from a parse round at all — a confirm/cancel resolution or a
+        /// pending timeout has no candidate set behind it.
+        /// </summary>
+        public readonly string TiedRival;
+
+        /// <summary>
+        /// Whether <see cref="TiedRival"/> was a sibling rival — one dropped word apart from the
+        /// winner, which is speech ambiguity the runtime can offer as a choice — rather than a
+        /// grammar-authoring hazard such as two duplicate patterns under different intents.
+        /// Meaningless when <see cref="TiedRival"/> is null.
+        /// </summary>
+        public readonly bool TiedRivalIsSibling;
+
         public VoxrMatchAttempt(string intent, string pattern, float score, float minScore,
             float aggregateConfidence, float minConfidence, VoxrDiagnosticSlotMatch[] slots,
-            string rejectReason, bool isAccepted)
+            string rejectReason,
+            bool isAccepted,
+            string tiedRival = null,
+            bool tiedRivalIsSibling = false
+        )
         {
             Intent = intent;
             Pattern = pattern;
@@ -62,6 +82,8 @@ namespace VoXR.Commands
             Slots = slots ?? Array.Empty<VoxrDiagnosticSlotMatch>();
             RejectReason = rejectReason;
             IsAccepted = isAccepted;
+            TiedRival = tiedRival;
+            TiedRivalIsSibling = tiedRivalIsSibling;
         }
     }
 

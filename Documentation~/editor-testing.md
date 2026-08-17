@@ -19,7 +19,7 @@ Open **Window > VoXR > Command Debug** during Play Mode to inspect the full comm
 
 - **Active command sets** -- which sets are currently loaded in the parser.
 - **Pending command** -- when a command is in pending state, shows the intent, reason (partial match, awaiting confirmation, or awaiting disambiguation, which also lists the words that answer it), filled slots, unfilled slots, and elapsed time since entering pending state.
-- **Last match breakdown** -- for each command extracted from the utterance, the pattern that won selection: intent, score, confidence, threshold pass/fail, and reject reason (if any). Losing candidates are not shown. Accepted commands are highlighted in green.
+- **Last match breakdown** -- for each command extracted from the utterance, the pattern that won selection: intent, score, confidence, threshold pass/fail, and reject reason (if any). Losing candidates are not shown. Accepted commands are highlighted in green. A **tie line** appears when the winner beat an equally-good rival on registration order alone -- naming the rival, and saying whether it was a *sibling* (one dropped word apart, which is what `disambiguateSiblingTies` answers) or *not a sibling*, which means duplicate or overlapping patterns in your grammar. Nothing else in the panel shows a tie: the winner is correct by every rule the parser has, so a coin flip and a clean victory look identical without it.
 - **Slot details** -- matched slot word positions (start/end indices) with per-slot confidence.
 - **Match history** -- scrolling list of the last 20 match results with timestamps.
 
