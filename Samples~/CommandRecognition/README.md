@@ -53,6 +53,11 @@ GameObjects:
 | `all modes` | All three sets active |
 | `disable all` | Grammar fully disabled for 5 s, then auto-restored by `CommandDemo` |
 
+The in-scene HelpText panel shows only a subset of this table and words one entry
+differently -- it lists `orient heading two seven zero` and omits `cease fire` --
+but both phrasings of the heading command and `cease fire` itself are registered,
+so everything above works whether or not it appears on screen.
+
 ## What the sample covers
 
 - **Slots**: targets, weapons, quantity, named ranges, plus digit-sequence slots

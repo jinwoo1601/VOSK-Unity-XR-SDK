@@ -994,7 +994,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 1
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: 'VOSK XR — Tactical Command Recognition'
+  m_Text: 'VoXR — Tactical Command Recognition'
 --- !u!1 &1200
 GameObject:
   m_ObjectHideFlags: 0

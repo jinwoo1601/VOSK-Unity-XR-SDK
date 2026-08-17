@@ -28,7 +28,7 @@ Configure each slot asset in the Inspector:
 - **Slot Type** -- `Enumerated` for fixed values, `NumberSequence` for digit words
 - **Values** (Enumerated only) -- the allowed slot values (e.g. `alpha one`, `bravo two`, `hotel one`)
 - **Aliases** -- variant-to-canonical mappings (e.g. `jackals` -> `jackal`)
-- **Min/Max Words** (NumberSequence only) -- range of digit words to consume
+- **Min/Max Words** (NumberSequence only) -- range of digit words to consume. **Min Words** must be at least 1 and **Max Words** at least Min Words. Neither field is range-limited in the Inspector, so a 0 left in Min Words throws `ArgumentOutOfRangeException` from `Awake()` when the asset is converted.
 
 ### 2. Create Command Assets
 
@@ -37,8 +37,23 @@ Select **Assets > Create > VoXR > Command Definition**.
 Configure each command asset:
 - **Intent** -- the intent name that fires in `OnCommandRecognised` (e.g. `launch_weapon`)
 - **Patterns** -- one or more pattern strings with space-separated tokens. Use the same syntax as the code API: `launch {?quantity} {weapon} target {target}`
+- **Allow Partial Match** -- when enabled, a match that left required slots unfilled enters pending state instead of being rejected, so follow-up speech can fill them. It is also the precondition for [both ways an incomplete command still fires](command-recognition.md#the-two-ways-an-incomplete-command-still-fires), so the handler must tolerate every required slot being absent.
+- **Requires Confirmation** -- when enabled, even a fully-matched command enters pending state and waits for an [explicit confirmation](command-recognition.md#explicit-confirmation) phrase before firing.
 
-Pattern strings are split on whitespace into token arrays at runtime. Each string entry represents one alternative pattern for the same intent.
+Each string entry represents one alternative pattern for the same intent. A token takes one of four forms:
+
+| Token | Meaning |
+|-------|---------|
+| `word` | A required literal word |
+| `{slot}` | A required slot |
+| `{?slot}` | An optional slot |
+| `?word` | An optional literal -- the word may be spoken or dropped without costing the match |
+
+The optional literal is the prescribed fix for a droppable function word, but it is not free: read [the two costs](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot) before applying it wholesale.
+
+Note where the `?` sits. For a slot it goes **inside** the braces: `?{slot}` is not an optional slot but a required literal spelled `?{slot}`, which no utterance can produce, so a pattern containing it never matches -- and nothing warns about the transposition.
+
+Pattern strings are split into token arrays at runtime on the **space character only**, not on whitespace in general, so a tab pasted into a pattern stays inside its token and yields a token that matches nothing.
 
 ### 3. Create Command Set Assets
 
@@ -52,11 +67,45 @@ Configure each set asset:
 
 Select the GameObject with your `VoxrCommandRecogniser` component and assign:
 
+- **Speech Recogniser** -- required. Drag in the `VoxrSpeechRecogniser` this component listens to. Left empty, `OnEnable()` returns without subscribing to any speech event, so no transcript ever reaches the parser and no command ever fires. Nothing is logged.
 - **Slot Assets** -- drag in all slot assets used by your commands
 - **Command Set Assets** -- drag in your command set assets
 - **Initial Active Set Names** -- enter the names of sets to activate on startup (e.g. `weapons`, `common`)
 
 `VoxrCommandRecogniser.Awake()` converts the assets to runtime structs and calls `Configure()` + `SetActiveSets()` automatically.
+
+**Both asset lists must be non-empty.** `Awake()` returns without converting anything if **Slot Assets** is empty, and again if **Command Set Assets** is empty -- so an empty Slot Assets list skips the command sets too, and neither `Configure()` nor `SetActiveSets()` runs. Nothing is logged either way, so the symptom is a recogniser that hears speech and recognises no commands at all. A slot-free grammar therefore cannot be authored through the Inspector; declare it with a `Configure()` call instead.
+
+---
+
+## Authoring warnings
+
+The parser inspects the grammar as it is built -- for Inspector authoring, during `Awake()` -- and logs `Debug.LogWarning` for the shapes below. Nothing is rejected; the recogniser runs either way.
+
+Four checks read slot values and alias variants, and they run **in player builds as well as the Editor**, so they show up in device logs too:
+
+- **Uppercase in a value** -- VOSK only ever emits lowercase, so the value can never match.
+- **Punctuation in a value** -- VOSK strips punctuation, so the value may not match as written.
+- **Single-character value** -- one character is too little for reliable recognition; declare an alias instead (`a` -> `one`).
+- **Single-character alias variant** -- same reason: very short words are recognised unreliably.
+
+Three more scan the patterns:
+
+- **Droppable required literal** -- a bare pattern plus a longer one that extends it with a required literal in front of a slot. Naming the literal and the slot at risk, it prescribes marking the literal optional (`?by`). Editor-only.
+- **Two intents separated by one word** -- two *different* intents differing at exactly one required word, which tie when that word is dropped, leaving registration order to pick the intent. Editor-only.
+- **More than 12 optional elements in one pattern** -- the eager-flush analysis cannot expand it, and is then abandoned for the **whole** command set: with `eagerFlushOnCompleteMatch` on, no command commits early and every complete match is held for the full hold or buffer window. Unlike the two above, this one fires in player builds as well.
+
+The two grammar-shape hazards, with their remedies and the limits of each scan, are covered in full under [Authoring hazards](command-recognition.md#authoring-hazards).
+
+---
+
+## Common errors
+
+These are thrown rather than logged, and all three surface from `VoxrCommandRecogniser.Awake()` -- one typo in an asset stops the component initialising:
+
+- **`ArgumentException: Pattern for intent 'X' references undefined slot 'Y'`** -- a pattern writes `{Y}` but no asset in **Slot Assets** carries that **Slot Name**. Names are matched exactly and case-sensitively.
+- **`ArgumentException: Unknown command set name: 'X'`** -- an entry in **Initial Active Set Names** matches no **Set Name** among the assigned **Command Set Assets**.
+- **`ArgumentException: Duplicate command set name: 'X'`** -- two assets in **Command Set Assets** declare the same **Set Name**. Set names must be unique within one recogniser.
 
 ---
 

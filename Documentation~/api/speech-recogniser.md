@@ -73,7 +73,7 @@ mode there is no such retry, so prefer the explicit `ReleaseNativeResources()` h
 |--------|-------------|
 | `Initialise()` | Extracts model (if needed) and initialises the native bridge. No-op if already initialised. Fire-and-forget async wrapper. |
 | `InitialiseAsync()` | `async Task`. Asynchronously initialises the native bridge with model loading. Rejected if another component already owns the bridge. |
-| `ReleaseNativeResources()` | Destroys the native bridge, frees all resources, and releases the bridge claim. Safe to call multiple times. No-op on a component that does not own the bridge. |
+| `ReleaseNativeResources()` | Frees this component's own resources unconditionally — the Editor backend, plus its `IsRecognising` and `IsModelReady` state — and drops the bridge claim if it holds it. The process-wide native bridge is destroyed too, *unless* another live component currently owns the claim; with no live owner, a call from a non-owner does destroy the bridge. Safe to call multiple times. |
 | `StartRecognition()` | Starts audio capture and recognition. Calls `Initialise()` if needed. Fire-and-forget async wrapper. |
 | `StartRecognitionAsync()` | `async Task`. Asynchronously starts recognition with permission handling. |
 | `StopRecognition()` | Stops audio capture. Model stays loaded for fast restart. |

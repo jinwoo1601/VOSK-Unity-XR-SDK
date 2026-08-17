@@ -4,6 +4,16 @@ Everything you need to install the SDK, set up a VOSK model, and get your first 
 
 ---
 
+## Requirements
+
+- **Unity 6 (6000.0+)** -- the package targets the Unity 6 runtime.
+- **Android arm64** for device builds -- the native bridge ships for that ABI only, so Quest 2/3/Pro and other Android arm64 headsets are the supported deployment targets.
+- **Windows Editor (x86_64)** for live-microphone testing in the Editor -- on macOS and Linux the Editor is limited to text injection.
+
+Full per-platform detail, including what is deferred and what is untested, is in the [platform support table](troubleshooting.md#platform-support).
+
+---
+
 ## Installation
 
 ### Via Git URL
@@ -40,7 +50,7 @@ The SDK does not include VOSK models. You must download one separately.
 2. Download `vosk-model-small-en-us-0.15` (~50 MB) or another compatible model.
 3. Place the `.zip` archive at `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`.
 
-The SDK extracts the model to `Application.persistentDataPath` on first launch. Subsequent launches use the cached extraction. The extraction uses an atomic rename pattern to prevent corruption from interrupted extractions.
+The SDK extracts the model to `Application.persistentDataPath/VoxrModels/<modelName>` on first launch, where `<modelName>` is the archive's file name without the `.zip`. Subsequent launches use the cached extraction. Extraction unpacks to a temporary sibling folder and finishes with an atomic rename, so an interrupted extraction cannot leave a half-written cache behind.
 
 Any VOSK-compatible model works. Larger models improve accuracy at the cost of memory and download size.
 
@@ -51,13 +61,17 @@ The SDK validates extracted models by checking for:
 - `conf/mfcc.conf`
 - `graph/` directory
 
-If validation fails, the SDK deletes the corrupt cache and re-extracts on next launch.
+If an existing cache fails validation, the SDK deletes it and re-extracts immediately, within the same call -- no restart is needed to recover a bad cache.
+
+If the freshly extracted copy fails validation, the archive itself is the problem: the SDK deletes the partial extraction, raises `ModelLoadFailed`, and returns no model. That repeats on **every** launch -- there is no next-launch self-heal for a corrupt archive. Replace the `.zip` in `StreamingAssets` to fix it.
 
 ---
 
 ## Quick Start -- Transcription
 
-Attach a `VoxrSpeechRecogniser` component to a GameObject, then subscribe to its events:
+Attach a `VoxrSpeechRecogniser` component to a GameObject (**Add Component > VoXR > Speech Recogniser**), then drag that component into the script's `recogniser` field in the Inspector. The field is a serialised reference and nothing looks the component up for you -- an unassigned field throws a `NullReferenceException` on the first event subscription.
+
+With the reference assigned, subscribe to its events:
 
 ```csharp
 using UnityEngine;
@@ -93,7 +107,7 @@ public class VoiceDemo : MonoBehaviour
 
 ## Quick Start -- Commands
 
-Add a `VoxrCommandRecogniser` component alongside your `VoxrSpeechRecogniser`. Define slots (allowed values) and commands (patterns that reference those slots):
+Add a `VoxrCommandRecogniser` component alongside your `VoxrSpeechRecogniser` (**Add Component > VoXR > Command Recogniser**), and drag **both** components into the script's serialised fields in the Inspector -- as above, neither is resolved automatically. Then define slots (allowed values) and commands (patterns that reference those slots):
 
 ```csharp
 using UnityEngine;

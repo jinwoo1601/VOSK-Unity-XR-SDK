@@ -2,7 +2,7 @@
 
 `public class VoxrBatchTestRunner` -- Namespace: `VoXR.Testing`
 
-Pure C# runner for regression-testing command definitions. No MonoBehaviour dependency and no audio hardware required. Instantiates a `VoxrCommandParser` directly (the same path that `InjectText` uses internally).
+Pure C# runner for regression-testing command definitions. No MonoBehaviour dependency and no audio hardware required. Drives an internal parser instance directly -- the same path that `InjectText` uses internally.
 
 ## Constructors
 
@@ -11,7 +11,7 @@ Pure C# runner for regression-testing command definitions. No MonoBehaviour depe
 | `VoxrBatchTestRunner(slots, commands, minScore, minConfidence, coverageWeight)` | All commands active as a flat list. |
 | `VoxrBatchTestRunner(slots, sets, activeSetNames, minScore, minConfidence, coverageWeight)` | Named command sets with explicit active set selection. |
 
-All three thresholds are optional and default to the recogniser's own (`minScore` `0.6`, `minConfidence` `0.4`, `coverageWeight` `1.0`). Pass the values your `VoxrCommandRecogniser` uses if you have tuned them, so batch results track runtime behaviour. `coverageWeight` was named `skippedWordPenalty` before #65 — a **named**-argument caller must update; positional callers are unaffected.
+All three tuning parameters are optional. Two of them are gates -- `minScore` and `minConfidence` -- while `coverageWeight` is not a gate but the weight charged for recognised words a match leaves unexplained. They default to `0.6`, `0.4`, and `1.0`, which are the recogniser's defaults today; but the runner's `minScore` and `minConfidence` defaults are its own literals rather than the recogniser's, so the two can drift apart. Only `coverageWeight` defaults from the parser's shared constant. Pass the values your `VoxrCommandRecogniser` uses rather than relying on the defaults matching, so batch results track runtime behaviour. `coverageWeight` was named `skippedWordPenalty` before #65 — a **named**-argument caller must update; positional callers are unaffected.
 
 > **Batch scores are a lower bound, not the runtime score.** [Coverage](../scoring.md#2-coverage) exempts the literal `[unk]` token, which is what a grammar-constrained decoder returns for a word outside its vocabulary. This runner receives real text instead, so a trailing word the decoder would have hidden arrives verbatim and is charged: "cease fire please" scores `2 / (2 + 1)` = `0.67` here against `1.00` through the live decoder. Expect batch scores at or below what the same utterance gets at runtime, and treat a batch regression on a grammar whose users add natural filler with that in mind.
 
@@ -41,14 +41,14 @@ Aggregated results from `RunAll`.
 
 `public class VoxrTestResult` -- Namespace: `VoXR.Testing`
 
-Result of running a single `VoxrTestCase` through the batch test runner.
+Result of running a single `VoxrTestCase` through the batch test runner. One result covers the whole utterance even when the parser extracted several commands from it: the fields describe the round that was accepted, or the strongest rejected round when none was — so a case cannot assert a second extracted intent.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `TestCase` | `VoxrTestCase` | The test case that produced this result. |
 | `ActualIntent` | `string` | The intent that was accepted, or null if no command passed thresholds. |
-| `ActualSlots` | `VoxrSlotMatch[]` | Slot matches from the accepted command. |
-| `Score` | `float` | Best match score from the parser (0 if no match). |
+| `ActualSlots` | `VoxrSlotMatch[]` | Slot matches from the accepted command. Never null — an empty array when nothing was accepted or the accepted command took no slots. |
+| `Score` | `float` | The score of the round that was **accepted** — the runner stops at the first round clearing the gates, so this is not the highest score seen. When nothing was accepted it is the highest score among the rejected rounds, and `0` when nothing matched at all. |
 | `Confidence` | `float` | Minimum word confidence across matched tokens (-1 if unavailable). |
 | `Passed` | `bool` | True if the actual result matches expectations. |
 | `FailureReason` | `string` | Human-readable failure reason, or null if passed. |
@@ -93,7 +93,7 @@ Test cases can be authored in JSON for portability and version control:
 }
 ```
 
-Use `VoxrTestSuiteAsset.ToJson()` and `VoxrTestSuiteAsset.FromJson()` to import/export.
+Use `VoxrTestSuiteAsset.ToJson()` and `VoxrTestSuiteAsset.FromJson()` to import/export from code. The [Batch Test Runner window](../editor-testing.md#batch-test-runner) exposes the same two calls as its **Import JSON** / **Export JSON** buttons, so a suite can be moved in and out without writing any.
 
 ## See Also
 

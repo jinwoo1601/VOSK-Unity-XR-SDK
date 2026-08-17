@@ -34,7 +34,7 @@ the `EventSystem` GameObject with `Standalone Input Module`, and edit
 | GameObject | Role |
 |---|---|
 | `Recogniser` | `VoxrSpeechRecogniser` |
-| `Controller` | `VoxrPushToTalkController` with `Listening Mode = PushToTalk` and `Initialise On Start = true` so the model pre-warms before the first press |
+| `Controller` | `VoxrPushToTalkController` with `Listening Mode = PushToTalk`, `Initialise On Start = true` so the model pre-warms before the first press, and `Cancel Pending On Release` off. Enabled, it makes a release flush the utterance buffer and then cancel any pending command on the linked command recogniser -- including a pending disambiguation question |
 | `PushToTalkDemo` | Wires `Space` / `Tab` keyboard input, drives the recording indicator colour, and updates the mode label |
 | `Canvas/HoldToTalkButton` | `Image` raycast target with the small `HoldToTalkButton` component. Its `onPointerDown` UnityEvent calls `Controller.PressTalk()`, and `onPointerUp` calls `Controller.ReleaseTalk()` |
 | `Canvas/RecordingIndicator` | Square `Image` whose colour is set by `PushToTalkDemo.ShowRecording`/`ShowIdle` (subscribed to `OnTalkStarted` / `OnTalkEnded`) |

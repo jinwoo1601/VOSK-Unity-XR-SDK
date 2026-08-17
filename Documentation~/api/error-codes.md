@@ -8,7 +8,7 @@ Error codes reported by the native bridge via `VoxrSpeechRecogniser.OnError`.
 
 | Value | Int | Description |
 |-------|-----|-------------|
-| `Ok` | 0 | Success |
+| `Ok` | 0 | Success -- returned by bridge calls, never delivered through `OnError` |
 | `ModelLoadFailed` | 1 | VOSK model failed to load |
 | `AudioDeviceUnavailable` | 2 | Audio input device could not be opened |
 | `PermissionDenied` | 3 | RECORD_AUDIO permission not granted |
@@ -20,7 +20,9 @@ Error codes reported by the native bridge via `VoxrSpeechRecogniser.OnError`.
 
 ## Extension Method
 
-`ToDescription()` returns a human-readable string for each code.
+`public static class VoxrBridgeErrorCodeExtensions` -- Namespace: `VoXR`
+
+`public static string ToDescription(this VoxrBridgeErrorCode code)` returns a human-readable string for each code. A value outside the enum falls back to `"Unknown error code (N)"`, with `N` the integer value.
 
 > `NotRunning` is reported by the bridge's push-audio seam (`vosk_bridge_push_audio`, a verification-only API with no managed caller yet). Unlike every other bridge call, that function returns error codes **negated** (negative values), reserving the non-negative range for sample counts — it never surfaces through `OnError`.
 

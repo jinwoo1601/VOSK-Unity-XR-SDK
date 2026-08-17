@@ -38,7 +38,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 - Batch test runner for regression-testing command definitions -- visual results table, CSV export, CI-safe pure-C# API
 - Text injection API for Editor testing, CI, and replay without audio hardware
 - Live microphone in the Windows Editor -- speak into your PC mic, see commands fire in the Console
-- Extensively tested on Quest 3 with published test matrices for every release
+- Manually verified on Quest 3 hardware before every release -- on-device checks are hands-on, and no test-matrix artefact is published
 
 ## Requirements
 
@@ -72,15 +72,13 @@ https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.4.0
 
 ## Model Setup
 
-The SDK does not bundle a VOSK model. You must download one separately:
+The SDK does not bundle a VOSK model. Download [vosk-model-small-en-us-0.15](https://alphacephei.com/vosk/models) (~50 MB) and place the `.zip` archive at `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`; any VOSK-compatible model works, with larger ones trading memory and download size for accuracy.
 
-1. Download [vosk-model-small-en-us-0.15](https://alphacephei.com/vosk/models) (~50 MB).
-2. Place the `.zip` archive in your Unity project at `Assets/StreamingAssets/vosk-model-small-en-us-0.15.zip`.
-3. The SDK extracts it to persistent storage on first launch.
-
-Any VOSK-compatible model works. Larger models improve accuracy at the cost of memory and download size.
+The cache path, the atomic extraction, model validation, and what happens when an archive is corrupt: [Model Setup](Documentation~/getting-started.md#model-setup).
 
 ## Quick Start -- Basic Transcription
+
+Attach a `VoxrSpeechRecogniser` component to a GameObject (**Add Component > VoXR > Speech Recogniser**), then drag it into the script's `recogniser` field in the Inspector -- the field is a serialised reference and nothing resolves it for you.
 
 ```csharp
 using UnityEngine;
@@ -111,6 +109,8 @@ public class VoiceDemo : MonoBehaviour
 ```
 
 ## Quick Start -- Command Recognition
+
+Add a `VoxrCommandRecogniser` alongside the speech recogniser (**Add Component > VoXR > Command Recogniser**) and assign **both** components to the script's serialised fields in the Inspector.
 
 ```csharp
 using System.Collections.Generic;
@@ -166,7 +166,7 @@ For full documentation, see the [documentation index](Documentation~/index.md).
 - [Inspector Authoring](Documentation~/inspector-authoring.md) -- zero-code ScriptableObject setup
 - [Editor Testing](Documentation~/editor-testing.md) -- debug window, session debug log, live mic, text injection, batch runner
 - [Push-to-Talk](Documentation~/push-to-talk.md) -- PTT pattern and error handling
-- [API Reference](Documentation~/api/speech-recogniser.md) -- full API documentation
+- [API Reference](Documentation~/index.md#api-reference) -- per-type reference for all eight public API pages
 - [Troubleshooting](Documentation~/troubleshooting.md) -- common issues and platform support
 
 ## Samples
@@ -184,7 +184,7 @@ Import samples via **Package Manager > VoXR Speech Recognition > Samples**.
 ```
 VoxrSpeechRecogniser          -- MonoBehaviour, owns the native lifecycle
   |
-  |-- [Android] BridgeNative  -- JNI -> C++ bridge -> AudioRecord + libvosk.so
+  |-- [Android] BridgeNative  -- P/Invoke -> C++ bridge -> JNI AudioRecord + libvosk.so
   |-- [Editor]  EditorMicBackend -- UnityEngine.Microphone -> C# DSP -> libvosk.dll P/Invoke
   |
   +-- Events: OnPartialResult, OnFinalResult, OnResult, OnError

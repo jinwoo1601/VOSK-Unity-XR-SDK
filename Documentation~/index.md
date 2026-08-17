@@ -21,7 +21,7 @@ Offline speech recognition and voice command parsing for Unity XR applications. 
 
 - [VoxrSpeechRecogniser](api/speech-recogniser.md) -- Core speech recognition component: events, properties, methods
 - [VoxrCommandRecogniser](api/command-recogniser.md) -- Command parsing component: configuration, events, injection
-- [Data Types](api/data-types.md) -- VoxrResult, VoxrWord, VoxrCommand, and related structs
+- [Data Types](api/data-types.md) -- VoxrResult, VoxrWord, VoxrCommand, VoxrPendingAmbiguity, VoxrListeningMode, and related structs and enums
 - [Command Definitions](api/command-definitions.md) -- VoxrCommandDefinition, VoxrSlotDefinition, VoxrCommandSet
 - [ScriptableObject Assets](api/scriptable-objects.md) -- VoxrSlotAsset, VoxrCommandAsset, VoxrCommandSetAsset, VoxrTestSuiteAsset, VoxrAudioTestSuiteAsset
 - [VoxrNumberParser](api/number-parser.md) -- Digit word to integer conversion
