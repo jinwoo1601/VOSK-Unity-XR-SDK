@@ -57,10 +57,10 @@ Setter semantics:
 | `Listening Mode`              | Initial mode (`PushToTalk` or `Continuous`). Can be changed at runtime via the property. |
 | `Initialise On Start`         | When enabled, calls `VoxrSpeechRecogniser.Initialise()` in `Start` so the model is pre-warmed before the first press. |
 | `Cancel Pending On Release`   | When enabled, `ReleaseTalk` also cancels any pending command on the command recogniser (see below). Does nothing unless the optional `Command Recogniser` reference is assigned — the cancel runs inside the same guard as the flush. |
-| `On Talk Started`             | `UnityEvent` fired when the controller starts recognition: from `PressTalk()`, or from a runtime switch to `Continuous`. Not fired for a scene that starts in `Continuous` — see the note below. |
+| `On Talk Started`             | `UnityEvent` fired whenever the controller starts recognition: from `PressTalk()`, from a runtime switch to `Continuous`, or when a scene authored on `Continuous` is first enabled. |
 | `On Talk Ended`               | `UnityEvent` fired when recognition ends (release, or switch from Continuous).          |
 
-**A scene that starts in `Continuous` does not fire `On Talk Started`.** The event is invoked in exactly two places: `PressTalk()`, and the `ListeningMode` setter when the mode *changes* to `Continuous` at runtime. When `Listening Mode` is already set to `Continuous` in the Inspector, `Awake` records the intent and `OnEnable` starts recognition without invoking the event — so recognition is running while a recording indicator wired only to `On Talk Started` stays dark. Drive startup indicators off recognition state (`VoxrSpeechRecogniser.IsRecognising`) rather than off the event, or leave the Inspector on `PushToTalk` and assign `ListeningMode = VoxrListeningMode.Continuous` from your own `Start()`, which is a change and therefore does fire it.
+**Subscribe before enable to catch the `Continuous` startup event.** A scene authored with `Listening Mode = Continuous` fires `On Talk Started` from the controller's `OnEnable`, during scene load. Listeners wired in the Inspector always receive it, because they are serialized with the component — that is the recommended way to drive a recording indicator. A listener added from code receives it only if it subscribed before the controller was enabled, so `OnTalkStarted.AddListener(...)` from another component's `OnEnable` or `Start` is too late. Either wire the event in the Inspector, or keep the GameObject inactive until you have subscribed and then activate it. (`PushToTalk` scenes are unaffected: the first event follows a button press, long after any listener has registered.)
 
 ## Public API
 
@@ -93,6 +93,7 @@ The controller reconciles this in `Update`: if it observes `IsRecognising == tru
 ## Lifecycle
 
 - `OnDisable` / `OnApplicationPause(true)` stop recognition but preserve the want-to-recognise flag, so `OnEnable` / `OnApplicationPause(false)` resume silently without re-firing `OnTalkStarted`. This matters for Continuous mode: a disable/enable cycle (or the Quest home overlay) otherwise drops Continuous listening entirely.
+- The one enable that is *not* silent is the first one in a scene authored on `Continuous`. There is no press and no mode change to carry the intent, so that enable is where wanting to recognise begins — and it fires `OnTalkStarted` like any other start. Every enable after it resumes silently under the rule above.
 
 ---
 

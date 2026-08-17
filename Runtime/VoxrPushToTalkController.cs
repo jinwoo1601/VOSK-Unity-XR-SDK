@@ -115,12 +115,6 @@ namespace VoXR
             _onTalkEnded?.Invoke();
         }
 
-        void Awake()
-        {
-            if (_listeningMode == VoxrListeningMode.Continuous)
-                _wantRecognising = true;
-        }
-
         void Start()
         {
             if (_initialiseOnStart && _speechRecogniser != null)
@@ -129,6 +123,26 @@ namespace VoXR
 
         void OnEnable()
         {
+            // A scene authored on Continuous has no press and no mode change to carry the
+            // intent, so enabling is where it begins — and therefore where it announces,
+            // like every other transition into wanting to recognise. Recording the intent
+            // here rather than in Awake is what keeps the announcement paired with the
+            // StartRecognition() that earns it.
+            if (_listeningMode == VoxrListeningMode.Continuous && !_wantRecognising)
+            {
+                _wantRecognising = true;
+
+                if (_speechRecogniser != null)
+                {
+                    _speechRecogniser.StartRecognition();
+                    _onTalkStarted?.Invoke();
+                }
+
+                return;
+            }
+
+            // Resuming an intent that predates this enable: silent, so a disable/enable
+            // cycle (or the Quest home overlay) does not re-fire OnTalkStarted.
             if (_wantRecognising && _speechRecogniser != null)
                 _speechRecogniser.StartRecognition();
         }
@@ -164,8 +178,24 @@ namespace VoXR
         }
 
         internal VoxrSpeechRecogniser SpeechRecogniser { set => _speechRecogniser = value; }
-        internal VoxrCommandRecogniser CommandRecogniser { set => _commandRecogniser = value; }
-        internal bool InitialiseOnStart { set => _initialiseOnStart = value; }
-        internal bool CancelPendingOnRelease { set => _cancelPendingOnRelease = value; }
+        internal VoxrCommandRecogniser CommandRecogniser
+        {
+            set => _commandRecogniser = value;
+        }
+        internal bool InitialiseOnStart
+        {
+            set => _initialiseOnStart = value;
+        }
+        internal bool CancelPendingOnRelease
+        {
+            set => _cancelPendingOnRelease = value;
+        }
+
+        // Writes the serialized mode the way the Inspector does, bypassing the ListeningMode
+        // setter's start/stop and events, so a test can author Continuous before OnEnable runs.
+        internal VoxrListeningMode InitialMode
+        {
+            set => _listeningMode = value;
+        }
     }
 }
