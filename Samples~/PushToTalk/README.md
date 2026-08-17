@@ -97,6 +97,14 @@ controller.ListeningMode = VoxrListeningMode.PushToTalk;
 Switching to `Continuous` fires `OnTalkStarted`; switching away while
 recognising fires `OnTalkEnded`. Setting the same mode twice is a no-op.
 
+`PushToTalkDemo` subscribes to both events in its own `OnEnable`, which is safe
+here because the scene ships in push-to-talk mode — the first event follows a
+button press, long after the subscription. If you re-author the scene to *start*
+in `Continuous`, that subscription is too late to catch the startup
+`OnTalkStarted`, which fires from the controller's own `OnEnable`. Wire the
+event in the Inspector instead, or see the
+[Push-to-Talk guide](../../Documentation~/push-to-talk.md) for the other two options.
+
 ## See Also
 
 - [Push-to-Talk guide](../../Documentation~/push-to-talk.md) — full component reference and the manual (low-level) pattern

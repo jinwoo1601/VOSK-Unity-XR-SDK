@@ -124,9 +124,9 @@ namespace VoXR.Tests.Runtime
         //
         // Assert rather than Assume, unlike the other preconditions in this file: this is
         // the only check anywhere in Tests~ that continuous mode starts recognition at all.
-        // VoxrPushToTalkController.cs:59 is a separate statement from the :60 event that
+        // VoxrPushToTalkController.cs:68 is a separate statement from the :69 event that
         // the sibling ListeningMode_SetToContinuous_FiresOnTalkStarted covers, so deleting
-        // :59 is invisible everywhere else. An unsatisfied Assume reports Inconclusive,
+        // :68 is invisible everywhere else. An unsatisfied Assume reports Inconclusive,
         // which this project's failed="0" green criterion would report as a pass.
         void ArrangeContinuousAndRunning()
         {
@@ -200,11 +200,11 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void Pause_WithNullRecogniser_IsNoOp()
         {
-            // The guard at VoxrPushToTalkController.cs:135 only carries weight when the
+            // The guard at VoxrPushToTalkController.cs:158 only carries weight when the
             // user still wants recognition: both branches of the state machine are gated
-            // on _wantRecognising (:139, :144), so from the PushToTalk-idle default this
+            // on _wantRecognising (:162, :167), so from the PushToTalk-idle default this
             // test would pass with the whole method body deleted. Arrange the wanting
-            // state first, then drop the reference — now deleting :135 dereferences null
+            // state first, then drop the reference — now deleting :158 dereferences null
             // on the pause branch and again on the resume branch.
             ArrangeContinuousAndRunning();
             _controller.SpeechRecogniser = null;
@@ -250,7 +250,7 @@ namespace VoXR.Tests.Runtime
         public void Resume_WhenAlreadyRecognising_DoesNotDoubleStart()
         {
             // A resume that arrives while the session is still up — the guard at
-            // VoxrPushToTalkController.cs:144 is the only thing preventing a second
+            // VoxrPushToTalkController.cs:167 is the only thing preventing a second
             // native start, and only a call count can prove it held.
             ArrangeContinuousAndRunning();
 
@@ -313,7 +313,7 @@ namespace VoXR.Tests.Runtime
                 "Precondition: resume should have restarted"
             );
 
-            // Let Update() run the reconciliation (VoxrPushToTalkController.cs:149-155).
+            // Let Update() run the reconciliation (VoxrPushToTalkController.cs:172-178).
             yield return null;
             yield return null;
 

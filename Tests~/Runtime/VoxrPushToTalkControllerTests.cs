@@ -14,6 +14,9 @@ namespace VoXR.Tests.Runtime
         VoxrSpeechRecogniser _speech;
         VoxrCommandRecogniser _command;
 
+        // Only the authored-Continuous tests build this one; see AuthorContinuousInactive.
+        GameObject _authoredGo;
+
         int _startedCount;
         int _endedCount;
 
@@ -41,6 +44,9 @@ namespace VoXR.Tests.Runtime
         {
             if (_go != null)
                 Object.DestroyImmediate(_go);
+            if (_authoredGo != null)
+                Object.DestroyImmediate(_authoredGo);
+            _authoredGo = null;
         }
 
         // -------- Fixtures --------
@@ -255,6 +261,151 @@ namespace VoXR.Tests.Runtime
             _controller.enabled = true;
 
             Assert.AreEqual(startedBefore, _startedCount);
+        }
+
+        // -------- Authored Continuous (issue #109) --------
+
+        // Authoring Continuous in the Inspector is not the same as assigning ListeningMode at
+        // runtime, and the difference is the whole bug: the field is already Continuous when
+        // OnEnable first runs, so no press and no mode change ever announce the start. The
+        // property setter every other test here uses cannot reproduce that, because it *is* a
+        // change. Building the object inactive is what holds Awake/OnEnable back until the
+        // mode and the references are in place; the caller activates it to fire them.
+        //
+        // componentEnabled mirrors the component's own Inspector checkbox, which serializes
+        // independently of the GameObject. It is a distinct axis from SetActive: Unity runs
+        // Awake on a disabled component of an active GameObject but never OnEnable, so the
+        // two states diverge — see AuthoredContinuous_ComponentDisabled_* below.
+        VoxrPushToTalkController AuthorContinuousInactive(bool componentEnabled = true)
+        {
+            _authoredGo = new GameObject("AuthoredContinuousPTT");
+            _authoredGo.SetActive(false);
+
+            var speech = _authoredGo.AddComponent<VoxrSpeechRecogniser>();
+            var controller = _authoredGo.AddComponent<VoxrPushToTalkController>();
+
+            controller.SpeechRecogniser = speech;
+            controller.InitialiseOnStart = false;
+            controller.InitialMode = VoxrListeningMode.Continuous;
+            controller.enabled = componentEnabled;
+
+            return controller;
+        }
+
+        [Test]
+        public void AuthoredContinuous_FirstEnable_FiresOnTalkStarted()
+        {
+            var controller = AuthorContinuousInactive();
+            int started = 0;
+            int ended = 0;
+            controller.OnTalkStarted.AddListener(() => started++);
+            controller.OnTalkEnded.AddListener(() => ended++);
+
+            _authoredGo.SetActive(true);
+
+            Assert.AreEqual(
+                1,
+                started,
+                "A scene authored on Continuous starts recognition on enable, so it must "
+                    + "announce it exactly once — an indicator wired only to OnTalkStarted is "
+                    + "otherwise dark while the mic is live"
+            );
+            Assert.AreEqual(0, ended);
+        }
+
+        [Test]
+        public void AuthoredContinuous_DisableEnableCycle_DoesNotRefireOnTalkStarted()
+        {
+            var controller = AuthorContinuousInactive();
+            int started = 0;
+            controller.OnTalkStarted.AddListener(() => started++);
+
+            _authoredGo.SetActive(true);
+            Assume.That(started, Is.EqualTo(1), "Precondition: the authored start announced once");
+
+            controller.enabled = false;
+            controller.enabled = true;
+
+            Assert.AreEqual(
+                1,
+                started,
+                "The startup announcement is a one-off: a lifecycle resume must stay silent, "
+                    + "exactly as it does for a press or a runtime switch to Continuous"
+            );
+        }
+
+        [Test]
+        public void AuthoredContinuous_ThenSwitchToPushToTalk_FiresOnTalkEndedOnce()
+        {
+            var controller = AuthorContinuousInactive();
+            int ended = 0;
+            controller.OnTalkEnded.AddListener(() => ended++);
+
+            _authoredGo.SetActive(true);
+            controller.ListeningMode = VoxrListeningMode.PushToTalk;
+
+            Assert.AreEqual(
+                1,
+                ended,
+                "Proves the authored enable recorded the want-to-recognise flag, not just "
+                    + "the event — the switch away only stops and fires when that flag is set"
+            );
+        }
+
+        // The two tests below pin the one state where this change is not purely additive.
+        // Before it, Awake recorded the want-to-recognise flag for ANY authored-Continuous
+        // component, enabled or not, because Unity runs Awake on a disabled component of an
+        // active GameObject. The flag now rises in OnEnable, which such a component never
+        // reaches — so it stays down until the checkbox is ticked. That was chosen, not
+        // overlooked: the flag's only pre-enable reader is the ListeningMode setter, and what
+        // it did with it was fire an OnTalkEnded that no OnTalkStarted ever paired with, on a
+        // recogniser that had never been started.
+
+        [Test]
+        public void AuthoredContinuous_ComponentDisabled_AnnouncesOnlyWhenEnabled()
+        {
+            var controller = AuthorContinuousInactive(componentEnabled: false);
+            int started = 0;
+            int ended = 0;
+            controller.OnTalkStarted.AddListener(() => started++);
+            controller.OnTalkEnded.AddListener(() => ended++);
+
+            _authoredGo.SetActive(true);
+
+            Assert.AreEqual(
+                0,
+                started,
+                "A disabled component starts no recognition, so it must announce nothing — "
+                    + "activating the GameObject does not reach OnEnable"
+            );
+
+            controller.enabled = true;
+
+            Assert.AreEqual(
+                1,
+                started,
+                "Ticking the checkbox is where recognition actually begins, so that is where "
+                    + "the announcement belongs — deferred, not lost"
+            );
+            Assert.AreEqual(0, ended);
+        }
+
+        [Test]
+        public void AuthoredContinuous_ComponentDisabled_SwitchToPushToTalkIsSilent()
+        {
+            var controller = AuthorContinuousInactive(componentEnabled: false);
+            int ended = 0;
+            controller.OnTalkEnded.AddListener(() => ended++);
+
+            _authoredGo.SetActive(true);
+            controller.ListeningMode = VoxrListeningMode.PushToTalk;
+
+            Assert.AreEqual(
+                0,
+                ended,
+                "Switching away before the component was ever enabled must be silent: nothing "
+                    + "had started, and nothing had announced a start for this to pair with"
+            );
         }
 
         [UnityTest]
