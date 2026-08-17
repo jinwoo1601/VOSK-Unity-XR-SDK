@@ -442,11 +442,31 @@ namespace VoXR.Commands
             if (_slots != null)
                 return;
 
-            if (slotAssets == null || slotAssets.Length == 0)
-                return;
-
+            // An empty Slot Assets array is a legitimate all-literal grammar, so only a null
+            // array skips conversion. Either skip warns when the other array carries assets:
+            // silence there is indistinguishable from a recogniser that never hears anything.
             if (commandSetAssets == null || commandSetAssets.Length == 0)
+            {
+                if (slotAssets != null && slotAssets.Length > 0)
+                {
+                    Debug.LogWarning(
+                        "[VoxrCommandRecogniser] Slot assets are assigned but "
+                            + "Command Set Assets is empty — skipping Inspector conversion, so no "
+                            + "command will be recognised."
+                    );
+                }
                 return;
+            }
+
+            if (slotAssets == null)
+            {
+                Debug.LogWarning(
+                    "[VoxrCommandRecogniser] Command set assets are assigned but "
+                        + "Slot Assets is null — skipping Inspector conversion, so no command will "
+                        + "be recognised."
+                );
+                return;
+            }
 
             var slotList = new List<VoxrSlotDefinition>(slotAssets.Length);
             for (int i = 0; i < slotAssets.Length; i++)

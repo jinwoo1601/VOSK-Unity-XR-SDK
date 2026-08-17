@@ -68,13 +68,13 @@ Configure each set asset:
 Select the GameObject with your `VoxrCommandRecogniser` component and assign:
 
 - **Speech Recogniser** -- required. Drag in the `VoxrSpeechRecogniser` this component listens to. Left empty, `OnEnable()` returns without subscribing to any speech event, so no transcript ever reaches the parser and no command ever fires. Nothing is logged.
-- **Slot Assets** -- drag in all slot assets used by your commands
+- **Slot Assets** -- drag in all slot assets used by your commands. Leave the list empty for an all-literal grammar that declares no slots.
 - **Command Set Assets** -- drag in your command set assets
 - **Initial Active Set Names** -- enter the names of sets to activate on startup (e.g. `weapons`, `common`)
 
 `VoxrCommandRecogniser.Awake()` converts the assets to runtime structs and calls `Configure()` + `SetActiveSets()` automatically.
 
-**Both asset lists must be non-empty.** `Awake()` returns without converting anything if **Slot Assets** is empty, and again if **Command Set Assets** is empty -- so an empty Slot Assets list skips the command sets too, and neither `Configure()` nor `SetActiveSets()` runs. Nothing is logged either way, so the symptom is a recogniser that hears speech and recognises no commands at all. A slot-free grammar therefore cannot be authored through the Inspector; declare it with a `Configure()` call instead.
+**Command Set Assets must be non-empty; Slot Assets need not be.** An empty **Slot Assets** list converts normally with zero slots, so an all-literal grammar (`cease fire`, `weapons mode`) can be authored entirely in the Inspector. **Command Set Assets** is what carries the commands, so an empty list leaves `Awake()` with nothing to convert: neither `Configure()` nor `SetActiveSets()` runs, and the symptom is a recogniser that hears speech and recognises no commands at all. Whenever one list is populated and the conversion is skipped anyway, a `Debug.LogWarning` names which list is at fault. With *neither* list assigned nothing is logged -- that is the code-driven case, where `Configure()` is expected to follow.
 
 ---
 

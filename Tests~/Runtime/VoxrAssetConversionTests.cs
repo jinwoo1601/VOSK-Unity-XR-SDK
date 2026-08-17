@@ -1,12 +1,33 @@
 using System;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using VoXR.Commands;
 
 namespace VoXR.Tests.Runtime
 {
     public class VoxrAssetConversionTests
     {
+        GameObject _recogniserObject;
+        VoxrSlotAsset _slotAsset;
+        VoxrCommandSetAsset _setAsset;
+        VoxrCommandAsset _commandAsset;
+
+        [TearDown]
+        public void DestroyInspectorFixtures()
+        {
+            if (_recogniserObject != null)
+                UnityEngine.Object.DestroyImmediate(_recogniserObject);
+            if (_setAsset != null)
+                UnityEngine.Object.DestroyImmediate(_setAsset);
+            if (_commandAsset != null)
+                UnityEngine.Object.DestroyImmediate(_commandAsset);
+            if (_slotAsset != null)
+                UnityEngine.Object.DestroyImmediate(_slotAsset);
+        }
+
         // --- VoxrSlotAsset ---
 
         [Test]
@@ -285,6 +306,122 @@ namespace VoXR.Tests.Runtime
 
             UnityEngine.Object.DestroyImmediate(slotAsset);
             UnityEngine.Object.DestroyImmediate(cmdAsset);
+        }
+
+        // --- Inspector conversion in Awake (issue #110) ---
+
+        // Awake runs on activation, so the component is added to an inactive object, its private
+        // serialized fields are written, and only then is the object activated — the same order
+        // the Inspector produces, which AddComponent on a live object cannot reproduce.
+        VoxrCommandRecogniser BuildInactiveRecogniser(
+            VoxrSlotAsset[] slots,
+            VoxrCommandSetAsset[] sets,
+            string[] initialActiveSetNames
+        )
+        {
+            _recogniserObject = new GameObject("AwakeConversion");
+            _recogniserObject.SetActive(false);
+
+            var recogniser = _recogniserObject.AddComponent<VoxrCommandRecogniser>();
+            SetSerialisedField(recogniser, "slotAssets", slots);
+            SetSerialisedField(recogniser, "commandSetAssets", sets);
+            SetSerialisedField(recogniser, "initialActiveSetNames", initialActiveSetNames);
+            return recogniser;
+        }
+
+        static void SetSerialisedField(VoxrCommandRecogniser target, string name, object value)
+        {
+            var field = typeof(VoxrCommandRecogniser).GetField(
+                name,
+                BindingFlags.Instance | BindingFlags.NonPublic
+            );
+
+            Assert.IsNotNull(field, $"the recogniser must carry a serialized '{name}' field");
+            field.SetValue(target, value);
+        }
+
+        // A grammar with no slots at all — the shape that could not be authored in the Inspector.
+        VoxrCommandSetAsset MakeAllLiteralSet()
+        {
+            _commandAsset = ScriptableObject.CreateInstance<VoxrCommandAsset>();
+            _commandAsset.intent = "cease_fire";
+            _commandAsset.patterns = new[] { "cease fire" };
+
+            _setAsset = ScriptableObject.CreateInstance<VoxrCommandSetAsset>();
+            _setAsset.setName = "weapons";
+            _setAsset.commands = new[] { _commandAsset };
+            return _setAsset;
+        }
+
+        [Test]
+        public void Awake_EmptySlotAssets_ConvertsAllLiteralCommandSets()
+        {
+            var recogniser = BuildInactiveRecogniser(
+                Array.Empty<VoxrSlotAsset>(),
+                new[] { MakeAllLiteralSet() },
+                new[] { "weapons" }
+            );
+
+            _recogniserObject.SetActive(true);
+
+            // Fire synchronously rather than after the buffer window.
+            recogniser.BufferWindow = 0f;
+            recogniser.CommandCooldown = 0f;
+
+            VoxrCommand? recognised = null;
+            recogniser.OnCommandRecognised += cmd => recognised = cmd;
+            recogniser.InjectText("cease fire");
+
+            Assert.IsTrue(
+                recognised.HasValue,
+                "an empty (non-null) Slot Assets array must still convert the command sets"
+            );
+            Assert.AreEqual("cease_fire", recognised.Value.Intent);
+        }
+
+        [Test]
+        public void Awake_EmptyCommandSetAssets_WarnsWhenSlotAssetsAssigned()
+        {
+            _slotAsset = ScriptableObject.CreateInstance<VoxrSlotAsset>();
+            _slotAsset.slotName = "weapon";
+            _slotAsset.slotType = VoxrSlotType.Enumerated;
+            _slotAsset.values = new[] { "missiles" };
+
+            BuildInactiveRecogniser(new[] { _slotAsset }, Array.Empty<VoxrCommandSetAsset>(), null);
+
+            LogAssert.Expect(LogType.Warning, new Regex("Command Set Assets is empty"));
+
+            _recogniserObject.SetActive(true);
+
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Awake_NullSlotAssets_WarnsWhenCommandSetAssetsAssigned()
+        {
+            BuildInactiveRecogniser(null, new[] { MakeAllLiteralSet() }, new[] { "weapons" });
+
+            LogAssert.Expect(LogType.Warning, new Regex("Slot Assets is null"));
+
+            _recogniserObject.SetActive(true);
+
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Awake_NoAssetsAssigned_StaysSilent()
+        {
+            // Nothing wired is the code-configured case, not a misconfiguration: Configure()
+            // may follow from Start(), so this path must not warn.
+            BuildInactiveRecogniser(
+                Array.Empty<VoxrSlotAsset>(),
+                Array.Empty<VoxrCommandSetAsset>(),
+                null
+            );
+
+            _recogniserObject.SetActive(true);
+
+            LogAssert.NoUnexpectedReceived();
         }
     }
 }
