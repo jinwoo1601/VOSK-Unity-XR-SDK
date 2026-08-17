@@ -493,5 +493,78 @@ namespace VoXR.Tests.Editor
                 "a tie we cannot phrase a question about is not one we ask about"
             );
         }
+
+        [Test]
+        public void LastParseDiagnostics_TieInRoundOne_DoesNotLeakIntoRoundTwo()
+        {
+            // The first multi-round test in which round 1 actually RECORDS a rival. The only
+            // multi-round diagnostic test before it parsed a grammar with no sibling sets, so
+            // nothing was ever recorded in either round and the hand-off between rounds went
+            // unexercised (issue #93).
+            //
+            // What this does NOT pin, said plainly because issue #93 asked for it and the
+            // premise did not survive contact: ParseInternal declares its tie locals inside the
+            // extraction loop, and hoisting them OUT is unobservable. The clear-on-adopt block
+            // in the Better branch resets all eight of them whenever a new incumbent is taken,
+            // and a round that appends a diagnostic entry has taken one by definition —
+            // bestScore starts at float.MinValue, so the first admissible candidate always
+            // adopts, and a round that adopts nothing breaks before appending. The per-round
+            // declaration is belt-and-braces over clear-on-adopt, not the rule enforcing it.
+            // Confirmed by hoisting the three exemplar locals out of the loop and re-running
+            // both suites green. So this test pins the BEHAVIOUR — round 2 reports the tie it
+            // had, which is none — and no test can pin the declaration site.
+            //
+            // Two rounds, and only the first is a coin flip. "set alpha on" drops the
+            // discriminator and ties set_mode against set_level; "cease fire" that follows it
+            // is unambiguous. The tied round comes FIRST, which is the order a leak would show
+            // in, and what puts it there is the start-index key: CompareCandidate returns on
+            // `startIdx != bestStartIdx` before it ever reads a score, so the sibling pair
+            // adopted at index 0 refuses "cease fire" at index 3 without the two scores being
+            // compared at all. Score enters only as the > 0 admission floor.
+            //
+            // Said precisely because the arithmetic invites the wrong reading: the pair does
+            // also outscore "cease fire" here (0.75 against 0.4, which pays coverage for the
+            // three tokens it skips to reach itself), and that is a coincidence this fixture
+            // does not rest on. A change that sank the pair below 0.4 would NOT reorder the
+            // rounds; one that pushed it to zero would, by dropping it from the round entirely.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "mode", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                    new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+                }
+            );
+
+            var results = parser.Parse("set alpha on cease fire", null);
+
+            Assert.AreEqual(2, results.Length, "two commands extracted, in two rounds");
+            Assert.AreEqual("set_mode", results[0].Command.Intent);
+            Assert.AreEqual("cease_fire", results[1].Command.Intent);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(2, diag.Length);
+            Assert.AreEqual(
+                "set_level",
+                diag[0].TiedRivalIntent,
+                "round 1 is the coin flip, and is still reported as one"
+            );
+
+            Assert.IsNull(
+                diag[1].TiedRivalIntent,
+                "round 2 had one candidate — a rival held over from round 1 would name a "
+                    + "pattern that never competed for this command"
+            );
+            Assert.AreEqual(-1, diag[1].TiedRivalPatternIndex);
+            Assert.IsFalse(diag[1].TiedRivalIsSibling);
+            Assert.IsNull(diag[1].DescribeTiedRival());
+        }
     }
 }
