@@ -60,7 +60,13 @@ Setter semantics:
 | `On Talk Started`             | `UnityEvent` fired whenever the controller starts recognition: from `PressTalk()`, from a runtime switch to `Continuous`, or when a scene authored on `Continuous` is first enabled. |
 | `On Talk Ended`               | `UnityEvent` fired when recognition ends (release, or switch from Continuous).          |
 
-**Subscribe before enable to catch the `Continuous` startup event.** A scene authored with `Listening Mode = Continuous` fires `On Talk Started` from the controller's `OnEnable`, during scene load. Listeners wired in the Inspector always receive it, because they are serialized with the component — that is the recommended way to drive a recording indicator. A listener added from code receives it only if it subscribed before the controller was enabled, so `OnTalkStarted.AddListener(...)` from another component's `OnEnable` or `Start` is too late. Either wire the event in the Inspector, or keep the GameObject inactive until you have subscribed and then activate it. (`PushToTalk` scenes are unaffected: the first event follows a button press, long after any listener has registered.)
+**Subscribe before enable to catch the `Continuous` startup event.** A scene authored with `Listening Mode = Continuous` fires `On Talk Started` from the controller's `OnEnable` — during scene load, or the moment you `Instantiate` such a prefab, before that call even returns. Listeners wired in the Inspector always receive it, because they are serialized with the component; that is the recommended way to drive a recording indicator. A listener added from code receives it only if it subscribed before the controller was enabled. `Start` is always too late, and another component's `OnEnable` cannot be relied on — ordering across GameObjects is undefined unless you pin it in Script Execution Order. Three ways to be certain:
+
+- Wire the event in the Inspector.
+- Keep the GameObject inactive until you have subscribed, then activate it.
+- Leave the Inspector on `PushToTalk` and assign `ListeningMode = VoxrListeningMode.Continuous` from your own `Start()`. That is a *change*, so the setter fires the event — and by `Start` every listener has registered.
+
+If you would rather not depend on event timing at all, `VoxrSpeechRecogniser.IsRecognising` reflects live recognition state and is safe to poll. (`PushToTalk` scenes are unaffected either way: the first event follows a button press, long after any listener has registered.)
 
 ## Public API
 
@@ -93,7 +99,8 @@ The controller reconciles this in `Update`: if it observes `IsRecognising == tru
 ## Lifecycle
 
 - `OnDisable` / `OnApplicationPause(true)` stop recognition but preserve the want-to-recognise flag, so `OnEnable` / `OnApplicationPause(false)` resume silently without re-firing `OnTalkStarted`. This matters for Continuous mode: a disable/enable cycle (or the Quest home overlay) otherwise drops Continuous listening entirely.
-- The one enable that is *not* silent is the first one in a scene authored on `Continuous`. There is no press and no mode change to carry the intent, so that enable is where wanting to recognise begins — and it fires `OnTalkStarted` like any other start. Every enable after it resumes silently under the rule above.
+- The one enable that is *not* silent is the first one in a scene authored on `Continuous`. There is no press and no mode change to carry the intent, so that enable is where wanting to recognise begins — and, provided a `Speech Recogniser` is assigned, it fires `OnTalkStarted` like any other start. Every enable after it resumes silently under the rule above.
+- A controller authored on `Continuous` whose *component checkbox* is unticked does nothing until you tick it — the checkbox serializes separately from the GameObject's active state. Ticking it is that controller's first enable, so the announcement happens there rather than at scene load. Switching such a controller to `PushToTalk` before it has ever been enabled is silent: nothing had started, so there is no start for an `OnTalkEnded` to pair with.
 
 ---
 
