@@ -4664,18 +4664,15 @@ namespace VoXR.Tests.Runtime
             // the first null), and nothing checked.
             //
             // Measured with Unity's own AllocatingGCMemory constraint and NOT with
-            // GC.GetAllocatedBytesForCurrentThread, which is what ZeroAllocPollPathTests uses.
-            // That counter is INERT here — measured at 0 B moved after a deliberate 1 MB
-            // allocation, this Unity version's collector not being one that maintains it — so
-            // an assertion written against it reads zero whatever the code does. This test was
-            // written that way first and was blind: deleting the memo guard in
-            // EnsureSiblingLookup makes this very scan rebuild the whole lookup (a Dictionary,
-            // per-bucket lists and four jagged arrays) on all 100 calls, and the counter-based
-            // version still reported 0 B and passed. The constraint below fails on it.
-            //
-            // ZeroAllocPollPathTests is blind for the same reason and is left alone here — it
-            // is a different hot path, and its partial-JSON test asserts a BUDGET, which no
-            // constraint expresses. Reported on the PR rather than fixed in passing.
+            // GC.GetAllocatedBytesForCurrentThread. That counter is INERT here — measured at
+            // 0 B moved after a deliberate 1 MB allocation, this Unity version's collector not
+            // being one that maintains it — so an assertion written against it reads zero
+            // whatever the code does. This test was written that way first and was blind:
+            // deleting the memo guard in EnsureSiblingLookup makes this very scan rebuild the
+            // whole lookup (a Dictionary, per-bucket lists and four jagged arrays) on all 100
+            // calls, and the counter-based version still reported 0 B and passed. The
+            // constraint below fails on it. ZeroAllocPollPathTests was blind for the same
+            // reason and was moved off that counter in issue #105.
             //
             // Measured over TryEagerCommit rather than Parse, because Parse necessarily
             // allocates the results it returns and so can never be pinned at zero. The eager
