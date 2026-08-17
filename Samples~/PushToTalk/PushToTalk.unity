@@ -580,7 +580,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 1
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: 'VOSK XR — Push to Talk'
+  m_Text: 'VoXR — Push to Talk'
 --- !u!1 &600
 GameObject:
   m_ObjectHideFlags: 0

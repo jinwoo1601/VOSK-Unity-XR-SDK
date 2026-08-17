@@ -20,9 +20,10 @@ Utterance Buffer
     |  (handles mid-command pauses that VOSK splits into separate utterances)
     v
 Pending Command Check (only while a command is pending)
-    |  the flushed transcript is offered to the pending command FIRST --
-    |  cancel, then a disambiguation choice, then confirm, then slot-fill --
-    |  and an answer bypasses every stage below, thresholds included
+    |  the flushed transcript is offered to the pending command FIRST:
+    |  cancel, then a disambiguation choice, then confirm, then slot-fill
+    |  cancel/choice/confirm answers bypass every stage below; a slot-fill
+    |  still parses, and a complete new command wins over the fill
     |  (speech that answers nothing falls through and is parsed normally)
     v
 Parser (pattern match + scoring)
@@ -171,7 +172,7 @@ var quantity = new VoxrSlotDefinition("quantity",
 
 When VOSK transcribes `"a"`, the alias resolves it to `"one"` in the extracted slot value. Aliases are included in the generated grammar JSON, so VOSK knows to listen for the variant words.
 
-**Validation:** The parser warns at configure time about slot values and alias keys that are uppercase (VOSK outputs lowercase, so such a value can never match), that carry punctuation, or that are a single character (unreliable in VOSK grammar mode -- prefer longer, phonetically distinct alternatives). Unlike the Editor-only authoring scans in [Authoring hazards](#authoring-hazards), these warnings fire in player builds too.
+**Validation:** The parser warns at configure time about slot *values* that are uppercase (VOSK outputs lowercase, so such a value can never match), that carry punctuation, or that are a single character, and about single-character alias keys (short tokens are unreliable in VOSK grammar mode -- prefer longer, phonetically distinct alternatives). Alias keys share the lowercase/no-punctuation constraints but only the single-character case is warned about -- an uppercase alias key silently never matches. Unlike the Editor-only authoring scans in [Authoring hazards](#authoring-hazards), these warnings fire in player builds too.
 
 ---
 
@@ -529,7 +530,7 @@ var selfDestruct = new VoxrCommandDefinition("self_destruct",
 
 After saying "self destruct", the command enters pending state. The user must say "confirm" (or another confirm phrase) to fire it, or "cancel" to discard it.
 
-Default confirm vocabulary: "confirm", "affirmative", "yes", "go ahead", "do it". Default cancel vocabulary: "cancel", "abort", "negative", "belay that", "never mind". Override these with the `confirmVocabulary` and `cancelVocabulary` Inspector arrays on `VoxrCommandRecogniser`. Both vocabularies -- and `disambiguateSiblingTies` -- are baked into the parser when it is built, so a change takes effect at the next `Configure`, `SetActiveSets`, `RebuildParser`, or `NotifySlotChanged`, not on the next utterance.
+Default confirm vocabulary: "confirm", "affirmative", "yes", "go ahead", "do it". Default cancel vocabulary: "cancel", "abort", "negative", "belay that", "never mind". Override these with the `confirmVocabulary` and `cancelVocabulary` Inspector arrays on `VoxrCommandRecogniser`. The *matcher* reads the live arrays on every utterance, so a changed vocabulary is honoured immediately. What is frozen when the parser is built: the construction-time cancel-collision warning's copy of the cancel vocabulary, and `disambiguateSiblingTies` (in a player build -- the Editor records ties regardless). And the decoder *grammar* learns new words only when it is rebuilt -- `Configure`, `SetActiveSets`, or `RebuildGrammar` -- so a novel overridden word is matched as an answer at once but may not be *decodable* until then.
 
 Follow-up speech is checked against a live pending in a fixed order: **cancel first** (under every reason -- a cancel word always cancels), then a disambiguation choice, then a confirm phrase, then slot-fill. Because confirm outranks slot-fill, a confirm phrase also resolves a pending command that is waiting on slots rather than on confirmation — see below.
 
@@ -572,11 +573,11 @@ Test with `HasSlot`, not with the value: `GetSlot` returns `string.Empty` for a 
 
 If a new complete command is recognised while a command is pending, the pending command is cancelled and the new command fires normally. This prevents stale pending commands from blocking normal operation.
 
-The order is worth knowing for prompt UIs: the superseded pending is cancelled *first*, so `OnCommandCancelled` fires before the new command's events -- and before the fresh `OnCommandPending` when the new utterance is itself ambiguous or incomplete. An *incomplete* new command does not preempt: taking a half-finished command away to put nothing in its place would be a loss, so the live pending stays.
+The order is worth knowing for prompt UIs: the superseded pending is cancelled *first*, so `OnCommandCancelled` fires before the new command's events -- and before the fresh `OnCommandPending` when the new utterance is itself ambiguous or incomplete. An *incomplete* new command whose definition does **not** allow partial matching never preempts: taking a half-finished command away to put nothing in its place would be a loss, so the live pending stays. An incomplete command that *does* set `allowPartialMatch` enters pending itself and displaces the old one -- cancel first, as above.
 
 ### Grammar Integration
 
-Confirm and cancel vocabulary is merged into the VOSK grammar JSON **word by word**, so it is recognised reliably in grammar mode. A multi-word phrase like "belay that" contributes `belay` and `that` as individual entries -- unlike pattern literals, follow-up phrases get no multi-word phrase entry to bias their word order (see [What the grammar contains](#what-the-grammar-contains)). And the default words stay in the grammar even when you override the vocabulary: an override changes what the *matcher* accepts as an answer, not what the decoder can hear.
+Confirm and cancel vocabulary is merged into the VOSK grammar JSON **word by word**, so it is recognised reliably in grammar mode. A multi-word phrase like "belay that" contributes `belay` and `that` as individual entries -- unlike pattern literals, follow-up phrases get no multi-word phrase entry to bias their word order (see [What the grammar contains](#what-the-grammar-contains)). An overridden vocabulary is merged the same way, so a novel phrase of your own is decodable too. The two layers treat an override differently: the *matcher* uses your arrays **instead of** the defaults, while the *grammar* keeps the default words **alongside** yours -- so a default word stays audible to the decoder even though it is no longer accepted as an answer.
 
 ### Programmatic Control
 
@@ -683,7 +684,7 @@ This is automatic -- there is no setting, and nothing about your pattern or slot
 
 ### Recommendation
 
-Use grammar mode (the default) for all command-driven features. Only enable free speech when your feature genuinely needs arbitrary vocabulary, and accept that command matching will be best-effort in that mode. **The mode is an authoring-time choice, not a runtime switch**: `freeSpeechMode` is a serialized Inspector field with no public accessor, and no API path lifts an already-applied grammar mid-session -- treat the mode as fixed for the lifetime of the recogniser.
+Use grammar mode (the default) for all command-driven features. Only enable free speech when your feature genuinely needs arbitrary vocabulary, and accept that command matching will be best-effort in that mode. **The mode is an authoring-time choice, not a runtime switch**: `freeSpeechMode` is a serialized Inspector field with no public accessor, and the command layer never lifts an applied grammar itself -- treat the mode as fixed. (The low-level escape hatch exists: `VoxrSpeechRecogniser.SetGrammar` with an empty grammar, while stopped, puts the *decoder* in free dictation -- but the command recogniser re-applies its grammar on its next rebuild, so it is not a supported mode switch.)
 
 ---
 

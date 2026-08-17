@@ -321,8 +321,8 @@ deliberate trade-offs rather than oversights.
   Two further scans are Editor-only: the droppable-required-literal check
   (demoted in [#81](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/81) —
   in a player build it no longer contributes) and the sibling-discriminator
-  warning, which is the loudest of the set. So in the Editor **three** warnings
-  re-emit on every switch alongside the two unconditional passes.
+  warning, which is the loudest of the set. So in the Editor all **four** passes
+  re-run on every switch; a player build re-runs only the unconditional two.
 - **Workaround**: None at user level. This is a candidate for cleanup —
   validation should run once per `Configure()` call, not per parser rebuild.
   Filed as a low-priority follow-up.
@@ -390,8 +390,8 @@ deliberate trade-offs rather than oversights.
   commoner.
 - **Workaround**: treat batch and free-speech scores as a lower bound on the
   grammar-constrained score, not as equal to it.
-  `Documentation~/editor-testing.md` states the same caveat beside its
-  Coverage Weight field.
+  `Documentation~/editor-testing.md` states the same caveat in its
+  batch-runner Programmatic API section.
 
 ### The discarded-argument protection weakens in grammars with slot-initial patterns
 

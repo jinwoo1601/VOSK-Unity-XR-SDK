@@ -294,7 +294,7 @@ When `eagerFlushOnCompleteMatch` is enabled, each VOSK result triggers one specu
 | `HoldExtendable` | Complete and confident, but more speech could still extend it | Wait `prefixHoldSeconds` (if set and shorter than `bufferWindow`), else the full window |
 | `None` | Not a complete confident match of the whole buffer | Wait the full `bufferWindow` |
 
-A verdict above `None` requires **all** of, in the order the code checks them:
+A verdict above `None` requires **all** of:
 
 1. **Score ≥ `minScore`** — the same number the flush path would compute, coverage included.
 2. **The match starts at the first recognised token** — a leading `[unk]` run is skipped for free.
@@ -496,7 +496,7 @@ The diagnoses below cover most of what sends you to the log. The first question 
 | `score` = 1.0 but `aggregateConfidence` below the gate | One acoustically weak word (§5). Check `words`; consider a slot alias. |
 | The wrong one of two **sibling** commands fired (patterns one word apart), and its `score` looks healthy | Neither command did anything wrong: the discriminating word was dropped and selection fell through to registration order (§3). The Editor's last-match panel names the rival on a `Tied with:` line (`— sibling, one dropped word apart`). Turn on [`disambiguateSiblingTies`](command-recognition.md#ambiguous-commands-ask-instead-of-guessing) to be asked instead of guessed at. |
 | One of two commands with **duplicate or overlapping patterns** never fires, at a clean score | A **non-sibling** tie: the patterns score identically on every selection key, so the first-registered intent wins permanently. There is no discriminating word, so `disambiguateSiblingTies` has nothing to ask — the tie line reads `— not a sibling; check for duplicate or overlapping patterns`. This is a grammar defect: remove or differentiate the duplicate pattern. |
-| `rejectReason` = `entered pending (awaiting disambiguation, N choices)` | The above, with the flag already on: nothing fired because the speaker is being asked. Read `PendingAmbiguity` from `OnCommandPending` and prompt with the N choices. |
+| `rejectReason` = `entered pending (awaiting disambiguation, N choices)` | The **sibling** case above, with the flag already on: nothing fired because the speaker is being asked. Read `PendingAmbiguity` from `OnCommandPending` and prompt with the N choices. |
 | Accepted with an empty `slots` array where you expected a value | A bare pattern out-ranked the slot-filled one. Coverage closes the common case (§7 B). If you still see it, the stranded value's first word probably begins another pattern, so coverage charged the bare form nothing — or `coverageWeight` is `0`. |
 
 ---
