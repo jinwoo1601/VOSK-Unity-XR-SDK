@@ -100,9 +100,10 @@ mitigate some of these but at the cost of memory and download size.
 
 ### Single-character literals ("a") unreliable
 
-- **Repro**: Say "launch a missiles target hotel one" with `?a` as an
-  optional literal in the pattern. VOSK transcribes "a" as "on" or drops it
-  entirely.
+- **Repro**: Say "launch a missiles target hotel one" against a pattern of your
+  own carrying `?a` as an optional literal (the shipped sample avoids this shape —
+  it routes "a" through the alias below instead). VOSK transcribes "a" as "on" or
+  drops it entirely.
 - **Where seen**: v2.1 test matrix Phase 3.1 (and Phases 3.3–3.4, 6A.2 where
   VOSK silently dropped "a").
 - **Root cause**: Very short function words carry almost no acoustic
@@ -297,9 +298,9 @@ deliberate trade-offs rather than oversights.
   dropped at the audio layer, before VOSK ever sees it.
 - **Workaround**:
   - After triggering a mode switch, pause for ~500ms before speaking the next
-    command. In a game UI you can gate user input via the
-    `[CommandDemo] Switched to <X> mode` log marker (or wire a callback off
-    `OnCommandRecognised` for the `mode_*` intents).
+    command. In a game UI, gate user input by wiring a callback off
+    `OnCommandRecognised` for the `mode_*` intents (a visual "Mode: Weapons"
+    indicator doubles as the ready signal).
   - If you need seamless switching, prefer the **single-set + grammar
     superset** approach: configure all your commands in one set and gate them
     in your `OnCommand` handler instead of swapping active sets at runtime.
@@ -317,10 +318,11 @@ deliberate trade-offs rather than oversights.
   validation passes — `RunValidationWarnings()` for slot values and aliases, and
   `WarnOnExcessiveOptionalExpansion()` for a pattern past the eager-flush
   expansion cap. The warnings are correct, just noisier than they should be.
-  The droppable-required-literal check re-emitted here too until it was demoted
-  to Editor-only ([#81](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/81)):
-  in a player build it no longer contributes, and in the Editor it still
-  re-emits alongside the other two.
+  Two further scans are Editor-only: the droppable-required-literal check
+  (demoted in [#81](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/81) —
+  in a player build it no longer contributes) and the sibling-discriminator
+  warning, which is the loudest of the set. So in the Editor all **four** passes
+  re-run on every switch; a player build re-runs only the unconditional two.
 - **Workaround**: None at user level. This is a candidate for cleanup —
   validation should run once per `Configure()` call, not per parser rebuild.
   Filed as a low-priority follow-up.
@@ -329,8 +331,8 @@ deliberate trade-offs rather than oversights.
 
 - **Repro**: Register only `decelerate` (no slot-filled sibling) and say
   "decelerate hard burn". The command scores `1 / (1 + 2)` = `0.333` against the
-  default `minScore` of `0.6` and does not fire; before v2.6 it scored `1.0` and
-  fired. Same shape for any short pattern followed by words the grammar cannot
+  default `minScore` of `0.6` and does not fire; before the coverage change (#65)
+  it scored `1.0` and fired. Same shape for any short pattern followed by words the grammar cannot
   place: "cease fire please" drops `1.0` → `0.667`, "approach target alpha one now"
   → `0.750`.
 - **Where seen**: measured across a 699-utterance A/B during #65 §5.2. 17 of 699
@@ -348,13 +350,33 @@ deliberate trade-offs rather than oversights.
   - Mark natural trailing words optional (`?please`) to bring them into the
     grammar.
   - Lower `minScore`, or set `coverageWeight` below `1.0`. Setting it to `0`
-    switches coverage off on *both* sides, so it reverts further than v2.6 —
+    switches coverage off on *both* sides, so it reverts further than undoing #65 —
     back to pre-1.4.0 scoring, before the leading skipped-word charge existed —
     and brings the discarded-argument bug back with it. Note the value is read
     when the parser is built, so a change takes effect at the next
     `RebuildParser` / `Configure` / `SetActiveSets` / `NotifySlotChanged`.
 
-### Out-of-grammar words are only free when the decoder returns them as `[unk]`
+### A prefab-instance override of the old `skippedWordPenalty` may not survive the rename (unverified)
+
+- **Symptom**: After upgrading past the `skippedWordPenalty` → `coverageWeight`
+  rename (#65), a prefab **instance** that overrode the old field runs at the
+  default `coverageWeight` of `1.0` instead of its override. Commands stop firing
+  exactly as in the coverage-demotion entry above, which makes the two easy to
+  confuse.
+- **Root cause**: the renamed field carries `[FormerlySerializedAs]`, which governs
+  the field's own deserialization — component values on scene objects, assets, and
+  prefab *sources* migrate. A prefab-instance override, though, is stored as a
+  literal property-path string in the instance's modification list, and whether
+  Unity remaps those paths through the attribute is not established here; no
+  automated instrument in this package can settle it.
+- **Status**: **unverified** — recorded as an upgrade hazard, not a confirmed
+  defect.
+- **Workaround**: after upgrading, re-check any prefab instance that overrode
+  `skippedWordPenalty` and re-apply the value to the renamed **Coverage Weight**
+  field if the override was lost. `Documentation~/troubleshooting.md` carries the
+  same check in its post-upgrade entry.
+
+### Batch, injected, and free-speech scores read lower than the live grammar-mode score
 
 - **Repro**: With `freeSpeechMode` enabled, or via `InjectText`, or through
   `VoxrBatchTestRunner.Run`, feed "cease fire please". The score is `0.667`, not
@@ -364,31 +386,34 @@ deliberate trade-offs rather than oversights.
   grammar-constrained VOSK returns for a word outside its vocabulary. The three
   paths above deliver real text instead, so a word the decoder would have hidden
   arrives verbatim and is charged as unexplained. The leading half of the rule has
-  always behaved this way; v2.6 newly exposes the trailing half, where filler is
+  always behaved this way; #65 newly exposes the trailing half, where filler is
   commoner.
 - **Workaround**: treat batch and free-speech scores as a lower bound on the
-  grammar-constrained score, not as equal to it. `Documentation~/editor-testing.md`'s
-  claim that batch results "track runtime behaviour" is weaker for grammars whose
-  users add natural trailing words.
+  grammar-constrained score, not as equal to it.
+  `Documentation~/editor-testing.md` states the same caveat in its
+  batch-runner Programmatic API section.
 
-### A slot-initial pattern weakens trailing coverage for the whole grammar
+### The discarded-argument protection weakens in grammars with slot-initial patterns
 
 - **Repro**: Register any pattern whose first matchable element is a permissive
-  slot — an open-ended `NumberSequence`, say. Trailing coverage then charges
-  almost nothing anywhere in that grammar, because the orphan run stops at the
-  first token that could begin a match and nearly every token now qualifies.
+  slot — an open-ended `NumberSequence`, say. Trailing coverage then goes quiet at
+  every token *that slot could match*: for a `NumberSequence`, every position where
+  enough digit words follow becomes a run terminator, so digit-heavy trailing
+  speech escapes the charge. The effect is scoped to the slot's own vocabulary —
+  a value-list slot qualifies only its listed values, and unrelated words are
+  charged exactly as before.
 - **Where seen**: identified at design time (#65 architecture D4), confirmed by
   the `CanStartPattern` tests.
 - **Root cause**: the orphan test is deliberately conservative — where it is
   uncertain whether a pattern could start at a token, it charges nothing, because
   over-charging destroys multi-command utterances while under-charging only leaves
   a score where it was. A permissive slot-initial pattern makes the predicate say
-  "yes" almost everywhere.
-- **Workaround**: none needed for correctness — the grammar reverts to pre-v2.6
-  scoring. If the #42 protection matters, avoid slot-initial patterns over
-  open-ended slots, or anchor them behind a literal.
+  "yes" wherever that slot could begin a match.
+- **Workaround**: none needed for correctness — at those positions the grammar
+  reverts to pre-#65 scoring. If the #42 protection matters, avoid slot-initial
+  patterns over open-ended slots, or anchor them behind a literal.
 
-### A demoted winner can block a better-scoring match that starts later
+### Nothing fires although a better-scoring match exists later in the utterance
 
 - **Repro**: With the demo grammar, say "switch navigation mode" (the "to"
   dropped and a stray "switch" leading). `switch to navigation` matches at token 0
@@ -464,9 +489,9 @@ deliberate trade-offs rather than oversights.
   - Avoid registering commands that are exact prefixes of others when low latency
     matters — e.g. give the shorter command a distinct extra keyword.
 
-### A dropped required literal hands the utterance to the bare pattern — where coverage cannot charge for it
+### A spoken slot value is silently discarded when its introducing word is dropped (residual case)
 
-> **Narrowed in v2.6.** Coverage (#65 §5.2) closed the common form of this: with
+> **Narrowed by #65.** Coverage (#65 §5.2) closed the common form of this: with
 > `["decelerate"]` and `["decelerate", "by", "{burn_level}"]` registered,
 > "decelerate hard burn" now fires the slot-filled pattern at `2/3` = `0.67` with
 > the burn level extracted, where it used to fire the bare command at `1.0` and
@@ -497,23 +522,24 @@ deliberate trade-offs rather than oversights.
   candidate covering more of the utterance. This still works in the residual case,
   where coverage alone does not — which is why the construction-time warning was
   deliberately *not* narrowed when coverage shipped, even though the parser now has
-  the information to narrow it. That warning is logged in the **Editor only**, so
-  look for it there rather than in a device log. Removing the literal outright
+  the information to narrow it. Removing the literal outright
   (`["decelerate", "{burn_level}"]`) works too, at the cost of the phrasing.
-  `VoxrCommandParser` logs a validation warning at construction naming the literal
-  and the slot at risk. The scan follows what the parser itself compares, so it
-  covers the hazard across *different intents* as well as within one command, behind
-  a run of two or more literals, and after expanding a bare pattern's own optional
+- **The warning**: `VoxrCommandParser` logs it at construction, naming the literal
+  and the slot at risk — in the **Editor only**, so look for it there rather than
+  in a device log. The scan follows what the parser itself compares, so it covers
+  the hazard across *different intents* as well as within one command, behind a run
+  of two or more literals, and after expanding a bare pattern's own optional
   elements; only patterns with more than six optionals are compared unexpanded.
-  **The optional-literal swap has two costs**, neither of them a no-op: a matched
-  optional literal scores 0.5 on both sides of the ratio where a required one scores
-  1.0, so any *imperfect* match scores strictly lower than before and may now fall
-  under `minScore`; and an optional literal no longer anchors the element after it,
-  so a following slot can claim adjacent tokens the literal never introduced (with
-  `orient heading {heading} ?mark {?elevation}`, a stray fourth digit is absorbed as
-  `elevation` and wins on span, where the required form scored 0.8 and dropped it).
-  Prefer the swap where the trailing slot's vocabulary is distinct from its
-  neighbours'; be careful where it is a `NumberSequence`.
+- **The optional-literal swap has two costs**, neither of them a no-op:
+  - A matched optional literal scores 0.5 on both sides of the ratio where a
+    required one scores 1.0, so any *imperfect* match scores strictly lower than
+    before and may now fall under `minScore`.
+  - An optional literal no longer anchors the element after it, so a following slot
+    can claim adjacent tokens the literal never introduced (with
+    `orient heading {heading} ?mark {?elevation}`, a stray fourth digit is absorbed
+    as `elevation` and wins on span, where the required form scored 0.8 and dropped
+    it). Prefer the swap where the trailing slot's vocabulary is distinct from its
+    neighbours'; be careful where it is a `NumberSequence`.
 
 ### Sibling patterns that differ at one word fire the first-registered one
 
@@ -531,24 +557,20 @@ deliberate trade-offs rather than oversights.
   its final key — registration order. The word that would have decided is exactly
   the one that went missing, so no scorer can recover the intent; the parser is
   guessing, and it guesses consistently rather than randomly.
-- **The differing word can sit anywhere, and the eager gate now refuses on both
-  shapes.** For a *trailing* discriminator it always did — it will not commit a
-  pattern whose trailing required element never matched. A discriminator in the
-  *middle* clears that particular rule, because the elements after it still match and
-  the tail check resets: `set {ship} mode on` heard as "set alpha on" scores
-  `3 / 4` = 0.75 and spans the buffer. That case used to commit **early** with the
-  wrong sibling; it no longer does. The gate declines whenever the buffer fits two
-  different intents equally and they differ at one required word, so the guess now
-  happens once, at the flush, on both shapes.
-- **The eager refusal changes the timing, not the outcome** (with the flag off, which
-  is the default). The same command still fires — at the end of `bufferWindow` rather
-  than immediately. Deferring does not let
-  the missing word arrive: speech only ever appends to the buffer, and for a medial
-  drop the position that word would have occupied is already behind the match. What it
-  buys is that the decision is made once, on a final transcript — **which is where the
-  recogniser can ask you instead of guessing.** (That refusal is an eager-gate rule and
-  needs `eagerFlushOnCompleteMatch`; the remedy below does not, and works on default
-  settings.)
+- **Timing: the eager gate refuses on both shapes, which changes when the guess
+  happens, not what fires** (with the flag off, which is the default). For a
+  *trailing* discriminator it always refused — it will not commit a pattern whose
+  trailing required element never matched. A discriminator in the *middle* clears
+  that particular rule (`set {ship} mode on` heard as "set alpha on" scores
+  `3 / 4` = 0.75 and spans the buffer) and used to commit **early** with the wrong
+  sibling; the gate now declines whenever the buffer fits two different intents
+  equally, one required word apart. The same command still fires at the end of
+  `bufferWindow` — deferring cannot let the missing word arrive, since speech only
+  appends and the position it would have occupied is already behind the match.
+  What deferring buys is that the decision is made once, on a final transcript —
+  **which is where the recogniser can ask you instead of guessing.** (The refusal
+  is an eager-gate rule and needs `eagerFlushOnCompleteMatch`; the remedy below
+  does not, and works on default settings.)
 - **There is now a supported remedy: `disambiguateSiblingTies`.** With it on, a flush
   that ties this way stops guessing and asks. `OnCommandPending` raises with
   `PendingAmbiguity` set, carrying the competing commands and the one word that tells
@@ -594,11 +616,13 @@ deliberate trade-offs rather than oversights.
   behaves differently.
 - **Root cause**: Deciding whether two patterns are siblings means comparing every
   reading of each — a pattern with `N` optional elements has `2^N` of them — so past
-  six the **set-building scan** stops expanding and takes the pattern only in its
-  all-optionals-present reading. It still builds a set from *that* reading — two
-  patterns carrying the same seven optionals and differing at one word are still
-  warned about — but a relation visible only in some other reading is never seen, and
-  the repro below is that case. That bound was set when the comparison fed nothing but
+  six the **set-building scan** stops expanding and takes the pattern only **as
+  authored**, `?` markers and all. (An optional *slot* still folds with its required
+  form for comparison; an optional *literal* `?word` buckets only with another
+  literal `?word`.) It still builds a set from that reading — two patterns spelling
+  the same seven optionals and differing at one word are still warned about — but a
+  relation visible only in some expanded reading is never seen, and the repro above
+  is that case. That bound was set when the comparison fed nothing but
   an Editor warning, where it cost recall on one message. It now also feeds runtime
   behaviour, so an unexpanded pattern's relations are *unknown* rather than absent.
 - **What the parser does about it**: it does not assume, and this is a *second*
@@ -619,8 +643,10 @@ deliberate trade-offs rather than oversights.
   normal authoring. If you need more, do not also rely on a single required word to
   separate two intents — that combination is the one this cannot see.
 - **Note**: This bound (6) is deliberately lower than the one that governs
-  eager-flush eligibility (12), because the sibling comparison runs at construction
-  on every parser rebuild, where the eligibility analysis is lazy.
+  eager-flush eligibility (12). The sibling comparison runs at construction on every
+  parser rebuild in the Editor — and in a player build whenever
+  `disambiguateSiblingTies` is on; a flag-off player builds the lookup lazily from
+  the eager path — where the eligibility analysis is always lazy.
 
 ### The sibling warning is silent below the default `minScore`
 
@@ -659,6 +685,32 @@ deliberate trade-offs rather than oversights.
 - **Note**: The reverse error would be worse. Warning unconditionally would put a
   "the wrong intent can fire" claim in front of every author running default
   settings, for grammars where nothing fires at all.
+
+### Two intents on duplicate or overlapping patterns: the second can never fire, and nothing warns
+
+- **Symptom**: Two commands carry the same pattern (or patterns that overlap
+  completely on an utterance). The first-registered intent fires every time, at a
+  clean score; the other is permanently dead. No construction-time warning is
+  logged, and a batch run shows a healthy `1.00` PASS for the winner.
+- **Repro**: Register `["shields", "up"]` under `raise_shields`, then again under
+  `activate_defence`. Say "shields up" — `raise_shields` fires, always.
+- **Root cause**: The two candidates tie on every selection key — same start, same
+  score, same span, same literal count — and a tie keeps the incumbent, so
+  registration order decides permanently. The sibling machinery does not apply:
+  both the construction-time warning and `disambiguateSiblingTies` require the
+  patterns to differ at exactly **one** position, and these differ at none — there
+  is no discriminating word to warn about, and no word the speaker could answer
+  with.
+- **Detection**: the Editor names the rival since
+  [#95](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/95). The debug
+  window's last-match breakdown and the Batch Test Runner's per-row diagnostics
+  show a `Tied with:` line reading `— not a sibling; check for duplicate or
+  overlapping patterns` whenever a rival scored exactly as well as the winner. The
+  exported session log carries no tie fields, so the diagnostic is window-only.
+- **Workaround**: This is a grammar defect rather than a recognition limitation —
+  remove the duplicate pattern, or differentiate the two in more than one element.
+  If two intents genuinely share a phrasing, register the pattern under one intent
+  and branch in your handler.
 
 ### Confidence of `-1.00` means "no data", not "zero confidence"
 
@@ -747,3 +799,9 @@ entry, follow the existing structure: short repro, where seen (test matrix
 reference if applicable), root cause, workaround. Group entries by category —
 the categories above are a starting point but feel free to add more (e.g.
 "Threading", "Build/Deploy") as needed.
+
+"Where seen" references of the form `v2.1 test matrix Phase 3.1` cite the
+project's internal pre-1.0 verification phases, not package versions — the
+package's released versions are the `1.x` tags in `CHANGELOG.md`. Issue numbers
+(`#65`, `#82`, …) refer to the GitHub issue that introduced or changed the
+behaviour.

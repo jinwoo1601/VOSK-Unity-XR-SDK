@@ -56,9 +56,21 @@ Setter semantics:
 | `Command Recogniser`          | Optional. When assigned, `ReleaseTalk` calls `FlushPendingBuffer` so trailing speech parses immediately rather than waiting for the buffer window. |
 | `Listening Mode`              | Initial mode (`PushToTalk` or `Continuous`). Can be changed at runtime via the property. |
 | `Initialise On Start`         | When enabled, calls `VoxrSpeechRecogniser.Initialise()` in `Start` so the model is pre-warmed before the first press. |
-| `Cancel Pending On Release`   | When enabled, `ReleaseTalk` also cancels any pending command on the command recogniser (see below). |
-| `On Talk Started`             | `UnityEvent` fired when recognition begins (first press, or switch to Continuous).      |
+| `Cancel Pending On Release`   | When enabled, `ReleaseTalk` also cancels any pending command on the command recogniser (see below). Does nothing unless the optional `Command Recogniser` reference is assigned — the cancel runs inside the same guard as the flush. |
+| `On Talk Started`             | `UnityEvent` fired when the controller starts recognition: from `PressTalk()`, or from a runtime switch to `Continuous`. Not fired for a scene that starts in `Continuous` — see the note below. |
 | `On Talk Ended`               | `UnityEvent` fired when recognition ends (release, or switch from Continuous).          |
+
+**A scene that starts in `Continuous` does not fire `On Talk Started`.** The event is invoked in exactly two places: `PressTalk()`, and the `ListeningMode` setter when the mode *changes* to `Continuous` at runtime. When `Listening Mode` is already set to `Continuous` in the Inspector, `Awake` records the intent and `OnEnable` starts recognition without invoking the event — so recognition is running while a recording indicator wired only to `On Talk Started` stays dark. Drive startup indicators off recognition state (`VoxrSpeechRecogniser.IsRecognising`) rather than off the event, or leave the Inspector on `PushToTalk` and assign `ListeningMode = VoxrListeningMode.Continuous` from your own `Start()`, which is a change and therefore does fire it.
+
+## Public API
+
+| Member | Kind | Description |
+|--------|------|-------------|
+| `ListeningMode` | `VoxrListeningMode` property (get/set) | Reads or switches the mode at runtime. The setter starts/stops recognition and fires the events per *Setter semantics* above. See [`VoxrListeningMode`](api/data-types.md#voxrlisteningmode). |
+| `OnTalkStarted` | `UnityEvent` property (get) | The Inspector's `On Talk Started`. Subscribe from code with `OnTalkStarted.AddListener(...)`. |
+| `OnTalkEnded` | `UnityEvent` property (get) | The Inspector's `On Talk Ended`, same access pattern. |
+| `PressTalk()` | `void` | Starts recognition and fires `OnTalkStarted`. No-op in `Continuous` mode, without a `Speech Recogniser`, or while a press is already held. |
+| `ReleaseTalk()` | `void` | Stops recognition, flushes the utterance buffer (and cancels a pending command if `Cancel Pending On Release` is set), then fires `OnTalkEnded`. No-op in `Continuous` mode, without a `Speech Recogniser`, or when no press is held. |
 
 ## Cancel Pending On Release
 
@@ -76,7 +88,7 @@ Left off, the question survives release and the speaker answers it on their next
 
 The controller reconciles this in `Update`: if it observes `IsRecognising == true` while the user is not asking to listen, it calls `StopRecognition`. The window between the native start and the reconciling stop is at most one frame. Fully closing the race would require cancelling the permission coroutine from inside `VoxrSpeechRecogniser` itself; the `Update` check is additive and keeps the low-level API unchanged.
 
-(The guard cannot fire in the editor test runner — without the native DLL, `IsRecognising` is always false. Verification is manual, on a Quest device, using `logcat -s vosk-bridge:*`.)
+(The race cannot be exercised in the Editor: the permission-wait coroutine this guard reconciles is compiled only for Android player builds — `#if UNITY_ANDROID && !UNITY_EDITOR` — so nothing off-device ever starts recognition late. The Windows Editor backend does report `IsRecognising == true`, so the `Update` check itself runs there; it simply has no late start to catch. Verification is manual, on a Quest device, using `logcat -s vosk-bridge:*`.)
 
 ## Lifecycle
 

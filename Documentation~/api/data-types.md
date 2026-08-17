@@ -13,6 +13,8 @@ The full recognition result with word-level data.
 | `Text` | `string` | The full recognised text |
 | `Words` | `VoxrWord[]` | Per-word confidence and timing for the best hypothesis (empty if unavailable) |
 
+**Constructor** -- `public VoxrResult(string text, VoxrWord[] words)`
+
 ## VoxrWord
 
 `public readonly struct VoxrWord` -- Namespace: `VoXR`
@@ -25,6 +27,10 @@ A single recognised word with metadata.
 | `Confidence` | `float` | Confidence score in range [0, 1] |
 | `StartTime` | `float` | Start time in seconds from beginning of utterance |
 | `EndTime` | `float` | End time in seconds from beginning of utterance |
+
+**Constructor** -- `public VoxrWord(string text, float confidence, float startTime, float endTime)`
+
+**`ToString()`** -- `"{Text} ({Confidence:F2})"`, e.g. `orient (0.91)`.
 
 ## VoxrCommand
 
@@ -43,12 +49,15 @@ A parsed command with intent and extracted slots.
 | `RawText` | `string` | The original VOSK transcript text |
 | `MatchedPatternIndex` | `int` | Index into the definition's `Patterns` array identifying which pattern produced this match. `-1` when unavailable. |
 
+**Constructor** -- `public VoxrCommand(string intent, VoxrSlotMatch[] slots, float confidence, float score, string rawText, string[] registeredSlotNames = null, int matchedPatternIndex = -1)`. The two optional parameters change behaviour: `registeredSlotNames` is the list `GetSlot` checks a name against, so leaving it `null` disables the typo warning entirely, and `matchedPatternIndex` defaults to `-1` (unavailable). A `null` `slots` becomes an empty array.
+
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `GetSlot(string name)` | Returns the value of a named slot, or empty string if not matched. Logs a warning if the slot name was not registered. For a `NumberSequence` slot the value is the number words as spoken — `"two seven zero"`, not `"270"` (see below); for an `Enumerated` slot it is the canonical value, with any spoken alias already resolved. |
+| `GetSlot(string name)` | Returns the value of a named slot, or empty string if not matched. In a `DEBUG` build, logs a warning if the slot name was not registered -- but only when the command carries a registered-slot-name list, so a command rebuilt by follow-up slot fill never warns. For a `NumberSequence` slot the value is the number words as spoken — `"two seven zero"`, not `"270"` (see below); for an `Enumerated` slot it is the canonical value, with any spoken alias already resolved. |
 | `HasSlot(string name)` | Returns true if the named slot was matched in this command. |
+| `ToString()` | `"{Intent} ({Slots.Length} slots, score={Score:F2})"`, e.g. `orient_heading (1 slots, score=0.92)`. |
 
 > **NumberSequence slots return spoken words, not digits.** `int.TryParse` on the returned value fails on every utterance and yields `0` without throwing. Convert with [`VoxrNumberParser`](number-parser.md) — `ParseDigitSequence` for digit-by-digit values, `ParseCardinal` for cardinal phrases. The canonical fallback snippet is in [Command Recognition → NumberSequence Slots](../command-recognition.md#numbersequence-slots).
 
@@ -63,6 +72,10 @@ A single slot extraction result.
 | `Name` | `string` | Slot name (e.g. `"weapon"`) |
 | `Value` | `string` | Matched value. For an `Enumerated` slot this is the canonical value (e.g. `"missiles"`), with any spoken alias already resolved (`"jackals"` → `"jackal"`). For a `NumberSequence` slot it is the number words as spoken (`"two seven zero"`), not a numeric string — convert with [`VoxrNumberParser`](number-parser.md). |
 
+**Constructor** -- `public VoxrSlotMatch(string name, string value)`
+
+**`ToString()`** -- `"{Name}={Value}"`, e.g. `weapon=missiles`.
+
 ## VoxrCommandResult
 
 `public readonly struct VoxrCommandResult` -- Namespace: `VoXR.Commands`
@@ -75,6 +88,21 @@ Parser output wrapping match/no-match.
 | `Command` | `VoxrCommand` | The parsed command (only valid when `IsMatch` is true) |
 | `RawText` | `string` | The original VOSK transcript |
 
+**Constructors** -- `public VoxrCommandResult(VoxrCommand command)` sets `IsMatch` true and takes `RawText` from the command; `public VoxrCommandResult(string rawText)` sets `IsMatch` false and leaves `Command` at its default.
+
+## VoxrListeningMode
+
+`public enum VoxrListeningMode` -- Namespace: `VoXR`
+
+How `VoxrPushToTalkController` gates the speech recogniser. Read and written at runtime through its `ListeningMode` property, and set initially in the Inspector.
+
+| Value | Int | Description |
+|-------|-----|-------------|
+| `Continuous` | 0 | Recognition runs whenever the controller is enabled; `PressTalk()` and `ReleaseTalk()` become no-ops. |
+| `PushToTalk` | 1 | Recognition only runs between `PressTalk()` and `ReleaseTalk()`. The controller's default. |
+
+See [Push-to-Talk → Listening Modes](../push-to-talk.md#listening-modes) for the setter semantics of switching mode at runtime.
+
 ## VoxrPendingTimeoutBehavior
 
 `public enum VoxrPendingTimeoutBehavior` -- Namespace: `VoXR.Commands`
@@ -84,7 +112,7 @@ Determines what happens when a pending command's timeout expires.
 | Value | Description |
 |-------|-------------|
 | `Cancel` | The pending command is cancelled and discarded. `OnCommandCancelled` fires. |
-| `FireAsIs` | The pending command fires as-is with whatever slots were filled. `OnCommandConfirmed` and `OnCommandRecognised` fire. |
+| `FireAsIs` | The pending command fires as-is with whatever slots were filled. `OnCommandConfirmed`, `OnCommandRecognised`, and `OnCommandsRecognised` (as a single-element batch) fire, and the intent's debounce window is recorded. |
 
 `FireAsIs` is one of the two [deliberate exceptions](../command-recognition.md#the-two-ways-an-incomplete-command-still-fires) to the rule that a command missing a required argument does not fire — but only for commands whose definition sets `allowPartialMatch`. A pending that is merely awaiting confirmation always holds a complete command, so `FireAsIs` on its own never fires an incomplete one. Where both apply, the handler must tolerate every required slot being absent.
 
@@ -94,7 +122,7 @@ Determines what happens when a pending command's timeout expires.
 
 `public readonly struct VoxrPendingAmbiguity` -- Namespace: `VoXR.Commands`
 
-What the recogniser is asking about when a pending command is a sibling-tie disambiguation rather than a confirmation. Read it from `VoxrCommandRecogniser.PendingAmbiguity` inside an `OnCommandPending` handler. Only ever non-null with [`disambiguateSiblingTies`](command-recogniser.md) enabled.
+What the recogniser is asking about when a pending command is a sibling-tie disambiguation rather than a confirmation. Read it from `VoxrCommandRecogniser.PendingAmbiguity` inside an `OnCommandPending` handler. Only ever non-null with [`disambiguateSiblingTies`](command-recogniser.md#inspector-fields) enabled.
 
 ### Fields
 

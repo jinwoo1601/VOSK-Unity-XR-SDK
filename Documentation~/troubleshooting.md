@@ -37,7 +37,7 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 
 - Check the Console for VOSK model loading errors.
 - Verify a microphone is connected and set as the default Windows input device.
-- On macOS or Linux, the live mic backend is not available -- use the [Text Injection API](editor-testing.md) instead.
+- On macOS or Linux, the live mic backend is not available -- use the [Text Injection API](editor-testing.md#text-injection-api) instead.
 
 ### Commands not matching
 
@@ -45,7 +45,7 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 - Check that grammar mode is active (`freeSpeechMode = false`).
 - Lower `minScore` and `minConfidence` temporarily to see if matches are being filtered by thresholds.
 - Use `OnUnrecognisedSpeech` to log raw transcripts and compare against your patterns.
-- Open the [Command Debug Window](editor-testing.md) to see the match breakdown: for each command the parser extracted, the pattern that **won** selection, its score and confidence against the thresholds, and why it was accepted or rejected. Losing candidates are not shown -- a pattern's absence means it lost selection, not that it was never tried.
+- Open the [Command Debug Window](editor-testing.md#command-debug-window) to see the match breakdown: for each command the parser extracted, the pattern that **won** selection, its score and confidence against the thresholds, and why it was accepted or rejected. Losing candidates are not shown -- a pattern's absence means it lost selection, not that it was never tried.
 - For a pattern across a whole playtest rather than one utterance, read the [session debug log](editor-testing.md#session-debug-log) written to `Library/VoxrDebugLogs/` when Play Mode ends -- it records every match attempt of the session, so repeated near-threshold rejections are easy to spot.
 - To interpret the numbers in either view -- what produced a given `score`, why that pattern won, which gate stopped it -- see [Matching and Scoring](scoring.md), whose [worked examples](scoring.md#7-worked-examples) trace three common outcomes end to end.
 

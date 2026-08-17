@@ -15,7 +15,7 @@ Everything here describes `VoxrCommandParser`, which is deterministic: the same 
 | **Token** | One whitespace-separated word of the transcript. `[unk]` is VOSK's token for audio it could not resolve to a grammar word. |
 | **Element** | One entry of a pattern array: a required literal (`"target"`), an optional literal (`"?by"`), a required slot (`"{weapon}"`), or an optional slot (`"{?quantity}"`). |
 | **Candidate** | One (command, pattern, start token) triple that the parser scored. Every pattern of every active command is tried at every non-`[unk]` start position. |
-| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners are logged as a scored attempt — losing candidates are recorded nowhere. |
+| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners are logged as a scored attempt — losing candidates are not logged. One exception: a rival that *tied* the winner exactly is named on the attempt (`Tied with:` in the Editor's last-match panel and in batch-runner diagnostics), though not in the exported session log, which records winners only. |
 
 ---
 
@@ -201,13 +201,13 @@ Two consequences for pattern authoring:
 
 ## 5. The two gates
 
-The winner of each round faces two independent thresholds. Both live on `VoxrCommandRecogniser`.
+The winner of each round faces two independent thresholds, and then a completeness check that no score can override. The thresholds live on `VoxrCommandRecogniser`.
 
 ### `minScore` (default `0.6`)
 
 Compared against the full score — [fidelity](#1-the-score-formula) and [coverage](#2-coverage) together. Rejects partial and garbled matches, and matches that account for too little of what was said.
 
-If the command definition sets `allowPartialMatch`, a sub-threshold match with unfilled required slots enters the [pending state](command-recognition.md#pending-commands) instead of being rejected outright.
+If the command definition sets `allowPartialMatch`, a match with unfilled required slots enters the [pending state](command-recognition.md#pending-commands) instead of being rejected outright — at *any* score, not only below this gate; see [Completeness](#completeness-independent-of-score) below.
 
 ### `minConfidence` (default `0.4`)
 
@@ -234,6 +234,12 @@ That command scores a clean `1.00` and is still rejected at the default `0.4` �
 This matters most for `NumberSequence` slots, which are the commands most likely to repeat a word.
 
 **`-1` means "no data", not "zero confidence".** It means no per-word confidence was available *for the matched span*. Usually that is because the utterance carried no word data at all — injected text, where the `words` array is empty too. It can also happen with `words` populated, when the matched span came from a segment that carried none: the utterance buffer appends text unconditionally but words only when a result supplies them, so a buffer merging a spoken result with an injected one can match on the half that has no word data. Either way the `minConfidence` check is **bypassed entirely** and the command is accepted or rejected on score alone. Treat `-1` as *n/a* in any debug UI — never as a low value.
+
+### Completeness (independent of score)
+
+A winner missing a **required slot** does not fire, whatever it scored. The check is deliberately not arithmetic: the `−1.0` slot-miss penalty makes a missing argument score *lower*, but the score is not what stops the command firing — a five-element pattern with one missed required slot scores exactly `3/5` = `0.60`, clears the default `minScore`, and is still refused. Session-log `rejectReason`: `required slot unfilled`.
+
+With `allowPartialMatch` on the command, an incomplete winner — above the gate or below it — enters the [pending state](command-recognition.md#pending-commands) for slot-fill instead (`entered pending (partial: unfilled [...])`). Without it, the utterance is reported through `OnUnrecognisedSpeech`. Missed required *literals* are not part of this check: a command with every argument present still fires over a dropped function word, which is what §1's reduced miss cost exists to allow.
 
 ### Tuning them jointly
 
@@ -266,6 +272,7 @@ It does **not** mean "nothing matched". It fires whenever an utterance produced 
 |---------|------------------------|
 | No pattern matched at all | fires |
 | Every candidate fell under `minScore` | **fires** |
+| The winner was missing a required slot (command without `allowPartialMatch`) | **fires** |
 | A candidate was diverted to pending (partial match or `requiresConfirmation`) | **fires**, alongside `OnCommandPending` |
 | A candidate was diverted to a **disambiguation** pending | silent |
 | A candidate was rejected by `minConfidence` | silent |
@@ -289,12 +296,20 @@ When `eagerFlushOnCompleteMatch` is enabled, each VOSK result triggers one specu
 
 A verdict above `None` requires **all** of:
 
-1. The winner's score ≥ `minScore` — the same number the flush path would compute. The scan mirrors an extraction round starting at token 0, so it charges [coverage](#2-coverage) identically and the two can no longer disagree about a buffer they both see.
-2. The match starts at the first **recognised** token. A leading `[unk]` run is skipped for free — nothing arriving later extends an utterance leftward, so out-of-grammar preamble ("Helm, ...") does not block a commit. A leading word VOSK *did* resolve does block it, and what that buys is completeness rather than agreement: a run of recognised words the match did not consume means the buffer holds more than this one command, and committing would fire on part of it.
-3. The match reaches the **end** of the buffer. Anything left over — recognised or `[unk]` — is treated as an in-progress tail. Note what this implies for condition 1: whichever candidate ends up being checked here has nothing trailing it, so its *own* trailing charge is always zero. That does **not** make the trailing term irrelevant to the verdict — it still runs in selection, and selection picks the candidate these conditions are then applied to. On the buffer "decelerate hard burn", coverage demotes bare `decelerate` and hands the check to the buffer-spanning `decelerate by {burn_level}`, which commits; at `coverageWeight = 0` the bare form wins selection instead, fails this condition, and the verdict is `None`.
-4. Every **required slot** in the winning pattern actually matched. Condition 3 does not imply this: a missed slot consumes no *recognised* token, so it never moves the end of the match past anything the pattern matched — and where it does carry the end over a trailing `[unk]` run, that only makes condition 3 pass more readily. Either way a pattern can appear to span the buffer while still missing an argument. Required *literals* are exempt from **this** condition — a dropped function word still leaves every argument present — but see condition 5.
-5. **No required element sits after the last element that actually matched.** Condition 3 cannot express this either, and for the same reason: a miss consumes nothing, so a pattern whose *trailing* elements were never spoken ends up looking exactly like one that genuinely finished at the buffer end. A **medial** miss satisfies *this* condition and can still commit — "launch all missiles hotel one" drops the "target" literal but fills every slot and still lands its last element on the buffer's final token, so nothing arriving next was owed to it. (Completeness is all this condition asks. A medial miss that leaves two *intents* tied is caught by the ambiguity rule below instead.) A **terminal** one is not: with `["switch", "to", "weapons"]` and `["switch", "to", "navigation"]` registered, the buffer "switch to" matches both at `(1 + 1 + 0) / 3` = `0.67`, and the winner is decided by registration order — so committing there fires the *wrong* command, not merely an early one.
-6. Confidence ≥ `minConfidence`, or `-1`.
+1. **Score ≥ `minScore`** — the same number the flush path would compute, coverage included.
+2. **The match starts at the first recognised token** — a leading `[unk]` run is skipped for free.
+3. **The match reaches the end of the buffer** — nothing left over, recognised or `[unk]`.
+4. **Every required slot in the winning pattern matched.** Required *literals* are exempt here, but see 5.
+5. **No required element sits after the last element that actually matched.**
+6. **Confidence ≥ `minConfidence`, or `-1`.**
+
+None of the six is implied by its neighbours, which is why each exists:
+
+- **(1)** The scan mirrors an extraction round starting at token 0, so it charges [coverage](#2-coverage) identically to the flush and the two can never disagree about a buffer they both see.
+- **(2)** Nothing arriving later extends an utterance leftward, so out-of-grammar preamble ("Helm, ...") does not block a commit. A leading word VOSK *did* resolve does block it, and what that buys is completeness rather than agreement: a run of recognised words the match did not consume means the buffer holds more than this one command, and committing would fire on part of it.
+- **(3)** Whichever candidate is checked here has nothing trailing it, so its *own* trailing charge is always zero. That does **not** make the trailing term irrelevant — it still runs in selection, and selection picks the candidate these conditions are then applied to. On the buffer "decelerate hard burn", coverage demotes bare `decelerate` and hands the check to the buffer-spanning `decelerate by {burn_level}`, which commits; at `coverageWeight = 0` the bare form wins selection instead, fails this condition, and the verdict is `None`.
+- **(4)** Condition 3 does not imply it: a missed slot consumes no *recognised* token, so it never moves the end of the match past anything the pattern matched — and where it does carry the end over a trailing `[unk]` run, that only makes condition 3 pass more readily. Either way a pattern can appear to span the buffer while still missing an argument.
+- **(5)** Condition 3 cannot express this either, for the same reason: a miss consumes nothing, so a pattern whose *trailing* elements were never spoken looks exactly like one that genuinely finished at the buffer end. A **medial** miss satisfies this condition and can still commit — "launch all missiles hotel one" drops the "target" literal but fills every slot and lands its last element on the buffer's final token, so nothing arriving next was owed to it. (Completeness is all this condition asks; a medial miss that leaves two *intents* tied is caught by the ambiguity rule below.) A **terminal** miss is refused: with `["switch", "to", "weapons"]` and `["switch", "to", "navigation"]` registered, the buffer "switch to" matches both at `(1 + 1 + 0) / 3` = `0.67`, and the winner is decided by registration order — committing there fires the *wrong* command, not merely an early one.
 
 `Commit` additionally requires **both** of:
 
@@ -312,6 +327,8 @@ With `["fire"]` and `["fire", "at", "{target}"]` registered:
 | `fire at hotel one [unk]` | `None` | trailing leftover = possible in-progress tail |
 
 **The `MaxOptionalExpansion` guard.** Deciding terminality means expanding a pattern over its optional elements, which is exponential (2^optionals). A pattern carrying more than **12** optional elements is refused rather than partially analysed — and because a partial analysis could commit the *wrong* command, the refusal covers the whole command set. Nothing then commits early; every complete match degrades to `HoldExtendable`. The parser names the offending pattern, its intent, and its optional count in a construction-time warning.
+
+A second, lower cap governs the **sibling analysis** the no-tie rule leans on: past **6** optional elements, a pattern's sibling relations are checked only in its required-elements reading. That is enough to *refuse* a `Commit` — the check over-approximates, so nothing wrong commits early — but not enough to *name* the rival, so with `disambiguateSiblingTies` on, a tie visible only through such a pattern fires the winner without asking. Where a question is raised anyway, the unnameable rival is reported through [`PendingAmbiguity.IsTruncated`](command-recognition.md#three-or-more-and-what-does-not-fit). See `KNOWN_LIMITATIONS.md`.
 
 ---
 
@@ -423,7 +440,7 @@ Grammar: `cease_fire` = `["cease", "fire"]`, `approach_target` = `["approach", "
 
 Utterance: **"cease fire target hotel one"** — the speaker said both commands; VOSK dropped the second one's "approach".
 
-1. **Round 1.** `cease fire` matches at token 0 and consumes two tokens. What follows is `target hotel one`. No pattern *starts with* "target" — `approach_target` starts with "approach" — but `approach target {target}` does match there, missing only that literal, and matching two of its three required elements against one miss makes it admissible. So the orphan run terminates at "target", nothing is charged, and `cease fire` scores `2 / 2` = **1.00**.
+1. **Round 1.** `cease fire` matches at token 0 and consumes two tokens. What follows is `target hotel one`. No pattern *starts with* "target" — `approach_target` starts with "approach" — but `approach target {target}` does match there, missing only that literal, and matching two of its three required elements against one miss clears the **start test**: strictly more matched than missed, one notch stronger than [admission](#admission-what-counts-as-a-candidate-at-all). So the orphan run terminates at "target", nothing is charged, and `cease fire` scores `2 / 2` = **1.00**.
 2. **Round 2.** The search restarts at token 2, so the leading term re-bases and nothing before it is charged again. `approach target {target}` misses its `approach` literal but matches the rest and consumes to the end: `2 / 3` = **0.67**. It fires too.
 
 ```json
@@ -465,7 +482,7 @@ Five paths short-circuit before the parse and publish a **single synthetic attem
 | `attempts[].rejectReason` | Empty when accepted; otherwise what stopped it — a gate, a post-gate filter, or one of the pipeline events below | §5 |
 | `attempts[].slots[].startWord/endWord` | Half-open token range into the whitespace-split `inputText` | — |
 
-The diagnoses below cover most of what sends you to the log. The first question to ask of any surprising `score` is whether the pattern's own elements account for it: work out `matched / elements` for the pattern that won, and if the reported number is lower, the difference is coverage — count the recognised tokens lying outside the match.
+The diagnoses below cover most of what sends you to the log. The first question to ask of any surprising `score` is whether the pattern's own elements account for it: work out `matched / elements` for the pattern that won, and if the reported number is lower, the difference is coverage. One caveat before you count: that shortcut assumes every miss was a *literal* — a missed required **slot** subtracts a further `1.0` from the numerator with no coverage involved (4 of 5 matched with a slot missed is `3/5` = `0.60`, not `0.80`), and a matched optional literal weighs `0.5` on both sides (§1). Rule those out first, then count the recognised tokens lying outside the match.
 
 | Symptom | Diagnosis |
 |---------|-----------|
@@ -474,10 +491,12 @@ The diagnoses below cover most of what sends you to the log. The first question 
 | `score` well below `matched / elements`, on a short pattern | Coverage (§2). The match left recognised tokens unexplained before or after it — most often natural trailing words the grammar does not contain. |
 | A command that fired before the upgrade and no longer does | Same cause, and the expected shape of the #65 change (§7 B2). Register the fuller phrasing, mark the trailing words optional, or lower `coverageWeight`. |
 | The command that *lost* a word fired; the one spoken cleanly was rejected at ≈0.40 | Two commands in one utterance, the second missing its leading word (§7 D). |
-| no result at all for a pattern that clearly part-matched | The candidate missed more required elements than it matched and was refused [admission](#admission-what-counts-as-a-candidate-at-all) (§3). |
+| no result at all for a pattern that clearly part-matched | The candidate missed more required elements than it matched and was refused [admission](#admission-what-counts-as-a-candidate-at-all) (§1). |
+| `rejectReason` = `required slot unfilled`, `score` above the gate | The [completeness check](#completeness-independent-of-score) (§5): a required argument was never heard. Independent of `minScore` — no threshold change reaches it. Set `allowPartialMatch` to route it to slot-fill, or re-prompt off `OnUnrecognisedSpeech`. |
 | `score` = 1.0 but `aggregateConfidence` below the gate | One acoustically weak word (§5). Check `words`; consider a slot alias. |
-| The wrong one of two similar commands fired, and its `score` looks healthy | Neither command did anything wrong: they differ at one word, that word was dropped, and selection fell through to registration order (§3). Turn on [`disambiguateSiblingTies`](command-recognition.md#ambiguous-commands-ask-instead-of-guessing) to be asked instead of guessed at. |
-| `rejectReason` = `entered pending (awaiting disambiguation, N choices)` | The above, with the flag already on: nothing fired because the speaker is being asked. Read `PendingAmbiguity` from `OnCommandPending` and prompt with the N choices. |
+| The wrong one of two **sibling** commands fired (patterns one word apart), and its `score` looks healthy | Neither command did anything wrong: the discriminating word was dropped and selection fell through to registration order (§3). The Editor's last-match panel names the rival on a `Tied with:` line (`— sibling, one dropped word apart`). Turn on [`disambiguateSiblingTies`](command-recognition.md#ambiguous-commands-ask-instead-of-guessing) to be asked instead of guessed at. |
+| One of two commands with **duplicate or overlapping patterns** never fires, at a clean score | A **non-sibling** tie: the patterns score identically on every selection key, so the first-registered intent wins permanently. There is no discriminating word, so `disambiguateSiblingTies` has nothing to ask — the tie line reads `— not a sibling; check for duplicate or overlapping patterns`. This is a grammar defect: remove or differentiate the duplicate pattern. |
+| `rejectReason` = `entered pending (awaiting disambiguation, N choices)` | The **sibling** case above, with the flag already on: nothing fired because the speaker is being asked. Read `PendingAmbiguity` from `OnCommandPending` and prompt with the N choices. |
 | Accepted with an empty `slots` array where you expected a value | A bare pattern out-ranked the slot-filled one. Coverage closes the common case (§7 B). If you still see it, the stranded value's first word probably begins another pattern, so coverage charged the bare form nothing — or `coverageWeight` is `0`. |
 
 ---
