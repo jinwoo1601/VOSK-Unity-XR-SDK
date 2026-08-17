@@ -46,7 +46,7 @@ Result of running a single `VoxrTestCase` through the batch test runner. One res
 | Field | Type | Description |
 |-------|------|-------------|
 | `TestCase` | `VoxrTestCase` | The test case that produced this result. |
-| `ActualIntent` | `string` | The intent that was accepted, or null if no command passed thresholds. |
+| `ActualIntent` | `string` | The intent that was accepted, or null when no command passed the thresholds -- or when the best candidate was refused for a missing required slot (`required slot unfilled`), which is a separate check from the thresholds. |
 | `ActualSlots` | `VoxrSlotMatch[]` | Slot matches from the accepted command. Never null — an empty array when nothing was accepted or the accepted command took no slots. |
 | `Score` | `float` | The score of the round that was **accepted** — the runner stops at the first round clearing the gates, so this is not the highest score seen. When nothing was accepted it is the highest score among the rejected rounds, and `0` when nothing matched at all. |
 | `Confidence` | `float` | Minimum word confidence across matched tokens (-1 if unavailable). |

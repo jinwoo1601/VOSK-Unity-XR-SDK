@@ -1192,7 +1192,7 @@ MonoBehaviour:
   m_EditorClassIdentifier:
   _speechRecogniser: {fileID: 1202}
   _commandRecogniser: {fileID: 0}
-  _listeningMode: 0
+  _listeningMode: 1
   _initialiseOnStart: 1
   _cancelPendingOnRelease: 0
   _onTalkStarted:

@@ -50,7 +50,7 @@ Subscribes to speech events and runs text through the command parser pipeline: p
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `Configure` | `void (VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands)` | Builds parser from slot and command definitions. Applies the grammar immediately when the model is ready and `freeSpeechMode` is off -- a bare `SetGrammar` with no stop/start cycle. With `freeSpeechMode` off but the model not yet loaded it is applied as soon as the model becomes ready instead. Use for simple setups without command sets. |
+| `Configure` | `void (VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands)` | Builds parser from slot and command definitions. Applies the grammar immediately when a Speech Recogniser is assigned with its model ready and `freeSpeechMode` is off -- a bare `SetGrammar` with no stop/start cycle. With `freeSpeechMode` off but the model not yet loaded it is applied as soon as the model becomes ready instead. Use for simple setups without command sets. |
 | `Configure` | `void (VoxrSlotDefinition[] slots, VoxrCommandSet[] sets)` | Registers shared slots and named command sets. Does not activate any set -- call `SetActiveSets()` after. |
 | `SetActiveSets` | `void (params string[] setNames)` | Activates one or more named sets, rebuilding the parser and grammar from only those sets' commands. Handles stop/set/start if recognition is running. |
 | `SetActiveSet` | `void (string setName)` | Convenience wrapper for activating a single set. |
