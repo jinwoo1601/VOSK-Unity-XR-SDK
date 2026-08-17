@@ -372,8 +372,8 @@ namespace VoXR.Commands
         // Parallel to _resultBuf: index i describes the result at index i. Rival detail lives in
         // flat preallocated arrays rather than inside the struct so nothing allocates per round.
         TiedSiblingRecord[] _tiedSiblingBuf;
-        TiedSiblingRival[] _tiedRivalBuf; // _resultBuf.Length * MaxDisambiguationRivals
-        VoxrSlotMatch[] _rivalSlotBuf; // ...that, times _maxSlotsPerPattern
+        TiedSiblingRival[] _tiedSiblingRivalBuf; // _resultBuf.Length * MaxDisambiguationRivals
+        VoxrSlotMatch[] _siblingRivalSlotBuf; // ...that, times _maxSlotsPerPattern
 
         // The cancel words the recogniser will actually match against, resolved once here so
         // the construction-time collision report tests the same array TryHandleConfirmCancel
@@ -606,7 +606,7 @@ namespace VoXR.Commands
             // allocate there.
             //
             // Left NULL when nothing will record, which is what DR-7's "costs a flag-off player
-            // nothing" asks for at the rebuild as well as at the parse. _rivalSlotBuf is
+            // nothing" asks for at the rebuild as well as at the parse. _siblingRivalSlotBuf is
             // commands x 4 x maxSlots VoxrSlotMatch — tens of KB on a large grammar, re-made on
             // every NotifySlotChanged() and never read. Every reader is downstream of
             // _recordSiblingTies (the recording branch tests it first, and the recogniser only
@@ -615,8 +615,10 @@ namespace VoXR.Commands
             if (_recordSiblingTies)
             {
                 _tiedSiblingBuf = new TiedSiblingRecord[_resultBuf.Length];
-                _tiedRivalBuf = new TiedSiblingRival[_resultBuf.Length * MaxDisambiguationRivals];
-                _rivalSlotBuf = new VoxrSlotMatch[
+                _tiedSiblingRivalBuf = new TiedSiblingRival[
+                    _resultBuf.Length * MaxDisambiguationRivals
+                ];
+                _siblingRivalSlotBuf = new VoxrSlotMatch[
                     _resultBuf.Length * MaxDisambiguationRivals * _maxSlotsPerPattern
                 ];
             }
@@ -2291,7 +2293,7 @@ namespace VoXR.Commands
                                         tiedTruncated = true;
                                     }
                                     else
-                                        RecordTiedRival(
+                                        RecordTiedSiblingRival(
                                             ci,
                                             pi,
                                             rivalSetId,
@@ -2411,7 +2413,7 @@ namespace VoXR.Commands
         //
         // matchResult is the RIVAL's match — its slots are in _matchSlotBuf right now, which is
         // why the capture has to happen here and not later.
-        void RecordTiedRival(
+        void RecordTiedSiblingRival(
             int ci,
             int pi,
             int rivalSetId,
@@ -2448,7 +2450,7 @@ namespace VoXR.Commands
             int firstRival = _resultCount * MaxDisambiguationRivals;
             for (int r = 0; r < tiedRivalCount; r++)
             {
-                var kept = _tiedRivalBuf[firstRival + r];
+                var kept = _tiedSiblingRivalBuf[firstRival + r];
                 if (
                     IsAnswerableRival(
                         kept.Value,
@@ -2488,7 +2490,7 @@ namespace VoXR.Commands
             }
 
             int slot = firstRival + tiedRivalCount;
-            _tiedRivalBuf[slot] = new TiedSiblingRival
+            _tiedSiblingRivalBuf[slot] = new TiedSiblingRival
             {
                 CommandIndex = ci,
                 PatternIndex = pi,
@@ -2507,7 +2509,7 @@ namespace VoXR.Commands
                 Array.Copy(
                     _matchSlotBuf,
                     0,
-                    _rivalSlotBuf,
+                    _siblingRivalSlotBuf,
                     slot * _maxSlotsPerPattern,
                     matchResult.SlotCount
                 );
@@ -2522,34 +2524,44 @@ namespace VoXR.Commands
         // recogniser already walks the result buffer by index in its Step 7 loop.
         internal TiedSiblingRecord[] TiedSiblingBuffer => _tiedSiblingBuf;
 
-        // Rival n of result i. Flat indexing rather than a jagged array so nothing allocates per
-        // round; the caller has already checked n against TiedSiblingBuffer[i].RivalCount.
-        internal TiedSiblingRival TiedRival(int resultIdx, int n) =>
-            _tiedRivalBuf[resultIdx * MaxDisambiguationRivals + n];
+        // Sibling rival n of result i. Flat indexing rather than a jagged array so nothing
+        // allocates per round; the caller has already checked n against
+        // TiedSiblingBuffer[i].RivalCount.
+        //
+        // Every member of this family says Sibling, and that is not decoration (issue #102):
+        // this buffer holds ONLY sibling rivals, because DR-4 makes the discriminating values
+        // the choice vocabulary and a non-sibling tie has none. VoxrMatchAttempt.TiedRival is
+        // the opposite — the Editor diagnostic that issue #95 widened to name a rival of ANY
+        // kind. One name for both contracts is what this family was renamed away from.
+        //
+        // The At suffix is only there because C# would otherwise have this method and the
+        // struct it returns share a name.
+        internal TiedSiblingRival TiedSiblingRivalAt(int resultIdx, int n) =>
+            _tiedSiblingRivalBuf[resultIdx * MaxDisambiguationRivals + n];
 
         // That rival's own slot matches, copied out fresh because they cross into a public
         // VoxrCommand the subscriber can retain — the PendingCommandHandler precedent that
         // anything reaching a public event is allocated, never pool-borrowed. Once per
         // ambiguity, never per candidate.
-        internal VoxrSlotMatch[] CopyRivalSlots(int resultIdx, int n)
+        internal VoxrSlotMatch[] CopySiblingRivalSlots(int resultIdx, int n)
         {
             int slot = resultIdx * MaxDisambiguationRivals + n;
-            int count = _tiedRivalBuf[slot].SlotCount;
+            int count = _tiedSiblingRivalBuf[slot].SlotCount;
             if (count <= 0)
                 return Array.Empty<VoxrSlotMatch>();
 
             var slots = new VoxrSlotMatch[count];
-            Array.Copy(_rivalSlotBuf, slot * _maxSlotsPerPattern, slots, 0, count);
+            Array.Copy(_siblingRivalSlotBuf, slot * _maxSlotsPerPattern, slots, 0, count);
             return slots;
         }
 
-        // Rival n's intent, so the recogniser can resolve its definition before offering it as
-        // a choice — and drop it from the list if that lookup fails.
-        internal string RivalIntent(int resultIdx, int n) =>
-            _commands[TiedRival(resultIdx, n).CommandIndex].Intent;
+        // Sibling rival n's intent, so the recogniser can resolve its definition before offering
+        // it as a choice — and drop it from the list if that lookup fails.
+        internal string SiblingRivalIntent(int resultIdx, int n) =>
+            _commands[TiedSiblingRivalAt(resultIdx, n).CommandIndex].Intent;
 
-        // The command that fires if the speaker picks rival n — built here rather than in the
-        // recogniser because _slotNames and the confidence span both live on this side.
+        // The command that fires if the speaker picks sibling rival n — built here rather than
+        // in the recogniser because _slotNames and the confidence span both live on this side.
         //
         // Confidence is computed over the RIVAL's own span. ComputeConfidence takes
         // (tokens, startIdx, endIdx): startIdx comes from the record, because CompareCandidate
@@ -2559,17 +2571,17 @@ namespace VoXR.Commands
         //
         // The score is the winner's, and that is not an approximation: reaching Tied means the
         // scores were equal.
-        internal VoxrCommand BuildRivalCommand(
+        internal VoxrCommand BuildSiblingRivalCommand(
             int resultIdx,
             int n,
             string[] tokens,
             Dictionary<string, float> wordConfidence
         )
         {
-            var rival = TiedRival(resultIdx, n);
+            var rival = TiedSiblingRivalAt(resultIdx, n);
             return new VoxrCommand(
                 _commands[rival.CommandIndex].Intent,
-                CopyRivalSlots(resultIdx, n),
+                CopySiblingRivalSlots(resultIdx, n),
                 ComputeConfidence(
                     tokens,
                     _tiedSiblingBuf[resultIdx].StartIdx,

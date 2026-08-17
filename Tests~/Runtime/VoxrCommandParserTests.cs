@@ -4749,8 +4749,12 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(1, record.RivalCount);
             Assert.AreEqual("mode", record.WinnerValue, "the winner's own discriminating value");
             Assert.IsFalse(record.Truncated);
-            Assert.AreEqual("level", parser.TiedRival(0, 0).Value, "what the speaker would say");
-            Assert.AreEqual("set_level", parser.RivalIntent(0, 0), "…to fire this instead");
+            Assert.AreEqual(
+                "level",
+                parser.TiedSiblingRivalAt(0, 0).Value,
+                "what the speaker would say"
+            );
+            Assert.AreEqual("set_level", parser.SiblingRivalIntent(0, 0), "…to fire this instead");
         }
 
         [Test]
@@ -4790,7 +4794,11 @@ namespace VoXR.Tests.Runtime
             Assert.IsFalse(record.Truncated);
             CollectionAssert.AreEqual(
                 new[] { "level", "standby" },
-                new[] { parser.TiedRival(0, 0).Value, parser.TiedRival(0, 1).Value },
+                new[]
+                {
+                    parser.TiedSiblingRivalAt(0, 0).Value,
+                    parser.TiedSiblingRivalAt(0, 1).Value,
+                },
                 "registration order, deterministically — an integrator's prompt must not "
                     + "reorder itself between sessions"
             );
@@ -4817,7 +4825,11 @@ namespace VoXR.Tests.Runtime
 
             var record = parser.TiedSiblingBuffer[0];
             Assert.AreEqual(1, record.RivalCount, "one offerable choice, not two spellings of it");
-            Assert.AreEqual("set_level_a", parser.RivalIntent(0, 0), "the first, as F8 does");
+            Assert.AreEqual(
+                "set_level_a",
+                parser.SiblingRivalIntent(0, 0),
+                "the first, as F8 does"
+            );
             Assert.IsFalse(
                 record.Truncated,
                 "a duplicate that was never offerable is not something that failed to fit"
@@ -4861,7 +4873,7 @@ namespace VoXR.Tests.Runtime
 
             parser.Parse("set alpha on", null);
 
-            var slots = parser.CopyRivalSlots(0, 0);
+            var slots = parser.CopySiblingRivalSlots(0, 0);
             Assert.AreEqual(1, slots.Length);
             Assert.AreEqual("ship", slots[0].Name);
             Assert.AreEqual("alpha", slots[0].Value);
@@ -4898,8 +4910,8 @@ namespace VoXR.Tests.Runtime
                     + "used to claim this while nothing asserted it"
             );
             Assert.AreEqual("mode", record.WinnerValue);
-            Assert.AreEqual("level", parser.TiedRival(0, 0).Value);
-            Assert.AreEqual("set_level_on", parser.RivalIntent(0, 0));
+            Assert.AreEqual("level", parser.TiedSiblingRivalAt(0, 0).Value);
+            Assert.AreEqual("set_level_on", parser.SiblingRivalIntent(0, 0));
         }
 
         [Test]
@@ -4968,7 +4980,7 @@ namespace VoXR.Tests.Runtime
 
             var record = parser.TiedSiblingBuffer[0];
             Assert.AreEqual(1, record.RivalCount, "only the nameable rival is offered");
-            Assert.AreEqual("standby", parser.TiedRival(0, 0).Value);
+            Assert.AreEqual("standby", parser.TiedSiblingRivalAt(0, 0).Value);
             Assert.IsTrue(
                 record.Truncated,
                 "and the integrator is told an answer is missing from the list"
@@ -5011,10 +5023,14 @@ namespace VoXR.Tests.Runtime
             );
             CollectionAssert.AreEqual(
                 new[] { "set_beta", "set_standby" },
-                new[] { parser.RivalIntent(0, 0), parser.RivalIntent(0, 1) },
+                new[] { parser.SiblingRivalIntent(0, 0), parser.SiblingRivalIntent(0, 1) },
                 "and the second intent still gets its slot"
             );
-            Assert.AreEqual("level", parser.TiedRival(0, 0).Value, "the first spelling wins");
+            Assert.AreEqual(
+                "level",
+                parser.TiedSiblingRivalAt(0, 0).Value,
+                "the first spelling wins"
+            );
         }
 
         [Test]

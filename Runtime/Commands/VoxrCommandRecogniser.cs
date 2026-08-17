@@ -1103,7 +1103,9 @@ namespace VoXR.Commands
                 // registered the rival in an inactive set, which does not reach the shape —
                 // the parser is rebuilt from the ACTIVE commands, so it stops seeing the tie
                 // at all. The guard is what keeps that argument true if either end changes.
-                if (!_setManager.TryLookupCommand(parser.RivalIntent(i, n), out var rivalDef))
+                if (
+                    !_setManager.TryLookupCommand(parser.SiblingRivalIntent(i, n), out var rivalDef)
+                )
                 {
                     // Nameable in a prompt but not fireable, so not offered — and reported,
                     // because an answer the speaker could have given is going unoffered.
@@ -1111,8 +1113,8 @@ namespace VoXR.Commands
                     continue;
                 }
 
-                choiceBuf.Add(parser.BuildRivalCommand(i, n, tokens, wordConfidence));
-                valueBuf.Add(parser.TiedRival(i, n).Value);
+                choiceBuf.Add(parser.BuildSiblingRivalCommand(i, n, tokens, wordConfidence));
+                valueBuf.Add(parser.TiedSiblingRivalAt(i, n).Value);
                 defBuf.Add(rivalDef);
             }
 
