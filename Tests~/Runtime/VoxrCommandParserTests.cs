@@ -3,8 +3,13 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEngine.TestTools;
+using UnityEngine.TestTools.Constraints;
 using VoXR;
 using VoXR.Commands;
+// UnityEngine.TestTools.Constraints.Is derives from NUnit's and adds AllocatingGCMemory().
+// Aliased rather than imported bare because both namespaces export the name; this file used
+// no `Is.` before, so the alias costs nothing and keeps the ambiguity from ever arising.
+using Is = UnityEngine.TestTools.Constraints.Is;
 
 namespace VoXR.Tests.Runtime
 {
@@ -3910,6 +3915,52 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void SiblingWarning_TwoPatternsSharingAValue_NameThatValueOnce()
+        {
+            // The VALUE list's dedup, the sibling of the pattern-text one above and added
+            // blind alongside it (issue #93). Both became reachable when issue #90 stopped
+            // dropping duplicate-valued members, and both collapse for the same reason the
+            // intent list does — except that here the reason is about the QUESTION: the choice
+            // the speaker faces is between distinct words, so ("mode", "mode" or "level")
+            // would be wrong about what is being asked, not merely repetitive.
+            //
+            // The duplicate-valued members render DIFFERENT pattern text here — set_a reaches
+            // the frame by omitting its optional — so the pattern-text dedup does nothing and
+            // the value list is the only thing under test.
+            //
+            // Not the only guard on this branch, and issue #93 said otherwise only because it
+            // was filed hours before the other one landed: SiblingWarning_SymmetricSetWith
+            // ABarePattern_NumbersEachPatternToo asserts a full message on a set that carries
+            // "mode" twice, so it too goes red without the dedup. It gets there incidentally,
+            // through a fixture built to pin per-pattern element numbering, and it would stop
+            // covering this the moment that fixture changed for its own reasons. This one is
+            // deliberate and isolated, which is what makes it the guard rather than a second
+            // accident.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'set_a', 'set_b' and 'set_c' have patterns "
+                        + "\"set mode on \\?please\" \\(with its optional elements omitted\\), "
+                        + "\"set mode on\" and \"set level on\" that differ only at element 2 "
+                        + "\\(\"mode\" or \"level\"\\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("set_a", SibP("set", "mode", "on", "?please")),
+                    Sib("set_b", SibP("set", "mode", "on")),
+                    Sib("set_c", SibP("set", "level", "on")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void SiblingWarning_NamesARemedyThatActuallyRemovesTheTie()
         {
             // The message shipped saying "Diverge earlier", which does not work — and this
@@ -4314,6 +4365,45 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void SiblingWarning_TwoPatternsCarryingOneCancelWord_ReportItOnce()
+        {
+            // The collision loop's per-VALUE dedup, the other branch issue #90 forced and the
+            // other one added blind (issue #93). Since a value can now be carried by several
+            // patterns, and the remedy — rename the literal — is the same advice however many
+            // patterns spell it, repeating it would be noise.
+            //
+            // This is the shape the test above deliberately is NOT: there the earlier member
+            // carrying "negative" was unanswerable, so suppressing against it would have lost
+            // a real collision, and the dedup had to let the later one through. Here BOTH
+            // members are answerable — each has 'ident_friendly' as a different-valued,
+            // different-intent co-member — so exactly one report is right, and the suppressed
+            // second one is what NoUnexpectedReceived catches. No fixture anywhere paired a
+            // duplicated value with cancel vocabulary before this, so the guard had no
+            // exercise at all.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 3"));
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intent 'ident_hostile' carries the discriminating value \"negative\" at "
+                        + "element 3, which is also in the default cancel vocabulary"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("ident_hostile", SibP("mark", "contact", "negative")),
+                    Sib("ident_unknown", SibP("mark", "contact", "negative")),
+                    Sib("ident_friendly", SibP("mark", "contact", "friendly")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void SiblingWarning_CancelVocabularyOverridden_ReportsAgainstTheOverride()
         {
             // F12. The report is computed against the vocabulary that will actually run, so an
@@ -4548,6 +4638,131 @@ namespace VoXR.Tests.Runtime
             var parser = new VoxrCommandParser(BurnSlots(), DecelerateCommands("by"));
 
             Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // ---------- Sibling selection cost invariants (issue #74 F13, design §7; issue #93) ----------
+        //
+        // Two claims the feature makes about what it costs rather than about what it decides.
+        // Both were argued in prose and measured with throwaway probes, and neither had an
+        // executable guard: deleting the code that makes them true left every suite green.
+
+        static VoxrCommandDefinition[] SetOnSiblings() =>
+            new[]
+            {
+                Sib("set_mode", SibP("set", "mode", "on")),
+                Sib("set_level", SibP("set", "level", "on")),
+            };
+
+        [Test]
+        public void EagerSelection_OverASiblingTie_AllocatesNothingPerCall()
+        {
+            // CompareCandidate and AreSiblingRivals sit in the innermost loop of both selection
+            // paths — (command x pattern x startIdx), per utterance — so an allocation
+            // introduced beside them is per-utterance GC pressure on the poll path. Both are
+            // written to allocate nothing (AreSiblingRivals reads prebuilt arrays and exits on
+            // the first null), and nothing checked.
+            //
+            // Measured with Unity's own AllocatingGCMemory constraint and NOT with
+            // GC.GetAllocatedBytesForCurrentThread, which is what ZeroAllocPollPathTests uses.
+            // That counter is INERT here — measured at 0 B moved after a deliberate 1 MB
+            // allocation, this Unity version's collector not being one that maintains it — so
+            // an assertion written against it reads zero whatever the code does. This test was
+            // written that way first and was blind: deleting the memo guard in
+            // EnsureSiblingLookup makes this very scan rebuild the whole lookup (a Dictionary,
+            // per-bucket lists and four jagged arrays) on all 100 calls, and the counter-based
+            // version still reported 0 B and passed. The constraint below fails on it.
+            //
+            // ZeroAllocPollPathTests is blind for the same reason and is left alone here — it
+            // is a different hot path, and its partial-JSON test asserts a BUDGET, which no
+            // constraint expresses. Reported on the PR rather than fixed in passing.
+            //
+            // Measured over TryEagerCommit rather than Parse, because Parse necessarily
+            // allocates the results it returns and so can never be pinned at zero. The eager
+            // scan mirrors ParseInternal's loop and shares the comparator and the rival test,
+            // which is the code this is about; it returns an enum, so anything the constraint
+            // sees is a regression.
+            //
+            // Literal-only grammar, because the constraint admits no budget: a matched slot
+            // allocates its own captured value, and there would be no threshold to put it under.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 2"));
+
+            var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), SetOnSiblings());
+
+            // ONE array instance, hoisted OUT of the measured delegate below, because
+            // `new[] { "set", "on" }` inside it would be 100 array allocations inside the
+            // region the constraint watches — the test failing on its own garbage.
+            //
+            // Not for warm-up: a fresh two-element array per call would leave the steady state
+            // exactly as it is. BuildCoverageTables regrows only when tokens.Length exceeds
+            // the capacity it already has, and it rebinds _coverageTokens every call, so
+            // neither the tables nor the ReferenceEquals guard would notice.
+            var tokens = new[] { "set", "on" };
+
+            // The tie has to be REACHED, or this measures an empty loop: "set on" drops the
+            // discriminator, both patterns score identically, and the sibling refusal is what
+            // turns the verdict from Commit into None. This call is also the warm-up — the
+            // extendability analysis and the coverage tables are built lazily on the first
+            // eager check, and both are per-parser costs rather than per-call ones.
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(tokens, null, 0.6f, 0f),
+                "the sibling refusal, which is the branch that calls AreSiblingRivals"
+            );
+
+            Assert.That(
+                () =>
+                {
+                    for (int i = 0; i < 100; i++)
+                        parser.TryEagerCommit(tokens, null, 0.6f, 0f);
+                },
+                Is.Not.AllocatingGCMemory()
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingLookup_IsBuiltOncePerParser_NotOncePerParse()
+        {
+            // F13's acceptance: parsing the same utterance N times calls FindSiblingSets once.
+            // The whole of what makes that true is the `if (_siblingLookupComputed) return;`
+            // guard at the top of EnsureSiblingLookup, and deleting it broke nothing in the
+            // suite as it stood — a rebuild produces an EQUAL lookup, so every behavioural test
+            // still passed while the parser re-ran an O(commands x forms) Dictionary build on
+            // every eager scan.
+            //
+            // Pinned on reference identity rather than a call count: a rebuild is exactly what
+            // replaces these arrays, and _siblingMemberships is the one the runtime reads (the
+            // set list beside it is Editor-only). Reflection for the reason SiblingScan_
+            // IsEditorOnly uses it — the private field IS the invariant, and widening its
+            // visibility for a test would be a larger change than the test.
+            LogAssert.Expect(UnityEngine.LogType.Warning, new Regex("differ only at element 2"));
+
+            var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), SetOnSiblings());
+
+            var field = typeof(VoxrCommandParser).GetField(
+                "_siblingMemberships",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+            );
+            Assert.IsNotNull(field, "VoxrCommandParser._siblingMemberships");
+
+            object built = field.GetValue(parser);
+            Assert.IsNotNull(built, "built at construction, before any utterance");
+
+            // The eager scan is the parse-time caller — ParseInternal reads the lookup but
+            // never builds it — so both are driven, three times each.
+            for (int i = 0; i < 3; i++)
+            {
+                parser.Parse("set on", null);
+                parser.TryEagerCommit(new[] { "set", "on" }, null, 0.6f, 0f);
+            }
+
+            Assert.AreSame(
+                built,
+                field.GetValue(parser),
+                "the same lookup instance throughout, so FindSiblingSets ran once for this "
+                    + "parser and not once per scan"
+            );
             LogAssert.NoUnexpectedReceived();
         }
 
