@@ -442,10 +442,11 @@ One further warning fires if a discriminating value is also cancel vocabulary. F
 
 ### Register each intent exactly once
 
-An intent is the identity of a command, and the package treats it as one: **two `VoxrCommandDefinition`s under the same `Intent` are an authoring mistake**, whether they arrive in one `Configure(slots, commands)` call or in two command sets made active together. Only one of them is ever reachable.
+An intent is the identity of a command, and the package treats it as one: **two `VoxrCommandDefinition`s under the same `Intent` are an authoring mistake**, whether they arrive in one `Configure(slots, commands)` call or in two command sets made active together. Both definitions' patterns stay live in the parse — either can win an utterance — but only one of them is reachable *back from the intent*, and the two lookups disagree about which.
 
 ```csharp
-// Warned about -- one intent, two definitions, and only one of them is reachable
+// Warned about -- one intent, two definitions: both patterns still match, but only
+// one definition is reachable back from the intent
 new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at", "{target}", "now" } }),
 new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at", "{target}" } }),
 
@@ -456,7 +457,7 @@ new VoxrCommandDefinition("fire_at", new[] {
 })
 ```
 
-The reason it is worse than "the second one never fires" is that the two places which resolve an intent back to a definition break the tie in *opposite* directions. The command-set lookup is a dictionary keyed on intent, so the **last** registration wins there; the follow-up re-score scans the command list and stops on the **first**. A `VoxrCommand` carries its `Intent` and `MatchedPatternIndex` but not the command that produced it, so every consumer re-derives the definition from the intent string and they can disagree -- `MatchedPatternIndex` applied to a pattern of a different length, a different unfilled-slot set for a follow-up to chase, a different `allowPartialMatch`, and a different `requiresConfirmation`. That last one is the one to state plainly: with two definitions under one intent, one of them `requiresConfirmation`, whether a destructive command asks before firing depends on registration order rather than on the command that matched.
+Note what is *not* wrong: selection walks the command list and never consults the intent lookup, so the second definition's patterns are matched and scored exactly like any other — "the second one never fires" is not what goes wrong here. What breaks is everything downstream of the parse, because the two places which resolve an intent back to a definition break the tie in *opposite* directions. The command-set lookup is a dictionary keyed on intent, so the **last** registration wins there; the follow-up re-score scans the command list and stops on the **first**. A `VoxrCommand` carries its `Intent` and `MatchedPatternIndex` but not the command that produced it, so every consumer re-derives the definition from the intent string and they can disagree -- `MatchedPatternIndex` applied to a pattern of a different length, a different unfilled-slot set for a follow-up to chase, a different `allowPartialMatch`, and a different `requiresConfirmation`. That last one is the one to state plainly: with two definitions under one intent, one of them `requiresConfirmation`, whether a destructive command asks before firing depends on registration order rather than on the command that matched.
 
 Per-intent debounce is keyed on the intent too, so duplicate definitions share one cooldown.
 

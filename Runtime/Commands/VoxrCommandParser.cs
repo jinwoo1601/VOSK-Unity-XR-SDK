@@ -1017,8 +1017,12 @@ namespace VoXR.Commands
         // destructive command asks before firing decided by registration order rather than by
         // the command that matched. Issue #113 was one instance of it reaching a subscriber.
         //
+        // Note what is NOT wrong: both definitions' patterns still compete in the parse and
+        // either can win, since selection walks _commands and never consults the intent lookup.
+        // What only one definition is reachable for is resolution back FROM the intent.
+        //
         // Reported rather than repaired. Aligning the two resolutions would settle WHICH
-        // definition answers without making the second one reachable, and the ambiguity buys
+        // definition answers back from the intent, and the ambiguity buys
         // nothing in the first place: two definitions under one intent say nothing that one
         // definition holding both patterns cannot, and that form is unambiguous everywhere.
         //
@@ -1067,12 +1071,14 @@ namespace VoXR.Commands
                 // what tells them apart in the console.
                 string message =
                     $"[VoxrCommandParser] Intent '{commands[i].Intent}' is registered by {count} "
-                    + "command definitions, and only one of them is reachable — the two intent "
-                    + "resolutions disagree about which. The command-set lookup keeps the LAST "
-                    + $"registration ({DescribeDefinition(commands[last])}) while the follow-up "
-                    + $"re-score takes the FIRST ({DescribeDefinition(commands[i])}). A matched "
-                    + "command carries no command index, so consumers re-derive the definition "
-                    + "from the intent string and can read the one that did not match: "
+                    + "command definitions. All of their patterns still compete in the parse, so "
+                    + "any of them can win an utterance — but only one definition is reachable "
+                    + "back FROM the intent, and the two resolutions disagree about which. The "
+                    + "command-set lookup keeps the LAST registration "
+                    + $"({DescribeDefinition(commands[last])}) while the follow-up re-score takes "
+                    + $"the FIRST ({DescribeDefinition(commands[i])}). A matched command carries "
+                    + "no command index, so consumers re-derive the definition from the intent "
+                    + "string and can read the one that did not match: "
                     + "MatchedPatternIndex applied to a pattern of a different length, a "
                     + "different unfilled-slot set for a follow-up to fill, and a different "
                     + "allowPartialMatch and requiresConfirmation. Give each definition its own "
