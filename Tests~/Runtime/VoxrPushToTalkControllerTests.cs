@@ -414,6 +414,15 @@ namespace VoXR.Tests.Runtime
         // to null while its managed wrapper is still alive. `?.` does not call that overload,
         // so the two tests below are the ones the old `?.` in the setter failed: they destroy
         // the component but keep the C# reference the controller holds.
+        //
+        // What pins the skip is the event count, NOT the DoesNotThrow. Dispatching into a
+        // destroyed recogniser never reached this caller: StartRecognition hands off to a
+        // discarded async Task, and StopRecognitionCore touches no Unity-side member on any
+        // platform. The DoesNotThrow is kept only as a cheap guard against a future edit that
+        // does make the path throw, and its message says exactly that much — the sibling
+        // fixture (VoxrPushToTalkPauseTests) warns about assertions that cannot see the throw
+        // they exist to rule out. Pinning non-dispatch directly would need a call-counting
+        // double over `internal virtual StartRecognitionCore`, as that fixture uses.
 
         [Test]
         public void ListeningMode_SetToContinuous_RecogniserDestroyed_IsNoOp()
@@ -423,7 +432,7 @@ namespace VoXR.Tests.Runtime
 
             Assert.DoesNotThrow(
                 () => _controller.ListeningMode = VoxrListeningMode.Continuous,
-                "Switching to Continuous must skip a destroyed recogniser, not dispatch into it"
+                "Switching to Continuous must not surface an exception to the caller"
             );
             Assert.AreEqual(
                 0,
@@ -443,7 +452,7 @@ namespace VoXR.Tests.Runtime
 
             Assert.DoesNotThrow(
                 () => _controller.ListeningMode = VoxrListeningMode.PushToTalk,
-                "Switching back must skip a destroyed recogniser, not dispatch into it"
+                "Switching back must not surface an exception to the caller"
             );
             Assert.AreEqual(
                 0,

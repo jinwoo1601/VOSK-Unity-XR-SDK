@@ -63,9 +63,12 @@ namespace VoXR
                 // Explicit null checks below, never `?.`: _speechRecogniser is a
                 // UnityEngine.Object, and only the overloaded operator sees a *destroyed*
                 // component as null. `?.` is a plain reference check, so it would dispatch
-                // into a destroyed recogniser and throw. Announcing inside the guard is the
-                // same pairing rule OnEnable and ReleaseTalk already keep: an event fires
-                // only for a start or stop that actually happened.
+                // into a destroyed recogniser. Nothing surfaced here when it did: the start
+                // hands off to a discarded async Task and the stop touches no Unity-side
+                // member, so the old failure was silent, not an exception — do not expect
+                // one when testing this. Announcing inside the guard is the same pairing
+                // rule OnEnable and ReleaseTalk already keep: an event fires only for a
+                // start or stop that actually happened.
                 if (value == VoxrListeningMode.Continuous)
                 {
                     if (!_wantRecognising)
