@@ -408,6 +408,60 @@ namespace VoXR.Tests.Runtime
             );
         }
 
+        // -------- Missing or destroyed recogniser (issue #115) --------
+
+        // Unity overloads ==/!= on UnityEngine.Object so a destroyed component compares equal
+        // to null while its managed wrapper is still alive. `?.` does not call that overload,
+        // so the two tests below are the ones the old `?.` in the setter failed: they destroy
+        // the component but keep the C# reference the controller holds.
+
+        [Test]
+        public void ListeningMode_SetToContinuous_RecogniserDestroyed_IsNoOp()
+        {
+            Object.DestroyImmediate(_speech);
+            Assume.That(_speech == null, Is.True, "Precondition: the recogniser reads as null");
+
+            Assert.DoesNotThrow(
+                () => _controller.ListeningMode = VoxrListeningMode.Continuous,
+                "Switching to Continuous must skip a destroyed recogniser, not dispatch into it"
+            );
+            Assert.AreEqual(
+                0,
+                _startedCount,
+                "Nothing started, so nothing may announce a start — the same pairing PressTalk "
+                    + "and the authored-Continuous enable already keep"
+            );
+        }
+
+        [Test]
+        public void ListeningMode_SetToPushToTalk_RecogniserDestroyed_IsNoOp()
+        {
+            _controller.ListeningMode = VoxrListeningMode.Continuous;
+            Assume.That(_startedCount, Is.EqualTo(1), "Precondition: the live start announced");
+
+            Object.DestroyImmediate(_speech);
+
+            Assert.DoesNotThrow(
+                () => _controller.ListeningMode = VoxrListeningMode.PushToTalk,
+                "Switching back must skip a destroyed recogniser, not dispatch into it"
+            );
+            Assert.AreEqual(
+                0,
+                _endedCount,
+                "Nothing stopped, so nothing may announce a stop — ReleaseTalk is already "
+                    + "silent on a missing recogniser for the same reason"
+            );
+        }
+
+        [Test]
+        public void ListeningMode_SetToContinuous_RecogniserNull_IsNoOp()
+        {
+            _controller.SpeechRecogniser = null;
+
+            Assert.DoesNotThrow(() => _controller.ListeningMode = VoxrListeningMode.Continuous);
+            Assert.AreEqual(0, _startedCount);
+        }
+
         [UnityTest]
         public IEnumerator OnDestroy_Cleanup_DoesNotThrow()
         {

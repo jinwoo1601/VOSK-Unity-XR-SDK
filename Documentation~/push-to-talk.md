@@ -48,6 +48,8 @@ Setter semantics:
 | `Continuous` → `PushToTalk`    | Stops recognition; fires `OnTalkEnded`.                                                             |
 | Same → same                    | No-op.                                                                                              |
 
+Both transitions are guarded by the `Speech Recogniser` reference. Without one — unassigned, or a component Unity has destroyed — the property still changes the mode, but starts and stops nothing and fires neither event, the same way `PressTalk()` and `ReleaseTalk()` do nothing without it. An event is only ever an announcement of a start or stop that actually happened.
+
 ## Inspector Reference
 
 | Field                         | Purpose                                                                                 |
@@ -72,7 +74,7 @@ If you would rather not depend on event timing at all, `VoxrSpeechRecogniser.IsR
 
 | Member | Kind | Description |
 |--------|------|-------------|
-| `ListeningMode` | `VoxrListeningMode` property (get/set) | Reads or switches the mode at runtime. The setter starts/stops recognition and fires the events per *Setter semantics* above. See [`VoxrListeningMode`](api/data-types.md#voxrlisteningmode). |
+| `ListeningMode` | `VoxrListeningMode` property (get/set) | Reads or switches the mode at runtime. The setter starts/stops recognition and fires the events per *Setter semantics* above, including its `Speech Recogniser` guard. See [`VoxrListeningMode`](api/data-types.md#voxrlisteningmode). |
 | `OnTalkStarted` | `UnityEvent` property (get) | The Inspector's `On Talk Started`. Subscribe from code with `OnTalkStarted.AddListener(...)`. |
 | `OnTalkEnded` | `UnityEvent` property (get) | The Inspector's `On Talk Ended`, same access pattern. |
 | `PressTalk()` | `void` | Starts recognition and fires `OnTalkStarted`. No-op in `Continuous` mode, without a `Speech Recogniser`, or while a press is already held. |

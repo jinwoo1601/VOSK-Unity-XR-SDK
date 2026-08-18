@@ -60,13 +60,23 @@ namespace VoXR
                 var previous = _listeningMode;
                 _listeningMode = value;
 
+                // Explicit null checks below, never `?.`: _speechRecogniser is a
+                // UnityEngine.Object, and only the overloaded operator sees a *destroyed*
+                // component as null. `?.` is a plain reference check, so it would dispatch
+                // into a destroyed recogniser and throw. Announcing inside the guard is the
+                // same pairing rule OnEnable and ReleaseTalk already keep: an event fires
+                // only for a start or stop that actually happened.
                 if (value == VoxrListeningMode.Continuous)
                 {
                     if (!_wantRecognising)
                     {
                         _wantRecognising = true;
-                        _speechRecogniser?.StartRecognition();
-                        _onTalkStarted?.Invoke();
+
+                        if (_speechRecogniser != null)
+                        {
+                            _speechRecogniser.StartRecognition();
+                            _onTalkStarted?.Invoke();
+                        }
                     }
                 }
                 else // PushToTalk
@@ -74,8 +84,12 @@ namespace VoXR
                     if (previous == VoxrListeningMode.Continuous && _wantRecognising)
                     {
                         _wantRecognising = false;
-                        _speechRecogniser?.StopRecognition();
-                        _onTalkEnded?.Invoke();
+
+                        if (_speechRecogniser != null)
+                        {
+                            _speechRecogniser.StopRecognition();
+                            _onTalkEnded?.Invoke();
+                        }
                     }
                 }
             }
