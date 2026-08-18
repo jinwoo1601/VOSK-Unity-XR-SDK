@@ -84,12 +84,11 @@ One further skip is silent by design and is not an asset-list problem at all: a 
 
 The parser inspects the grammar as it is built -- for Inspector authoring, during `Awake()` -- and logs `Debug.LogWarning` for the shapes below. Nothing is rejected; the recogniser runs either way.
 
-Four checks read slot values and alias variants, and they run **in player builds as well as the Editor**, so they show up in device logs too:
+Three checks read slot values and alias variants alike, and they run **in player builds as well as the Editor**, so they show up in device logs too:
 
-- **Uppercase in a value** -- VOSK only ever emits lowercase, so the value can never match.
-- **Punctuation in a value** -- VOSK strips punctuation, so the value may not match as written.
-- **Single-character value** -- one character is too little for reliable recognition; declare an alias instead (`a` -> `one`).
-- **Single-character alias variant** -- same reason: very short words are recognised unreliably.
+- **Uppercase in a value or alias variant** -- VOSK only ever emits lowercase, so it can never match.
+- **Punctuation in a value or alias variant** -- VOSK strips punctuation, so it may not match as written.
+- **Single-character value or alias variant** -- one character is too little for reliable recognition; for a value, declare an alias instead (`a` -> `one`), and for a variant, prefer a longer, phonetically distinct word.
 
 Three more scan the patterns:
 
