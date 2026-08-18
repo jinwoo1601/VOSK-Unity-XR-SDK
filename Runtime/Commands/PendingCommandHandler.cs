@@ -261,6 +261,24 @@ namespace VoXR.Commands
         {
             var pending = _pendingCommand.Value;
 
+            // A pending must never come to carry a score its own fire paths would refuse
+            // (issue #113). Three of them deliver pending.Command exactly as stored and re-test
+            // nothing: Complete, the confirm-word arm of TryHandleConfirmCancel, and FireAsIs on
+            // timeout. So flooring only where the command fires would leave the floor open here,
+            // one utterance later, by a route that never looks at the score again.
+            //
+            // Retained rather than clamped to zero: the prior score is a real, admissible one
+            // (EnterPending refuses anything at or below zero), and it is what those three paths
+            // would have delivered before this fill. The fill itself is still kept — this is the
+            // score, not the progress. When the command finally completes, ScoreFollowUp
+            // recomputes from the full slot set and the retained value is discarded unread.
+            //
+            // Unreachable on a well-formed grammar: with one definition per intent the
+            // admission rule makes a post-fill re-score arithmetically positive. It is the
+            // duplicate-intent divergence that puts a non-positive score in hand at all.
+            if (partiallyFilled.Score <= 0f)
+                partiallyFilled = partiallyFilled.WithScore(pending.Command.Score);
+
             _pendingCommand = new VoxrPendingCommand
             {
                 Command = partiallyFilled,

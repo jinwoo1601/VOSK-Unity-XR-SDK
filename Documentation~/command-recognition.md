@@ -592,12 +592,13 @@ Two lifecycle interactions worth knowing:
 
 ## Unrecognised Speech
 
-When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in four situations:
+When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in five situations:
 
 1. **No pattern match** -- the parser could not match any command pattern against the transcript.
 2. **Every match fell under `minScore`** -- patterns matched, but no candidate scored high enough to fire.
 3. **A match was missing a required argument** -- the command may have scored well, but a required slot went unfilled and the command does not set `allowPartialMatch`. The completeness rule is independent of score, so this is the one case where "unrecognised" does not mean "scored badly".
 4. **A match was diverted to pending** -- a partial match or a `requiresConfirmation` command entered the pending state; `OnCommandPending` fires as well.
+5. **A follow-up fill was refused for re-scoring at or below zero** -- follow-up speech completed a pending command, but the re-score landed at or below zero, so the same floor the flush paths apply refused it (see [the session-log table](scoring.md#reading-a-session-log)). The pending is left standing. Reaching this at all means two definitions share one intent.
 
 It does **not** fire in three others: a candidate rejected by `minConfidence`, one suppressed by `commandCooldown` debounce, or one diverted to a **disambiguation** pending. The first two are silent on the reasoning that the user did say a valid command, just not confidently or not soon enough after the last one. The third is silent because telling you the speech was not understood, in the same frame you were asked to prompt about it, is exactly the confusion `disambiguateSiblingTies` exists to remove. See [the gates](scoring.md#what-onunrecognisedspeech-actually-means) for the full table.
 

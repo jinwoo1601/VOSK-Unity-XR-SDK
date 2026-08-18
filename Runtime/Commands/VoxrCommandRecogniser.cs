@@ -732,6 +732,14 @@ namespace VoXR.Commands
             // user's pending command in favour of one that then goes nowhere — losing the
             // half-finished command to an utterance that produces nothing.
             bool hasCompleteNewCommand = false;
+            // A complete, above-minScore result held back ONLY by the confidence gate. Step 7
+            // drops those silently — "the user said a valid command, just not confidently" — so
+            // the refusal branch below must not turn around and report the same utterance as
+            // unrecognised (issue #113). Step 7's own `anyThresholdFiltered` cannot serve: the
+            // refusal returns from Step 5 and never reaches it. The debounce and sibling-tie
+            // arms need no counterpart — both sit behind the predicate that sets
+            // hasCompleteNewCommand, which skips this whole arm.
+            bool anyConfidenceFilteredNewCommand = false;
             // Snapshot the parser itself alongside its buffer. Both are read across iterations
             // of the Step 7 loop, which raises public events a subscriber may answer by calling
             // Configure (setting _parser to null) or SetActiveSets (installing a parser with
@@ -748,20 +756,35 @@ namespace VoXR.Commands
             for (int i = 0; i < resultCount; i++)
             {
                 var cmd = resultBuf[i].Command;
-                if (
-                    cmd.Score >= minScore
-                    && (cmd.Confidence < 0f || cmd.Confidence >= minConfidence)
-                    && !IsIncomplete(cmd)
-                )
+                if (cmd.Score >= minScore && !IsIncomplete(cmd))
                 {
-                    hasCompleteNewCommand = true;
-                    break;
+                    if (cmd.Confidence < 0f || cmd.Confidence >= minConfidence)
+                    {
+                        hasCompleteNewCommand = true;
+                        break;
+                    }
+
+                    anyConfidenceFilteredNewCommand = true;
                 }
             }
 
             // ---- Step 5: Arbitrate follow-up vs new command ----
             if (followUpResult.HasValue && !hasCompleteNewCommand)
             {
+                // A follow-up result is not necessarily a complete command (issue #77). The
+                // slot-fill walks the unfilled slots in order, stops at the first one it cannot
+                // fill, and returns as soon as ONE new slot is filled — so a pending with two or
+                // more unfilled required slots yields a command still missing an argument. Firing
+                // it here would fire exactly the shape #73 refuses on the flush path, on the very
+                // path #73 routes those commands to, and the re-score does not stand in for the
+                // test: ScoreFollowUp re-scores against the matched pattern, so a partly filled
+                // command can score alongside a complete one.
+                //
+                // Keeping the pending alive rather than discarding the fill is what makes this a
+                // refusal to fire rather than a refusal to progress: each utterance fills what it
+                // can and the command waits for the rest.
+                bool followUpIncomplete = IsIncomplete(followUpResult.Value);
+
                 // The `Score <= 0` floor both flush paths carry (CompareCandidate's first test
                 // and ParseInternal's bestScore check), on the one fire path that never had it
                 // (issue #113). scoring.md §1 states the rule without qualification — a
@@ -778,15 +801,25 @@ namespace VoXR.Commands
                 // than reconciled deliberately: the floor holds whatever the two disagree
                 // about, and a non-positive score is not fireable for any reason.
                 //
-                // Refusing rather than re-arming. The merged command is complete by slots, so
+                // BELOW the completeness split, and that placement is the whole of it. Above it
+                // this refused partial fills too, which is not a floor but a stall: #77's
+                // re-arm is how a multi-slot exchange advances, and discarding the fill left
+                // every later answer to re-derive the same non-positive score and be refused
+                // again, so the command could never be completed by any speech at all. What
+                // this refuses is strictly a command about to FIRE; an incomplete fill goes on
+                // to AdvanceSlotFill, which keeps the progress and floors the stored score
+                // itself.
+                //
+                // Refusing rather than re-arming, here where the command IS complete by slots:
                 // AdvanceSlotFill would install a pending with nothing left to fill — one
                 // TryFollowUpSlotFill declines forever and FireAsIs would eventually fire
-                // carrying this same score. Leaving the pending untouched keeps pendingTimeout
-                // the thing that ends the exchange, and keeps the command it would fire the one
-                // that legitimately scored on the first utterance. The utterance is reported
-                // unrecognised because it resolved nothing — which is what Step 6 would say for
-                // it anyway, a follow-up answer being a slot value rather than a command.
-                if (followUpResult.Value.Score <= 0f)
+                // carrying this same score. Leaving the pending untouched keeps the command it
+                // would fire the one that legitimately scored on the first utterance. The
+                // refusal neither resolves nor advances the pending, so it stays subject to the
+                // ordinary endings — confirm, cancel, preemption, CancelPendingCommand(),
+                // replacement, timeout. What it can no longer do is progress by further
+                // follow-up speech, since the same fill re-scores non-positive every time.
+                if (!followUpIncomplete && followUpResult.Value.Score <= 0f)
                 {
 #if UNITY_EDITOR
                     LastMatchDiagnostics = new VoxrMatchDiagnostics(
@@ -800,23 +833,14 @@ namespace VoXR.Commands
                             false) },
                         Time.frameCount);
 #endif
-                    OnUnrecognisedSpeech?.Invoke(text);
+                    // Suppressed for a result the ordinary path would have swallowed, so the
+                    // two paths agree on when the integrator is told the speech was not
+                    // understood.
+                    if (!anyConfidenceFilteredNewCommand)
+                        OnUnrecognisedSpeech?.Invoke(text);
                     return;
                 }
 
-                // A follow-up result is not necessarily a complete command (issue #77). The
-                // slot-fill walks the unfilled slots in order, stops at the first one it cannot
-                // fill, and returns as soon as ONE new slot is filled — so a pending with two or
-                // more unfilled required slots yields a command still missing an argument. Firing
-                // it here would fire exactly the shape #73 refuses on the flush path, on the very
-                // path #73 routes those commands to, and the re-score does not stand in for the
-                // test: ScoreFollowUp re-scores against the matched pattern, so a partly filled
-                // command can score alongside a complete one.
-                //
-                // Keeping the pending alive rather than discarding the fill is what makes this a
-                // refusal to fire rather than a refusal to progress: each utterance fills what it
-                // can and the command waits for the rest.
-                bool followUpIncomplete = IsIncomplete(followUpResult.Value);
                 var followUpRes = followUpIncomplete
                     ? _pending.AdvanceSlotFill(followUpResult.Value, Time.time)
                     // The pending's own definition: this path fills a slot on the command that

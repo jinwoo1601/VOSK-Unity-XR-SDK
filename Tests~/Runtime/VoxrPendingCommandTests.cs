@@ -1452,6 +1452,92 @@ namespace VoXR.Tests.Runtime
             _recogniser.PendingTimeout = 30f;
         }
 
+        // Same divergence, but the short definition keeps a second required slot, so the
+        // follow-up fill is PARTIAL. This is the shape the floor must NOT refuse: issue #77's
+        // re-arm is how a multi-slot exchange advances at all.
+        static VoxrCommandDefinition[] MakePartialFillDuplicateIntentCommands()
+        {
+            return new[]
+            {
+                new VoxrCommandDefinition("launch_weapon", new[]
+                {
+                    new[]
+                    {
+                        "launch", "{weapon}", "target", "{target}",
+                        "{fuse}", "{spread}", "{yield}", "{bearing}", "{altitude}",
+                    },
+                }, allowPartialMatch: true),
+                new VoxrCommandDefinition("launch_weapon", new[]
+                {
+                    new[] { "launch", "{weapon}", "target", "{target}", "{fuse}" },
+                }, allowPartialMatch: true),
+            };
+        }
+
+        void ConfigurePartialFillDuplicateIntent()
+        {
+            _recogniser.Configure(
+                MakeDuplicateIntentSlots(), MakePartialFillDuplicateIntentCommands());
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+        }
+
+        [Test]
+        public void FollowUpFill_PartialAndNonPositive_StillProgressesAndCanComplete()
+        {
+            // The floor sits BELOW the completeness split, and this is why. Placed above it, it
+            // refused partial fills too — which is not a floor but a stall: the fill was
+            // discarded, so every later answer re-derived the same non-positive score and was
+            // refused again, and the command could never be completed by any speech at all.
+            // Here the exchange has to run to completion.
+            ConfigurePartialFillDuplicateIntent();
+
+            var pendingEvents = new List<VoxrCommand>();
+            _recogniser.OnCommandPending += cmd => pendingEvents.Add(cmd);
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            // (1 + 1 + 1 - 1 - 1) / 5 = 0.20 against the short definition; the long one is
+            // -3/9 and is inadmissible, so the short one is the only candidate.
+            _recogniser.InjectText("launch missiles target");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+            Assert.AreEqual(1, pendingEvents.Count);
+
+            // Fills {target}, stops at {fuse}. Re-scores -1/9 against the LONG definition while
+            // the short one still calls it incomplete — so it must re-arm, not be refused.
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsFalse(recognised.HasValue, "a partial fill still does not fire");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "and the pending is still live");
+            Assert.AreEqual(2, pendingEvents.Count, "the re-arm reports progress (issue #77)");
+
+            var pending = _recogniser.EditorPendingCommand;
+            Assert.IsTrue(pending.HasValue);
+            Assert.IsTrue(
+                pending.Value.Command.HasSlot("target"), "the fill is KEPT, not discarded");
+            Assert.AreEqual(
+                new[] { "fuse" }, pending.Value.UnfilledSlots, "and only {fuse} is outstanding");
+
+            // The stored score is the retained 0.20, never the -1/9 that was re-scored. This is
+            // the half that moving the floor alone would have missed: a pending carries its
+            // command into three fire paths that re-test nothing — Complete, the confirm-word
+            // arm, and FireAsIs on timeout.
+            Assert.Greater(
+                pending.Value.Command.Score, 0f,
+                "a pending must never come to hold a score its own fire paths would refuse"
+            );
+
+            // And the exchange completes, which it could not do at all before the fix.
+            _recogniser.InjectText("impact");
+
+            Assert.IsTrue(recognised.HasValue, "the last slot lands and the command fires");
+            Assert.AreEqual("hotel one", recognised.Value.GetSlot("target"));
+            Assert.AreEqual("impact", recognised.Value.GetSlot("fuse"));
+            // (2 literals + 3 filled - 4 missed) / 9 = +1/9, back above the floor.
+            Assert.AreEqual(1f / 9f, recognised.Value.Score, 0.001f);
+        }
+
         [Test]
         public void FollowUpFill_ReScoreNonPositive_DoesNotReachAHandler()
         {
