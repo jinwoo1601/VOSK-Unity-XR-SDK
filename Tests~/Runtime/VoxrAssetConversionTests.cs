@@ -353,11 +353,26 @@ namespace VoXR.Tests.Runtime
             return _setAsset;
         }
 
+        // Empty is the shape Unity's serializer gives an Inspector-authored component whose Slot
+        // Assets list was left alone.
         [Test]
         public void Awake_EmptySlotAssets_ConvertsAllLiteralCommandSets()
         {
+            AssertAllLiteralSetConverts(Array.Empty<VoxrSlotAsset>());
+        }
+
+        // Null is the shape a component created at runtime by AddComponent carries. An absent
+        // slot list means what an empty one means — zero slots — so it converts identically.
+        [Test]
+        public void Awake_NullSlotAssets_ConvertsAllLiteralCommandSets()
+        {
+            AssertAllLiteralSetConverts(null);
+        }
+
+        void AssertAllLiteralSetConverts(VoxrSlotAsset[] slots)
+        {
             var recogniser = BuildInactiveRecogniser(
-                Array.Empty<VoxrSlotAsset>(),
+                slots,
                 new[] { MakeAllLiteralSet() },
                 new[] { "weapons" }
             );
@@ -374,9 +389,10 @@ namespace VoXR.Tests.Runtime
 
             Assert.IsTrue(
                 recognised.HasValue,
-                "an empty (non-null) Slot Assets array must still convert the command sets"
+                "a slot-free grammar must convert whether Slot Assets is empty or absent"
             );
             Assert.AreEqual("cease_fire", recognised.Value.Intent);
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
@@ -397,11 +413,16 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void Awake_NullSlotAssets_WarnsWhenCommandSetAssetsAssigned()
+        public void Awake_NoAssetsAssigned_StaysSilent()
         {
-            BuildInactiveRecogniser(null, new[] { MakeAllLiteralSet() }, new[] { "weapons" });
-
-            LogAssert.Expect(LogType.Warning, new Regex("Slot Assets is null"));
+            // Nothing wired is the code-configured case, not a misconfiguration: Configure()
+            // may follow from Start(), so this path must not warn. Empty arrays are the shape
+            // an Inspector-authored component that was never wired carries.
+            BuildInactiveRecogniser(
+                Array.Empty<VoxrSlotAsset>(),
+                Array.Empty<VoxrCommandSetAsset>(),
+                null
+            );
 
             _recogniserObject.SetActive(true);
 
@@ -409,15 +430,11 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void Awake_NoAssetsAssigned_StaysSilent()
+        public void Awake_NullAssetArrays_StaySilent()
         {
-            // Nothing wired is the code-configured case, not a misconfiguration: Configure()
-            // may follow from Start(), so this path must not warn.
-            BuildInactiveRecogniser(
-                Array.Empty<VoxrSlotAsset>(),
-                Array.Empty<VoxrCommandSetAsset>(),
-                null
-            );
+            // The same case for a component created at runtime, where both fields are null
+            // rather than empty — the route every AddComponent-built fixture actually takes.
+            BuildInactiveRecogniser(null, null, null);
 
             _recogniserObject.SetActive(true);
 

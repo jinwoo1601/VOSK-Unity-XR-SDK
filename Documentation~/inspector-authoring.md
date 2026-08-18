@@ -74,7 +74,9 @@ Select the GameObject with your `VoxrCommandRecogniser` component and assign:
 
 `VoxrCommandRecogniser.Awake()` converts the assets to runtime structs and calls `Configure()` + `SetActiveSets()` automatically.
 
-**Command Set Assets must be non-empty; Slot Assets need not be.** An empty **Slot Assets** list converts normally with zero slots, so an all-literal grammar (`cease fire`, `weapons mode`) can be authored entirely in the Inspector. **Command Set Assets** is what carries the commands, so an empty list leaves `Awake()` with nothing to convert: neither `Configure()` nor `SetActiveSets()` runs, and the symptom is a recogniser that hears speech and recognises no commands at all. Whenever one list is populated and the conversion is skipped anyway, a `Debug.LogWarning` names which list is at fault. With *neither* list assigned nothing is logged -- that is the code-driven case, where `Configure()` is expected to follow.
+**Command Set Assets must be non-empty; Slot Assets need not be.** An empty **Slot Assets** list converts normally with zero slots, so an all-literal grammar (`cease fire`, `weapons mode`) can be authored entirely in the Inspector. **Command Set Assets** is what carries the commands, so an empty list leaves `Awake()` with nothing to convert: neither `Configure()` nor `SetActiveSets()` runs, and the symptom is a recogniser that hears speech and recognises no commands at all. That is the one asset-list skip, and it logs a `Debug.LogWarning` naming the empty list whenever **Slot Assets** carries assets. With *neither* list assigned nothing is logged -- that is the code-driven case, where `Configure()` is expected to follow.
+
+One further skip is silent by design and is not an asset-list problem at all: a `Configure()` call that lands *before* this component's `Awake()` -- from a script earlier in Script Execution Order, or on an inactive GameObject before `SetActive(true)` -- claims the component, and `Awake()` then ignores both lists however they are filled in. See [Code vs Inspector Priority](#code-vs-inspector-priority).
 
 ---
 
