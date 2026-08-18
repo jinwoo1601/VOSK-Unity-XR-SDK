@@ -1820,5 +1820,71 @@ namespace VoXR.Tests.Runtime
                 "the whole utterance was parsed, not read as the bare choice \"mode\""
             );
         }
+
+        // -------- Duplicate intent created by activating two sets (issue #120) --------
+
+        [Test]
+        public void DuplicateIntent_SameCommandInTwoActiveSets_IsReportedAtRebuild()
+        {
+            // The route no parser-level test can reach, because the duplication is in neither
+            // set — activating both is what creates it. Nothing stops one command definition
+            // (one VoxrCommandAsset, under Inspector authoring) from sitting in two sets, and
+            // CommandSetManager.Activate concatenates the active sets without de-duplicating, so
+            // the parser is constructed from a list carrying that definition twice.
+            //
+            // Interchangeable copies, so it takes that report and not the divergence one: there
+            // is a single definition here, registered twice.
+            var shared = new VoxrCommandDefinition(
+                "cease_fire",
+                new[] { new[] { "cease", "fire" } }
+            );
+
+            _recogniser.Configure(
+                MakeSlots(),
+                new[]
+                {
+                    new VoxrCommandSet("combat", new[] { shared }),
+                    new VoxrCommandSet("navigation", new[] { shared }),
+                }
+            );
+
+            // Queued here, not before Configure: Configure(slots, sets) only stores them and
+            // nulls the parser — SetActiveSets is what constructs one, and so what warns.
+            LogAssert.Expect(
+                LogType.Warning,
+                new Regex("Intent 'cease_fire' is registered 2 times by definitions no consumer")
+            );
+
+            _recogniser.SetActiveSets("combat", "navigation");
+
+            Assert.AreEqual(2, _recogniser.ActiveSetNames.Length);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_EachSetActiveAlone_SaysNothing()
+        {
+            // And the other half: the same two sets are each individually well-formed, so
+            // activating one of them must be silent. If this ever warns, the scan is reporting
+            // a grammar that has no duplicate in it at all.
+            var shared = new VoxrCommandDefinition(
+                "cease_fire",
+                new[] { new[] { "cease", "fire" } }
+            );
+
+            _recogniser.Configure(
+                MakeSlots(),
+                new[]
+                {
+                    new VoxrCommandSet("combat", new[] { shared }),
+                    new VoxrCommandSet("navigation", new[] { shared }),
+                }
+            );
+
+            _recogniser.SetActiveSets("combat");
+
+            LogAssert.NoUnexpectedReceived();
+        }
+
     }
 }

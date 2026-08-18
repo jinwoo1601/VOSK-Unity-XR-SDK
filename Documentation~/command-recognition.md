@@ -103,7 +103,7 @@ Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character w
 
 **The `?` for an optional slot goes *inside* the braces: `{?quantity}`.** Writing `?{quantity}` does not make the slot optional -- it parses as a required *literal* token no utterance can ever produce, so every match of that pattern silently misses a required element, with no warning and no exception.
 
-Two pattern shapes carry authoring hazards the parser warns about at construction: a required function word standing between a bare pattern and its slot, and two commands separated by a single word. Both are covered in [Authoring hazards](#authoring-hazards), after the scoring and buffering concepts they depend on.
+Two pattern shapes carry authoring hazards the parser warns about at construction: a required function word standing between a bare pattern and its slot, and two commands separated by a single word. A third hazard is not a pattern shape at all -- one intent registered by more than one command definition. All three are covered in [Authoring hazards](#authoring-hazards), after the scoring and buffering concepts they depend on.
 
 ---
 
@@ -349,7 +349,7 @@ If the user says the same command twice quickly (or VOSK produces overlapping re
 
 ## Authoring hazards
 
-The parser scans the grammar at construction for two shapes that silently misbehave when the recogniser drops a word, and warns about both in the Editor. Each is worth designing away rather than discovering in the field.
+The parser scans the grammar at construction for shapes that silently misbehave -- two that go wrong when the recogniser drops a word, and one that is wrong in the registration list itself -- and warns about each in the Editor. All are worth designing away rather than discovering in the field.
 
 ### Never leave a required function word between a bare pattern and its slot
 
@@ -439,6 +439,31 @@ The second exclusion has a cost worth knowing: the parser is built from the gram
 Note what is *not* on that list. **Making the difference come earlier in the pattern does not help.** `weapons mode` and `navigation mode` differ at their first element instead of their last, and tie exactly as before — `(0 + 1) / 2` for both. What changes with a shorter pattern is only that the tie falls under `minScore`, so nothing fires instead of the wrong thing. That is an improvement, but a small and accidental one, and it disappears the moment the pattern grows: `weapons mode active` and `navigation mode active` tie at `0.67` and fire the first-registered again.
 
 One further warning fires if a discriminating value is also cancel vocabulary. Follow-up handling checks cancel before anything else, so if that ambiguity is routed back to the speaker, answering with that word would cancel rather than choose it. It is judged against *your* `cancelVocabulary` if you set one, and against the defaults (`cancel`, `abort`, `negative`, …) if you did not — so overriding the vocabulary to dodge a collision actually silences the warning, and a collision you introduce *with* an override is reported. It is also only raised for values that could really be offered as an answer: a value whose only same-set partners share its intent is never asked about, so it is never reported.
+
+### Register each intent exactly once
+
+An intent is the identity of a command, and the package treats it as one: **two `VoxrCommandDefinition`s under the same `Intent` are an authoring mistake**, whether they arrive in one `Configure(slots, commands)` call or in two command sets made active together. Both definitions' patterns stay live in the parse — either can win an utterance — but only one of them is reachable *back from the intent*, and the two lookups disagree about which.
+
+```csharp
+// Warned about -- one intent, two definitions: both patterns still match, but only
+// one definition is reachable back from the intent
+new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at", "{target}", "now" } }),
+new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at", "{target}" } }),
+
+// Safe -- the same two phrasings as two patterns of one definition
+new VoxrCommandDefinition("fire_at", new[] {
+    new[] { "fire", "at", "{target}", "now" },
+    new[] { "fire", "at", "{target}" },
+})
+```
+
+Note what is *not* wrong: selection walks the command list and never consults the intent lookup, so the second definition's patterns are matched and scored exactly like any other — "the second one never fires" is not what goes wrong here. What breaks is everything downstream of the parse, because the two places which resolve an intent back to a definition break the tie in *opposite* directions. The command-set lookup is a dictionary keyed on intent, so the **last** registration wins there; the follow-up re-score scans the command list and stops on the **first**. A `VoxrCommand` carries its `Intent` and `MatchedPatternIndex` but not the command that produced it, so every consumer re-derives the definition from the intent string and they can disagree -- `MatchedPatternIndex` applied to a pattern of a different length, a different unfilled-slot set for a follow-up to chase, a different `allowPartialMatch`, and a different `requiresConfirmation`. That last one is the one to state plainly: with two definitions under one intent, one of them `requiresConfirmation`, whether a destructive command asks before firing depends on registration order rather than on the command that matched.
+
+**Two registrations that are identical are a different mistake, and get a different warning.** If the two definitions the lookups reach are ones no consumer could tell apart -- the same patterns in the same order, the same `allowPartialMatch`, the same `requiresConfirmation` -- then nothing disagrees, because both resolutions land on the same thing. What remains is that only one registration is reachable from the intent and each extra copy adds a parse candidate that ties the original exactly, so registration order breaks a tie between a command and itself. The two usual causes are a set named twice in one `SetActiveSets` call (or in `initialActiveSetNames`), and one command asset placed in two sets that are active together -- neither is caught anywhere else, since `Activate` concatenates the active sets without de-duplicating. The remedy is to remove the duplicate registration; merging patterns does not apply, because there is only one distinct definition.
+
+Per-intent debounce is keyed on the intent too, so duplicate definitions share one cooldown.
+
+The warning names the intent, how many definitions carry it, and the first pattern of each of the two the resolutions reach -- or, for identical registrations, of the one definition involved. Like the two scans above it is **Editor-only**. Intents are compared ordinally, matching both lookups -- `fire_at` and `Fire_At` are distinct commands, not duplicates.
 
 ---
 

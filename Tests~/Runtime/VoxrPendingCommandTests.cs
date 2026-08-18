@@ -1444,8 +1444,22 @@ namespace VoXR.Tests.Runtime
             };
         }
 
+        // These fixtures register two definitions under one intent deliberately — that IS the
+        // divergence #113 came out of — and issue #120 now reports it at construction. So the
+        // warning is part of what they assert rather than incidental noise.
+        static void ExpectDuplicateIntentWarning()
+        {
+            LogAssert.Expect(
+                LogType.Warning,
+                new System.Text.RegularExpressions.Regex(
+                    "Intent 'launch_weapon' is registered by 2 command definitions"
+                )
+            );
+        }
+
         void ConfigureDuplicateIntent()
         {
+            ExpectDuplicateIntentWarning();
             _recogniser.Configure(MakeDuplicateIntentSlots(), MakeDuplicateIntentCommands());
             _recogniser.BufferWindow = 0f;
             _recogniser.CommandCooldown = 0f;
@@ -1476,6 +1490,7 @@ namespace VoXR.Tests.Runtime
 
         void ConfigurePartialFillDuplicateIntent()
         {
+            ExpectDuplicateIntentWarning();
             _recogniser.Configure(
                 MakeDuplicateIntentSlots(), MakePartialFillDuplicateIntentCommands());
             _recogniser.BufferWindow = 0f;

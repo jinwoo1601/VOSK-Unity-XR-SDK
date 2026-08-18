@@ -5528,5 +5528,219 @@ namespace VoXR.Tests.Runtime
             Assert.IsNotNull(parser);
             LogAssert.NoUnexpectedReceived();
         }
+
+        // -------- Duplicate intent across definitions (issue #120) --------
+
+        static VoxrSlotDefinition[] DuplicateIntentSlots() =>
+            new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) };
+
+        // Deliberately NOT a #42 or a #74 shape: the long form adds a trailing literal with no
+        // slot behind it, and the two forms differ in length, so neither of the scans above has
+        // anything to say about this grammar. What is wrong with it is only that both patterns
+        // are filed under one intent.
+        static VoxrCommandDefinition FireAtNow() =>
+            new VoxrCommandDefinition(
+                "fire_at",
+                new[] { new[] { "fire", "at", "{target}", "now" } }
+            );
+
+        static VoxrCommandDefinition FireAt() =>
+            new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at", "{target}" } });
+
+        [Test]
+        public void DuplicateIntent_TwoDefinitions_WarnsAtConstruction()
+        {
+            // The warning has to name BOTH definitions and say which resolution reaches which,
+            // because that is the whole of the hazard: the command-set dictionary keeps the last
+            // registration, ScoreFollowUp's scan stops on the first, and a parsed command
+            // carries no index that could settle it.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    @"Intent 'fire_at' is registered by 2 command definitions.*"
+                        + @"LAST registration \(first pattern ""fire at \{target\}""\).*"
+                        + @"FIRST \(first pattern ""fire at \{target\} now""\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[] { FireAtNow(), FireAt() }
+            );
+
+            Assert.IsNotNull(
+                parser,
+                "the shape is a warning, not an error — construction still succeeds"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_ThreeDefinitions_ReportedOncePerIntent()
+        {
+            // One piece of advice per intent, not one per duplicate: a single queued expectation
+            // plus NoUnexpectedReceived is the assertion that the later members stay silent.
+            // The count in the message still has to say three.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("Intent 'fire_at' is registered by 3 command definitions")
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[]
+                {
+                    FireAtNow(),
+                    FireAt(),
+                    new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at" } }),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_OneDefinitionWithBothPatterns_SaysNothing()
+        {
+            // The remedy the message offers, run through the scan: the same two patterns under
+            // one definition are unambiguous — every consumer that resolves 'fire_at' gets the
+            // definition that matched, whichever pattern won — so nothing is reported. If this
+            // ever warns, the advice in the message is wrong.
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[]
+                        {
+                            new[] { "fire", "at", "{target}", "now" },
+                            new[] { "fire", "at", "{target}" },
+                        }
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_InterchangeableDefinitions_ReportsCopiesNotADisagreement()
+        {
+            // The other shape the scan meets, and the one the first cut of this warning got
+            // wrong: two registrations no consumer can tell apart. Both intent resolutions land
+            // on an identical definition, so nothing disagrees — telling the author otherwise,
+            // while quoting the same pattern on both sides, is a false advisory. It is still a
+            // real authoring mistake, so it is still reported, with the remedy that applies.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    @"Intent 'fire_at' is registered 2 times by definitions no consumer can "
+                        + @"tell apart \(first pattern ""fire at \{target\}""\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[] { FireAt(), FireAt() }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_SamePatternsDifferentFlags_ReportsTheDisagreement()
+        {
+            // The flags are part of what makes two definitions distinguishable, and this is the
+            // pair that proves the test covers them: identical patterns, but one of them
+            // requiresConfirmation. That is the case the issue asked to be stated plainly —
+            // whether a destructive command asks before firing decided by registration order —
+            // so it must take the DIVERGENT report, not the copies one.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("Intent 'fire_at' is registered by 2 command definitions")
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[]
+                {
+                    FireAt(),
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[] { new[] { "fire", "at", "{target}" } },
+                        requiresConfirmation: true
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_SamePatternsDifferentOrder_ReportsTheDisagreement()
+        {
+            // Pattern order is identity, not presentation: MatchedPatternIndex indexes this
+            // array, so resolving the wrong definition indexes a different pattern. Two
+            // definitions listing the same patterns in opposite order are therefore
+            // distinguishable, and take the divergent report.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("Intent 'fire_at' is registered by 2 command definitions")
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[]
+                        {
+                            new[] { "fire", "at", "{target}", "now" },
+                            new[] { "fire", "at", "{target}" },
+                        }
+                    ),
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[]
+                        {
+                            new[] { "fire", "at", "{target}" },
+                            new[] { "fire", "at", "{target}", "now" },
+                        }
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_IntentsDifferingOnlyInCase_SayNothing()
+        {
+            // Ordinal, matching both resolutions this mirrors — BuildLookup's dictionary is
+            // built with StringComparer.Ordinal and ScoreFollowUp compares with
+            // StringComparison.Ordinal. These two intents are distinct keys to both, so they are
+            // distinct here; warning on them would report a collision neither lookup has.
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[]
+                {
+                    FireAtNow(),
+                    new VoxrCommandDefinition(
+                        "Fire_At",
+                        new[] { new[] { "fire", "at", "{target}" } }
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
     }
 }

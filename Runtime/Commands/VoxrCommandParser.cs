@@ -654,10 +654,12 @@ namespace VoXR.Commands
             RunValidationWarnings(slots);
             WarnOnDroppableRequiredLiteral(commands);
             WarnOnExcessiveOptionalExpansion(commands);
-            // Appended last on purpose: VoxrCommandRecogniserInjectionTests queues ORDERED log
-            // expectations across the two scans above, so a new scan between them would break
-            // the queue rather than merely add to it.
+            // Order is load-bearing from here down: VoxrCommandRecogniserInjectionTests queues
+            // ORDERED log expectations spanning the scans above, so a new scan is APPENDED at the
+            // end of this block — inserting one between the existing scans breaks the queue
+            // rather than merely adding to it.
             WarnOnSiblingDiscriminator();
+            WarnOnDuplicateIntent(commands);
         }
 
         static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
@@ -998,6 +1000,166 @@ namespace VoXR.Commands
                     UnityEngine.Debug.LogWarning(message);
                 }
             }
+        }
+
+        // The hazard that is not in any one pattern but in the registration list itself (issue
+        // #120): one intent carried by two or more definitions. Nothing rejects it, and the two
+        // places that resolve an intent back to a definition break the tie in OPPOSITE
+        // directions — CommandSetManager.BuildLookup keys a Dictionary, so the LAST registration
+        // wins there, while ScoreFollowUp scans _commands and stops on the FIRST.
+        //
+        // A VoxrCommand carries its intent and MatchedPatternIndex but never the command index
+        // that won the parse, so once a result leaves ParseInternal there is nothing to resolve
+        // against except the string. Every consumer therefore re-derives the definition, and the
+        // two can hand back different ones: a different pattern for MatchedPatternIndex to index
+        // (of a different length), a different unfilled-slot set for a follow-up to chase, a
+        // different allowPartialMatch, and a different requiresConfirmation — whether a
+        // destructive command asks before firing decided by registration order rather than by
+        // the command that matched. Issue #113 was one instance of it reaching a subscriber.
+        //
+        // Note what is NOT wrong: both definitions' patterns still compete in the parse and
+        // either can win, since selection walks _commands and never consults the intent lookup.
+        // What only one definition is reachable for is resolution back FROM the intent.
+        //
+        // Reported rather than repaired. Aligning the two resolutions would settle WHICH
+        // definition answers back from the intent, and the ambiguity buys
+        // nothing in the first place: two definitions under one intent say nothing that one
+        // definition holding both patterns cannot, and that form is unambiguous everywhere.
+        //
+        // Conditional rather than #if for the same reason the scans above are: the call site and
+        // this body stay one piece of code, and the tests that LogAssert.Expect this message pin
+        // it in editor Play Mode, where this package's Runtime suite runs, and not in a built
+        // player.
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        static void WarnOnDuplicateIntent(VoxrCommandDefinition[] commands)
+        {
+            for (int i = 0; i < commands.Length; i++)
+            {
+                // Reported once per INTENT, against its first registration — the pair is visible
+                // from every member of the group, and repeating one piece of authoring advice
+                // per duplicate is the noise issue #81 already paid to remove elsewhere.
+                bool alreadyReported = false;
+                for (int e = 0; e < i && !alreadyReported; e++)
+                    alreadyReported = string.Equals(
+                        commands[e].Intent,
+                        commands[i].Intent,
+                        StringComparison.Ordinal
+                    );
+                if (alreadyReported)
+                    continue;
+
+                int last = -1;
+                int count = 1;
+                for (int j = i + 1; j < commands.Length; j++)
+                {
+                    if (
+                        !string.Equals(
+                            commands[j].Intent,
+                            commands[i].Intent,
+                            StringComparison.Ordinal
+                        )
+                    )
+                        continue;
+                    last = j;
+                    count++;
+                }
+                if (last < 0)
+                    continue;
+
+                // Which report is TRUE depends on the pair the two resolutions actually reach
+                // — commands[i] and commands[last] — and not on whether the whole group is
+                // uniform. Duplicates that no consumer can tell apart disagree about nothing, and
+                // telling their author that two resolutions "disagree about which" while quoting
+                // one definition on both sides is a false advisory of exactly the kind issue #81
+                // spent a feature reversing. They are still worth reporting: the duplication is
+                // an authoring mistake either way, just a different one with a different remedy.
+                //
+                // Keyed on the reached PAIR rather than the group because [A, A', A] has both
+                // resolutions landing on A — nothing disagrees — even though A' is genuinely
+                // unreachable, and the interchangeable report covers that case correctly.
+                string message = AreInterchangeable(commands[i], commands[last])
+                    ? BuildInterchangeableIntentWarning(commands[i], count)
+                    : BuildDivergentIntentWarning(commands[i], commands[last], count);
+                UnityEngine.Debug.LogWarning(message);
+            }
+        }
+
+        // Names a definition by its first pattern. Patterns is never null (the constructor
+        // throws) but may be empty, which is legal and matches nothing.
+        static string DescribeDefinition(VoxrCommandDefinition definition)
+        {
+            return definition.Patterns.Length > 0
+                ? $"first pattern \"{string.Join(" ", definition.Patterns[0])}\""
+                : "no patterns";
+        }
+
+        // Both definitions are quoted by their first pattern, because the intent alone does not
+        // say WHICH two: under asset authoring they are two files, and this is what tells them
+        // apart in the console.
+        static string BuildDivergentIntentWarning(
+            VoxrCommandDefinition first, VoxrCommandDefinition last, int count)
+        {
+            return $"[VoxrCommandParser] Intent '{first.Intent}' is registered by {count} "
+                + "command definitions. All of their patterns still compete in the parse, so "
+                + "any of them can win an utterance — but only one definition is reachable "
+                + "back FROM the intent, and the two resolutions disagree about which. The "
+                + $"command-set lookup keeps the LAST registration ({DescribeDefinition(last)}) "
+                + $"while the follow-up re-score takes the FIRST ({DescribeDefinition(first)}). "
+                + "A matched command carries no command index, so consumers re-derive the "
+                + "definition from the intent string and can read the one that did not match: "
+                + "MatchedPatternIndex applied to a pattern of a different length, a different "
+                + "unfilled-slot set for a follow-up to fill, different allowPartialMatch and "
+                + "requiresConfirmation, and different definitions read for a disambiguation "
+                + "winner and its rivals. Give each definition its own intent, or move the "
+                + "patterns into a single definition — one definition with several patterns is "
+                + "unambiguous everywhere.";
+        }
+
+        // The other way an intent comes to carry several definitions, and it needs its own
+        // remedy: nothing here is ambiguous to resolve, there is simply more than one copy.
+        static string BuildInterchangeableIntentWarning(VoxrCommandDefinition definition, int count)
+        {
+            return $"[VoxrCommandParser] Intent '{definition.Intent}' is registered {count} times "
+                + $"by definitions no consumer can tell apart ({DescribeDefinition(definition)}). "
+                + "The intent resolutions agree here, so no consumer reads the wrong definition "
+                + "— but only one registration is reachable back from the intent, and each extra "
+                + "copy adds a parse candidate that ties the original exactly, leaving "
+                + "registration order to break a tie between a command and itself. The usual "
+                + "causes are a set named twice in one SetActiveSets call or in "
+                + "initialActiveSetNames, and one command asset placed in two sets that are "
+                + "active together. Remove the duplicate registration — merging patterns is not "
+                + "the remedy here, because there is only one distinct definition.";
+        }
+
+        // "Interchangeable" rather than "equal": the question is only whether a consumer that
+        // resolved the OTHER one could tell, so the comparison covers exactly a definition's
+        // observable surface — its patterns and its two flags. Reference equality will not do,
+        // since the asset path builds a fresh string[][] for every definition it converts, and
+        // VoxrCommandDefinition declares no Equals of its own.
+        //
+        // Pattern ORDER is part of the identity, not an incidental detail: MatchedPatternIndex
+        // indexes this array, so the same patterns listed in a different order are two
+        // definitions a consumer CAN tell apart, and they take the divergent report.
+        static bool AreInterchangeable(VoxrCommandDefinition a, VoxrCommandDefinition b)
+        {
+            if (
+                a.AllowPartialMatch != b.AllowPartialMatch
+                || a.RequiresConfirmation != b.RequiresConfirmation
+                || a.Patterns.Length != b.Patterns.Length
+            )
+                return false;
+
+            for (int p = 0; p < a.Patterns.Length; p++)
+            {
+                if (a.Patterns[p].Length != b.Patterns[p].Length)
+                    return false;
+
+                for (int e = 0; e < a.Patterns[p].Length; e++)
+                    if (!string.Equals(a.Patterns[p][e], b.Patterns[p][e], StringComparison.Ordinal))
+                        return false;
+            }
+
+            return true;
         }
 
         static bool IsElementPrefix(string[] prefix, string[] pattern)
