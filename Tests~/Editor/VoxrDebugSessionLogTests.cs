@@ -85,9 +85,82 @@ namespace VoXR.Tests.Editor
             Assert.AreEqual("", entry.attempts[0].intent);
             Assert.AreEqual("", entry.attempts[0].pattern);
             Assert.AreEqual("no match", entry.attempts[0].rejectReason);
+            Assert.AreEqual("", entry.attempts[0].tiedRival);
+            Assert.IsFalse(entry.attempts[0].tiedRivalIsSibling);
             Assert.IsFalse(entry.attempts[0].accepted);
             Assert.AreEqual(0, entry.attempts[0].slots.Length);
             Assert.AreEqual(0, entry.words.Length);
+        }
+
+        /// <summary>
+        /// A registration-order coin flip and a clean win are identical in every other field,
+        /// so the export has to carry the rival — and which kind of tie it was — or whole-session
+        /// analysis cannot tell them apart. JsonUtility only serialises public fields, hence the
+        /// assertions on the serialised JSON rather than DTO reads alone.
+        /// </summary>
+        [Test]
+        public void BuildEntry_RecordsTiedRivalAndWhetherItWasASibling()
+        {
+            var attempts = new[]
+            {
+                new VoxrMatchAttempt(
+                    "set_mode",
+                    "weapons mode",
+                    1f,
+                    0.6f,
+                    0.9f,
+                    0.4f,
+                    null,
+                    null,
+                    true,
+                    "set_nav_mode (pattern 0)",
+                    true
+                ),
+                new VoxrMatchAttempt(
+                    "raise_shields",
+                    "shields up",
+                    1f,
+                    0.6f,
+                    0.9f,
+                    0.4f,
+                    null,
+                    null,
+                    true,
+                    "activate_defence (pattern 1)",
+                    false
+                ),
+                new VoxrMatchAttempt(
+                    "cease_fire",
+                    "cease fire",
+                    1f,
+                    0.6f,
+                    0.9f,
+                    0.4f,
+                    null,
+                    null,
+                    true
+                ),
+            };
+
+            var entry = VoxrDebugSessionLog.BuildEntry(
+                null,
+                MakeDiagnostics(Array.Empty<VoxrWord>(), attempts)
+            );
+
+            Assert.AreEqual("set_nav_mode (pattern 0)", entry.attempts[0].tiedRival);
+            Assert.IsTrue(entry.attempts[0].tiedRivalIsSibling);
+            Assert.AreEqual("activate_defence (pattern 1)", entry.attempts[1].tiedRival);
+            Assert.IsFalse(entry.attempts[1].tiedRivalIsSibling);
+            Assert.AreEqual("", entry.attempts[2].tiedRival);
+            Assert.IsFalse(entry.attempts[2].tiedRivalIsSibling);
+
+            string json = JsonUtility.ToJson(entry);
+
+            StringAssert.Contains("\"tiedRival\":\"set_nav_mode (pattern 0)\"", json);
+            StringAssert.Contains("\"tiedRivalIsSibling\":true", json);
+            StringAssert.Contains("\"tiedRival\":\"activate_defence (pattern 1)\"", json);
+            StringAssert.Contains("\"tiedRival\":\"\"", json);
+            StringAssert.Contains("\"tiedRivalIsSibling\":false", json);
         }
 
         [Test]

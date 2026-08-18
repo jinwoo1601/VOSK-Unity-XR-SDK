@@ -706,7 +706,8 @@ deliberate trade-offs rather than oversights.
   window's last-match breakdown and the Batch Test Runner's per-row diagnostics
   show a `Tied with:` line reading `— not a sibling; check for duplicate or
   overlapping patterns` whenever a rival scored exactly as well as the winner. The
-  exported session log carries no tie fields, so the diagnostic is window-only.
+  exported session log records the same finding per attempt, as `tiedRival` and
+  `tiedRivalIsSibling`, so a whole playtest can be swept for it after the fact.
 - **Workaround**: This is a grammar defect rather than a recognition limitation —
   remove the duplicate pattern, or differentiate the two in more than one element.
   If two intents genuinely share a phrasing, register the pattern under one intent
