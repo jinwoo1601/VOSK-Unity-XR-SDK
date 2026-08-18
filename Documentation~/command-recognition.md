@@ -172,7 +172,7 @@ var quantity = new VoxrSlotDefinition("quantity",
 
 When VOSK transcribes `"a"`, the alias resolves it to `"one"` in the extracted slot value. Aliases are included in the generated grammar JSON, so VOSK knows to listen for the variant words.
 
-**Validation:** The parser warns at configure time about slot *values* that are uppercase (VOSK outputs lowercase, so such a value can never match), that carry punctuation, or that are a single character, and about single-character alias keys (short tokens are unreliable in VOSK grammar mode -- prefer longer, phonetically distinct alternatives). Alias keys share the lowercase/no-punctuation constraints but only the single-character case is warned about -- an uppercase alias key silently never matches. Unlike the Editor-only authoring scans in [Authoring hazards](#authoring-hazards), these warnings fire in player builds too.
+**Validation:** The parser warns at configure time about slot *values* and alias keys alike that are uppercase (VOSK outputs lowercase, so such a form can never match), that carry punctuation (VOSK strips it -- write `oclock`, not `o'clock`), or that are a single character. The last is informational: short tokens are recognised unreliably, but `a` above is deliberate, since an alias to a longer canonical resolves when VOSK does hear the word and costs nothing when it is dropped. Unlike the Editor-only authoring scans in [Authoring hazards](#authoring-hazards), these warnings fire in player builds too.
 
 ---
 

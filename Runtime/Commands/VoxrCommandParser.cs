@@ -716,6 +716,27 @@ namespace VoXR.Commands
                 {
                     foreach (var key in slot.Aliases.Keys)
                     {
+                        // Alias keys are matched against VOSK output exactly as values are:
+                        // both go into the same ordinal _slotLookups. So they carry the same
+                        // two hazards and now get the same two warnings (issue #111).
+                        if (key != key.ToLowerInvariant())
+                        {
+                            UnityEngine.Debug.LogWarning(
+                                $"[VoxrCommandParser] Slot '{slot.Name}' alias \"{key}\" contains uppercase characters. " +
+                                "VOSK outputs lowercase — this alias will never match.");
+                        }
+
+                        foreach (char c in key)
+                        {
+                            if (char.IsPunctuation(c))
+                            {
+                                UnityEngine.Debug.LogWarning(
+                                    $"[VoxrCommandParser] Slot '{slot.Name}' alias \"{key}\" contains punctuation. " +
+                                    "VOSK strips punctuation — this may not match as expected.");
+                                break;
+                            }
+                        }
+
                         if (key.Length == 1)
                         {
                             UnityEngine.Debug.LogWarning(
