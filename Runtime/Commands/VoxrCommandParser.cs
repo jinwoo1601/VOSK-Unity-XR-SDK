@@ -658,6 +658,8 @@ namespace VoXR.Commands
             // expectations across the two scans above, so a new scan between them would break
             // the queue rather than merely add to it.
             WarnOnSiblingDiscriminator();
+            // And this one after that, for the same reason.
+            WarnOnDuplicateIntent(commands);
         }
 
         static void AddSlotEntry(Dictionary<string, List<SlotValueEntry>> lookup,
@@ -998,6 +1000,95 @@ namespace VoXR.Commands
                     UnityEngine.Debug.LogWarning(message);
                 }
             }
+        }
+
+        // The hazard that is not in any one pattern but in the registration list itself (issue
+        // #120): one intent carried by two or more definitions. Nothing rejects it, and the two
+        // places that resolve an intent back to a definition break the tie in OPPOSITE
+        // directions — CommandSetManager.BuildLookup keys a Dictionary, so the LAST registration
+        // wins there, while ScoreFollowUp scans _commands and stops on the FIRST.
+        //
+        // A VoxrCommand carries its intent and MatchedPatternIndex but never the command index
+        // that won the parse, so once a result leaves ParseInternal there is nothing to resolve
+        // against except the string. Every consumer therefore re-derives the definition, and the
+        // two can hand back different ones: a different pattern for MatchedPatternIndex to index
+        // (of a different length), a different unfilled-slot set for a follow-up to chase, a
+        // different allowPartialMatch, and a different requiresConfirmation — whether a
+        // destructive command asks before firing decided by registration order rather than by
+        // the command that matched. Issue #113 was one instance of it reaching a subscriber.
+        //
+        // Reported rather than repaired. Aligning the two resolutions would settle WHICH
+        // definition answers without making the second one reachable, and the ambiguity buys
+        // nothing in the first place: two definitions under one intent say nothing that one
+        // definition holding both patterns cannot, and that form is unambiguous everywhere.
+        //
+        // Conditional rather than #if for the same reason the scans above are: the call site and
+        // this body stay one piece of code, and the tests that LogAssert.Expect this message pin
+        // it in editor Play Mode, where this package's Runtime suite runs, and not in a built
+        // player.
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        static void WarnOnDuplicateIntent(VoxrCommandDefinition[] commands)
+        {
+            for (int i = 0; i < commands.Length; i++)
+            {
+                // Reported once per INTENT, against its first registration — the pair is visible
+                // from every member of the group, and repeating one piece of authoring advice
+                // per duplicate is the noise issue #81 already paid to remove elsewhere.
+                bool alreadyReported = false;
+                for (int e = 0; e < i && !alreadyReported; e++)
+                    alreadyReported = string.Equals(
+                        commands[e].Intent,
+                        commands[i].Intent,
+                        StringComparison.Ordinal
+                    );
+                if (alreadyReported)
+                    continue;
+
+                int last = -1;
+                int count = 1;
+                for (int j = i + 1; j < commands.Length; j++)
+                {
+                    if (
+                        !string.Equals(
+                            commands[j].Intent,
+                            commands[i].Intent,
+                            StringComparison.Ordinal
+                        )
+                    )
+                        continue;
+                    last = j;
+                    count++;
+                }
+                if (last < 0)
+                    continue;
+
+                // Both definitions are quoted by their first pattern, because the intent alone
+                // does not say WHICH two: under asset authoring they are two files, and this is
+                // what tells them apart in the console.
+                string message =
+                    $"[VoxrCommandParser] Intent '{commands[i].Intent}' is registered by {count} "
+                    + "command definitions, and only one of them is reachable — the two intent "
+                    + "resolutions disagree about which. The command-set lookup keeps the LAST "
+                    + $"registration ({DescribeDefinition(commands[last])}) while the follow-up "
+                    + $"re-score takes the FIRST ({DescribeDefinition(commands[i])}). A matched "
+                    + "command carries no command index, so consumers re-derive the definition "
+                    + "from the intent string and can read the one that did not match: "
+                    + "MatchedPatternIndex applied to a pattern of a different length, a "
+                    + "different unfilled-slot set for a follow-up to fill, and a different "
+                    + "allowPartialMatch and requiresConfirmation. Give each definition its own "
+                    + "intent, or move the patterns into a single definition — one definition "
+                    + "with several patterns is unambiguous everywhere.";
+                UnityEngine.Debug.LogWarning(message);
+            }
+        }
+
+        // Names a definition by its first pattern. Patterns is never null (the constructor
+        // throws) but may be empty, which is legal and matches nothing.
+        static string DescribeDefinition(VoxrCommandDefinition definition)
+        {
+            return definition.Patterns.Length > 0
+                ? $"first pattern \"{string.Join(" ", definition.Patterns[0])}\""
+                : "no patterns";
         }
 
         static bool IsElementPrefix(string[] prefix, string[] pattern)

@@ -349,7 +349,7 @@ If the user says the same command twice quickly (or VOSK produces overlapping re
 
 ## Authoring hazards
 
-The parser scans the grammar at construction for two shapes that silently misbehave when the recogniser drops a word, and warns about both in the Editor. Each is worth designing away rather than discovering in the field.
+The parser scans the grammar at construction for shapes that silently misbehave -- two that go wrong when the recogniser drops a word, and one that is wrong in the registration list itself -- and warns about each in the Editor. All are worth designing away rather than discovering in the field.
 
 ### Never leave a required function word between a bare pattern and its slot
 
@@ -439,6 +439,28 @@ The second exclusion has a cost worth knowing: the parser is built from the gram
 Note what is *not* on that list. **Making the difference come earlier in the pattern does not help.** `weapons mode` and `navigation mode` differ at their first element instead of their last, and tie exactly as before — `(0 + 1) / 2` for both. What changes with a shorter pattern is only that the tie falls under `minScore`, so nothing fires instead of the wrong thing. That is an improvement, but a small and accidental one, and it disappears the moment the pattern grows: `weapons mode active` and `navigation mode active` tie at `0.67` and fire the first-registered again.
 
 One further warning fires if a discriminating value is also cancel vocabulary. Follow-up handling checks cancel before anything else, so if that ambiguity is routed back to the speaker, answering with that word would cancel rather than choose it. It is judged against *your* `cancelVocabulary` if you set one, and against the defaults (`cancel`, `abort`, `negative`, …) if you did not — so overriding the vocabulary to dodge a collision actually silences the warning, and a collision you introduce *with* an override is reported. It is also only raised for values that could really be offered as an answer: a value whose only same-set partners share its intent is never asked about, so it is never reported.
+
+### Register each intent exactly once
+
+An intent is the identity of a command, and the package treats it as one: **two `VoxrCommandDefinition`s under the same `Intent` are an authoring mistake**, whether they arrive in one `Configure(slots, commands)` call or in two command sets made active together. Only one of them is ever reachable.
+
+```csharp
+// Warned about -- one intent, two definitions, and only one of them is reachable
+new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at", "{target}", "now" } }),
+new VoxrCommandDefinition("fire_at", new[] { new[] { "fire", "at", "{target}" } }),
+
+// Safe -- the same two phrasings as two patterns of one definition
+new VoxrCommandDefinition("fire_at", new[] {
+    new[] { "fire", "at", "{target}", "now" },
+    new[] { "fire", "at", "{target}" },
+})
+```
+
+The reason it is worse than "the second one never fires" is that the two places which resolve an intent back to a definition break the tie in *opposite* directions. The command-set lookup is a dictionary keyed on intent, so the **last** registration wins there; the follow-up re-score scans the command list and stops on the **first**. A `VoxrCommand` carries its `Intent` and `MatchedPatternIndex` but not the command that produced it, so every consumer re-derives the definition from the intent string and they can disagree -- `MatchedPatternIndex` applied to a pattern of a different length, a different unfilled-slot set for a follow-up to chase, a different `allowPartialMatch`, and a different `requiresConfirmation`. That last one is the one to state plainly: with two definitions under one intent, one of them `requiresConfirmation`, whether a destructive command asks before firing depends on registration order rather than on the command that matched.
+
+Per-intent debounce is keyed on the intent too, so duplicate definitions share one cooldown.
+
+The warning names the intent, how many definitions carry it, and the first pattern of each of the two the resolutions disagree over. Like the two scans above it is **Editor-only**. Intents are compared ordinally, matching both lookups -- `fire_at` and `Fire_At` are distinct commands, not duplicates.
 
 ---
 
