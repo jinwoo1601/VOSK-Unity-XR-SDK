@@ -66,7 +66,7 @@ Both transitions are guarded by the `Speech Recogniser` reference. Without one �
 
 - Wire the event in the Inspector.
 - Keep the GameObject inactive until you have subscribed, then activate it.
-- Leave the Inspector on `PushToTalk` and assign `ListeningMode = VoxrListeningMode.Continuous` from your own `Start()`. That is a *change*, so the setter fires the event — and by `Start` every listener has registered.
+- Leave the Inspector on `PushToTalk` and assign `ListeningMode = VoxrListeningMode.Continuous` from your own `Start()`. That is a *change*, so the setter fires the event — given the assigned `Speech Recogniser` it needs — and by `Start` every listener has registered.
 
 If you would rather not depend on event timing at all, `VoxrSpeechRecogniser.IsRecognising` reflects live recognition state and is safe to poll. (`PushToTalk` scenes are unaffected either way: the first event follows a button press, long after any listener has registered.)
 

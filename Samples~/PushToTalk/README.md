@@ -96,6 +96,8 @@ controller.ListeningMode = VoxrListeningMode.PushToTalk;
 
 Switching to `Continuous` fires `OnTalkStarted`; switching away while
 recognising fires `OnTalkEnded`. Setting the same mode twice is a no-op.
+Both events need a live `Speech Recogniser` — the sample scene wires one, but
+without it the mode still changes while nothing starts, stops, or announces.
 
 `PushToTalkDemo` subscribes to both events in its own `OnEnable`, which is safe
 here because the scene ships in push-to-talk mode — the first event follows a

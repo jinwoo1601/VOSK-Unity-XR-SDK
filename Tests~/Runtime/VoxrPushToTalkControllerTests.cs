@@ -17,6 +17,9 @@ namespace VoXR.Tests.Runtime
         // Only the authored-Continuous tests build this one; see AuthorContinuousInactive.
         GameObject _authoredGo;
 
+        // Only the destroyed-recogniser tests build this one; see UseCountingRecogniser.
+        GameObject _countingGo;
+
         int _startedCount;
         int _endedCount;
 
@@ -47,6 +50,9 @@ namespace VoXR.Tests.Runtime
             if (_authoredGo != null)
                 Object.DestroyImmediate(_authoredGo);
             _authoredGo = null;
+            if (_countingGo != null)
+                Object.DestroyImmediate(_countingGo);
+            _countingGo = null;
         }
 
         // -------- Fixtures --------
@@ -412,27 +418,67 @@ namespace VoXR.Tests.Runtime
 
         // Unity overloads ==/!= on UnityEngine.Object so a destroyed component compares equal
         // to null while its managed wrapper is still alive. `?.` does not call that overload,
-        // so the two tests below are the ones the old `?.` in the setter failed: they destroy
-        // the component but keep the C# reference the controller holds.
+        // so the two destroyed-recogniser tests below are the ones the old `?.` in the setter
+        // failed: they destroy the component but keep the C# reference the controller holds.
         //
-        // What pins the skip is the event count, NOT the DoesNotThrow. Dispatching into a
-        // destroyed recogniser never reached this caller: StartRecognition hands off to a
-        // discarded async Task, and StopRecognitionCore touches no Unity-side member on any
-        // platform. The DoesNotThrow is kept only as a cheap guard against a future edit that
-        // does make the path throw, and its message says exactly that much — the sibling
-        // fixture (VoxrPushToTalkPauseTests) warns about assertions that cannot see the throw
-        // they exist to rule out. Pinning non-dispatch directly would need a call-counting
-        // double over `internal virtual StartRecognitionCore`, as that fixture uses.
+        // They assert the skip by COUNTING CALLS, not by expecting an exception. Dispatching
+        // into a destroyed recogniser never reached this caller in the first place:
+        // StartRecognition hands off to a discarded async Task, and StopRecognitionCore
+        // touches no Unity-side member on any platform. An Assert.DoesNotThrow here would be
+        // structurally incapable of failing — the trap VoxrPushToTalkPauseTests warns about,
+        // an assertion unable to see the very throw it exists to rule out. Counting is also
+        // what separates this from the event assertions: those would still pass if a future
+        // edit kept the events gated but restored `_speechRecogniser?.StartRecognition()`.
+        sealed class CountingSpeechRecogniser : VoxrSpeechRecogniser
+        {
+            internal int StartCalls { get; private set; }
+            internal int StopCalls { get; private set; }
+
+            internal override void StartRecognitionCore() => StartCalls++;
+
+            internal override void StopRecognitionCore() => StopCalls++;
+
+            // Keeps the base's private OnDestroy — and its ReleaseNativeResources() — off
+            // this double, exactly as VoxrPushToTalkPauseTests does. Load-bearing: Unity runs
+            // a base class's privately-declared messages on a subclass.
+            void OnDestroy() { }
+        }
+
+        // The double gets its own GameObject rather than replacing the fixture's _speech,
+        // which SetUp also wires into _command. Only the controller is under test here.
+        CountingSpeechRecogniser UseCountingRecogniser()
+        {
+            _countingGo = new GameObject("CountingRecogniser");
+            var counting = _countingGo.AddComponent<CountingSpeechRecogniser>();
+            _controller.SpeechRecogniser = counting;
+            return counting;
+        }
+
+        static void AssumeDestroyedButAlive(VoxrSpeechRecogniser recogniser)
+        {
+            Assume.That(recogniser == null, Is.True, "Precondition: the recogniser reads as null");
+            Assume.That(
+                ReferenceEquals(recogniser, null),
+                Is.False,
+                "Precondition: the managed wrapper is still alive — reading as null while "
+                    + "still referenced is the exact state `?.` mishandles, and a plain null "
+                    + "would make this test a duplicate of the null case below"
+            );
+        }
 
         [Test]
         public void ListeningMode_SetToContinuous_RecogniserDestroyed_IsNoOp()
         {
-            Object.DestroyImmediate(_speech);
-            Assume.That(_speech == null, Is.True, "Precondition: the recogniser reads as null");
+            var recogniser = UseCountingRecogniser();
+            Object.DestroyImmediate(recogniser);
+            AssumeDestroyedButAlive(recogniser);
 
-            Assert.DoesNotThrow(
-                () => _controller.ListeningMode = VoxrListeningMode.Continuous,
-                "Switching to Continuous must not surface an exception to the caller"
+            _controller.ListeningMode = VoxrListeningMode.Continuous;
+
+            Assert.AreEqual(
+                0,
+                recogniser.StartCalls,
+                "Switching to Continuous must skip a destroyed recogniser, not dispatch into it"
             );
             Assert.AreEqual(
                 0,
@@ -445,14 +491,21 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void ListeningMode_SetToPushToTalk_RecogniserDestroyed_IsNoOp()
         {
+            var recogniser = UseCountingRecogniser();
+
             _controller.ListeningMode = VoxrListeningMode.Continuous;
+            Assume.That(recogniser.StartCalls, Is.EqualTo(1), "Precondition: the live start ran");
             Assume.That(_startedCount, Is.EqualTo(1), "Precondition: the live start announced");
 
-            Object.DestroyImmediate(_speech);
+            Object.DestroyImmediate(recogniser);
+            AssumeDestroyedButAlive(recogniser);
 
-            Assert.DoesNotThrow(
-                () => _controller.ListeningMode = VoxrListeningMode.PushToTalk,
-                "Switching back must not surface an exception to the caller"
+            _controller.ListeningMode = VoxrListeningMode.PushToTalk;
+
+            Assert.AreEqual(
+                0,
+                recogniser.StopCalls,
+                "Switching back must skip a destroyed recogniser, not dispatch into it"
             );
             Assert.AreEqual(
                 0,
