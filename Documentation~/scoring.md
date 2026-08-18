@@ -15,7 +15,7 @@ Everything here describes `VoxrCommandParser`, which is deterministic: the same 
 | **Token** | One whitespace-separated word of the transcript. `[unk]` is VOSK's token for audio it could not resolve to a grammar word. |
 | **Element** | One entry of a pattern array: a required literal (`"target"`), an optional literal (`"?by"`), a required slot (`"{weapon}"`), or an optional slot (`"{?quantity}"`). |
 | **Candidate** | One (command, pattern, start token) triple that the parser scored. Every pattern of every active command is tried at every non-`[unk]` start position. |
-| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners are logged as a scored attempt — losing candidates are not logged. One exception: a rival that *tied* the winner exactly is named on the attempt (`Tied with:` in the Editor's last-match panel and in batch-runner diagnostics), though not in the exported session log, which records winners only. |
+| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners are logged as a scored attempt — losing candidates are not logged. One exception: a rival that *tied* the winner exactly is named on the attempt — as `Tied with:` in the Editor's last-match panel and in batch-runner diagnostics, and as [`tiedRival` / `tiedRivalIsSibling`](#reading-a-session-log) in the exported session log. Even then only winners are logged: the rival is named *on* the winner's attempt, never as an attempt of its own. |
 
 ---
 
