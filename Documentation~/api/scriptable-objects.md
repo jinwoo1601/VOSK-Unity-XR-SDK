@@ -15,7 +15,7 @@ Create via **Assets > Create > VoXR > Slot Definition**.
 | `slotName` | `string` | Slot name used in pattern references |
 | `slotType` | `VoxrSlotType` | `Enumerated` or `NumberSequence` |
 | `values` | `string[]` | Allowed values (Enumerated only). Each should be lowercase, punctuation-free, and longer than one character; the parser logs a warning per violation when the grammar is built, in player builds as well as the Editor. See [Authoring warnings](../inspector-authoring.md#authoring-warnings). |
-| `aliases` | `AliasEntry[]` | Variant-to-canonical mappings. A slot filled through an alias reports the **canonical** value, never the variant that was spoken. Variants carry the same lowercase/no-punctuation constraints as `values`, and are warned about on the same three counts. |
+| `aliases` | `AliasEntry[]` | Variant-to-canonical mappings. A slot filled through an alias reports the **canonical** value, never the variant that was spoken. Variants are checked on the same three counts as `values` -- uppercase, punctuation, single character -- and an uppercase or punctuated variant never matches, because VOSK never produces one. See [Authoring warnings](../inspector-authoring.md#authoring-warnings). |
 | `minWords` | `int` | Minimum digit words (NumberSequence, default 1). Must be at least 1 — `ToDefinition()` throws `ArgumentOutOfRangeException` otherwise, and the field is unclamped in the Inspector, so a 0 typed here surfaces as that exception from `Awake()`. |
 | `maxWords` | `int` | Maximum digit words (NumberSequence, default 3). Must be at least `minWords`, on the same terms. Both are `0` on the runtime definition of an Enumerated slot. |
 

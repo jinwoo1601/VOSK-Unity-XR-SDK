@@ -5418,6 +5418,53 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void ValidationWarnings_AliasKeyTrippingTwoChecks_WarnsInValueLoopOrder()
+        {
+            // Pins ORDER, not just presence. The two new checks were appended in FRONT of the
+            // pre-existing single-character one so the alias loop reads the way the value loop
+            // above it does, and LogAssert matches queued expectations in order — so an edit
+            // that reshuffles them fails here rather than silently breaking the ordered queues
+            // in VoxrCommandRecogniserInjectionTests, which span this scan.
+            //
+            // No single key can trip all three: a one-character key is either an uppercase
+            // letter or a punctuation mark, never both. So the pairs are pinned instead, one
+            // per slot — slots are an ARRAY, so their order is the declaration order here,
+            // unlike the Dictionary within a slot, whose iteration order is unspecified and
+            // which is why each slot carries exactly one alias.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("alias \"X\" contains uppercase characters")
+            );
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("single-character alias \"X\"")
+            );
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("alias \"[.]\" contains punctuation")
+            );
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("single-character alias \"[.]\"")
+            );
+
+            var slots = new[]
+            {
+                new VoxrSlotDefinition("colour",
+                    new[] { "amber" },
+                    aliases: new Dictionary<string, string> { { "X", "amber" } }),
+                new VoxrSlotDefinition("shade",
+                    new[] { "pale" },
+                    aliases: new Dictionary<string, string> { { ".", "pale" } }),
+            };
+
+            var parser = new VoxrCommandParser(slots, AliasCheckCommands());
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void ValidationWarnings_WellFormedAliasKey_SaysNothing()
         {
             // The other half: the two new checks must not fire on the shape authors are meant to

@@ -87,8 +87,8 @@ The parser inspects the grammar as it is built -- for Inspector authoring, durin
 Three checks read slot values and alias variants alike, and they run **in player builds as well as the Editor**, so they show up in device logs too:
 
 - **Uppercase in a value or alias variant** -- VOSK only ever emits lowercase, so it can never match.
-- **Punctuation in a value or alias variant** -- VOSK strips punctuation, so it may not match as written.
-- **Single-character value or alias variant** -- one character is too little for reliable recognition; for a value, declare an alias instead (`a` -> `one`), and for a variant, prefer a longer, phonetically distinct word.
+- **Punctuation in a value or alias variant** -- VOSK strips punctuation, so it may not match as written. Write the stripped form (`oclock`, not `o'clock`).
+- **Single-character value or alias variant** -- one character is too little for reliable recognition; for a value, declare an alias to a longer canonical instead (`a` -> `one`). The one-character *variant* that remedy produces warns in turn, and that is expected -- it is the shape the shipped sample uses, because the alias resolves when VOSK does hear the word and is harmless when it is dropped.
 
 Three more scan the patterns:
 

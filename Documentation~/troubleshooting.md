@@ -41,7 +41,7 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 
 ### Commands not matching
 
-- Verify patterns and slot values are **lowercase**. VOSK outputs lowercase text.
+- Verify patterns, slot values, and alias keys are **lowercase** and punctuation-free. VOSK outputs lowercase text and strips punctuation.
 - Check that grammar mode is active (`freeSpeechMode = false`).
 - Lower `minScore` and `minConfidence` temporarily to see if matches are being filtered by thresholds.
 - Use `OnUnrecognisedSpeech` to log raw transcripts and compare against your patterns.
