@@ -1096,6 +1096,52 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(1.0f, score, 0.001f);
         }
 
+        [Test]
+        public void ScoreFollowUp_MissedRequiredSlotsOutweighCredit_GoesNegative()
+        {
+            // Issue #113, the arithmetic half. RequiredSlotMissPenalty is -1.0 and ScoreFollowUp
+            // carries no `<= 0` floor of its own, so a pattern whose missed required slots
+            // outnumber its credited elements re-scores negative rather than bottoming out at
+            // zero. Pinned here because the number is what makes the recogniser-level pin
+            // (VoxrPendingCommandTests.FollowUpFill_ReScoreNonPositive_DoesNotReachAHandler)
+            // more than a tautology: the floor added there is the only thing standing between
+            // this value and a subscriber.
+            var slots = new[]
+            {
+                new VoxrSlotDefinition("weapon", new[] { "missiles" }),
+                new VoxrSlotDefinition("target", new[] { "hotel one" }),
+                new VoxrSlotDefinition("fuse", new[] { "impact" }),
+                new VoxrSlotDefinition("spread", new[] { "wide" }),
+                new VoxrSlotDefinition("yield", new[] { "low" }),
+                new VoxrSlotDefinition("bearing", new[] { "north" }),
+                new VoxrSlotDefinition("altitude", new[] { "high" }),
+            };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("launch_weapon", new[]
+                {
+                    new[]
+                    {
+                        "launch", "{weapon}", "target", "{target}",
+                        "{fuse}", "{spread}", "{yield}", "{bearing}", "{altitude}",
+                    },
+                }),
+            };
+            var parser = new VoxrCommandParser(slots, commands);
+
+            var filled = new[]
+            {
+                new VoxrSlotMatch("weapon", "missiles"),
+                new VoxrSlotMatch("target", "hotel one"),
+            };
+
+            float score = parser.ScoreFollowUp("launch_weapon", 0, filled);
+
+            // Two literals and two filled slots credit +4; five missed required slots cost -5;
+            // all nine elements count toward the denominator. -1/9.
+            Assert.AreEqual(-1f / 9f, score, 0.001f);
+        }
+
         // --- Skipped-word penalty (issue #31) ---
 
         [Test]

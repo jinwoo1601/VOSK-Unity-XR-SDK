@@ -762,6 +762,48 @@ namespace VoXR.Commands
             // ---- Step 5: Arbitrate follow-up vs new command ----
             if (followUpResult.HasValue && !hasCompleteNewCommand)
             {
+                // The `Score <= 0` floor both flush paths carry (CompareCandidate's first test
+                // and ParseInternal's bestScore check), on the one fire path that never had it
+                // (issue #113). scoring.md §1 states the rule without qualification — a
+                // candidate scoring zero or less is discarded and never competes — and a merged
+                // command reaches a subscriber without ever passing either of those tests, so
+                // the rule has to be restated here or it is not the rule.
+                //
+                // Reachable because ScoreFollowUp and IsIncomplete resolve an intent to
+                // different definitions when two are registered under one intent: the former
+                // scans the parser's command array and breaks on the FIRST match, the latter
+                // reads CommandSetManager's dictionary, which BuildLookup fills last-write-wins.
+                // The short definition then calls the command complete while the long one
+                // charges it for required slots the matched pattern never had. Floored rather
+                // than reconciled deliberately: the floor holds whatever the two disagree
+                // about, and a non-positive score is not fireable for any reason.
+                //
+                // Refusing rather than re-arming. The merged command is complete by slots, so
+                // AdvanceSlotFill would install a pending with nothing left to fill — one
+                // TryFollowUpSlotFill declines forever and FireAsIs would eventually fire
+                // carrying this same score. Leaving the pending untouched keeps pendingTimeout
+                // the thing that ends the exchange, and keeps the command it would fire the one
+                // that legitimately scored on the first utterance. The utterance is reported
+                // unrecognised because it resolved nothing — which is what Step 6 would say for
+                // it anyway, a follow-up answer being a slot value rather than a command.
+                if (followUpResult.Value.Score <= 0f)
+                {
+#if UNITY_EDITOR
+                    LastMatchDiagnostics = new VoxrMatchDiagnostics(
+                        text, diagWords,
+                        new[] { new VoxrMatchAttempt(
+                            followUpResult.Value.Intent, null,
+                            followUpResult.Value.Score, minScore,
+                            followUpResult.Value.Confidence, minConfidence,
+                            null,
+                            $"follow-up re-score {followUpResult.Value.Score:F2} <= 0",
+                            false) },
+                        Time.frameCount);
+#endif
+                    OnUnrecognisedSpeech?.Invoke(text);
+                    return;
+                }
+
                 // A follow-up result is not necessarily a complete command (issue #77). The
                 // slot-fill walks the unfilled slots in order, stops at the first one it cannot
                 // fill, and returns as soon as ONE new slot is filled — so a pending with two or
