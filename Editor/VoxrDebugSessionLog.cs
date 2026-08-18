@@ -23,7 +23,7 @@ namespace VoXR.Editor
     [InitializeOnLoad]
     internal static class VoxrDebugSessionLog
     {
-        const int SchemaVersion = 1;
+        const int SchemaVersion = 2;
         const int MaxRetainedSessions = 10;
         const string LogDirName = "VoxrDebugLogs";
 
@@ -32,20 +32,28 @@ namespace VoXR.Editor
             + "Each entry is one utterance. On the ordinary parse path each attempt within it is "
             + "one extraction round, reporting the command pattern that won selection that round "
             + "— losing candidates are not recorded, so a pattern's absence means it lost "
-            + "selection, not that it was never tried. Some pipeline events instead publish a "
+            + "selection, not that it was never tried. Five pipeline events instead publish a "
             + "single synthetic attempt with an empty pattern: rejectReason 'no match' (nothing "
             + "was extracted; intent is empty and aggregateConfidence is 0, not -1), a "
-            + "confirm/cancel or follow-up slot-fill resolution of a pending command, and a "
-            + "pending timeout (whose inputText is the original command's transcript, not new "
-            + "speech). An attempt fired when accepted=true, otherwise rejectReason says why it "
-            + "did not. score is compared against minScore and aggregateConfidence against "
+            + "confirm/cancel resolution of a pending command, an answer to a disambiguation "
+            + "prompt whose chosen command still needs confirming ('chosen via vocabulary, now "
+            + "awaiting confirmation'), a follow-up slot-fill resolution of a pending command, "
+            + "and a pending timeout (whose inputText is the original command's transcript, not "
+            + "new speech). An attempt fired when accepted=true, otherwise rejectReason says why "
+            + "it did not. score is compared against minScore and aggregateConfidence against "
             + "minConfidence. aggregateConfidence is the MINIMUM per-word confidence over the "
             + "matched span, never an average; -1 means no per-word confidence was available for "
             + "that span, which usually means the utterance carried no word data at all (as with "
             + "injected text, where words is empty) but can also occur with words populated when "
             + "the matched span came from a segment that carried none. Slot startWord/endWord "
             + "are half-open [startWord, endWord) indices into the whitespace-split inputText, "
-            + "not into the words array; they stay valid even when words is empty. Note the "
+            + "not into the words array; they stay valid even when words is empty. tiedRival "
+            + "names the equally-good rival the attempt beat on registration order alone, as "
+            + "'intent (pattern N)'; it is empty when nothing tied it, so a coin-flip win is "
+            + "distinguishable from a clean one. tiedRivalIsSibling says whether that rival was "
+            + "one dropped word apart — speech ambiguity the runtime can offer as a choice — "
+            + "rather than a duplicate or overlapping pattern, which is a grammar defect; it is "
+            + "meaningless when tiedRival is empty. Note the "
             + "numbers embedded in rejectReason text are formatted with the Editor's current "
             + "culture, so the decimal separator may be ',' — match on the surrounding words, "
             + "not the whole literal. The scoring model behind these numbers — the score "
@@ -225,6 +233,8 @@ namespace VoXR.Editor
                     minConfidence = a.MinConfidence,
                     accepted = a.IsAccepted,
                     rejectReason = a.RejectReason ?? "",
+                    tiedRival = a.TiedRival ?? "",
+                    tiedRivalIsSibling = a.TiedRivalIsSibling,
                     slots = new SlotDto[slots.Length],
                 };
 
@@ -293,6 +303,8 @@ namespace VoXR.Editor
             public float minConfidence;
             public bool accepted;
             public string rejectReason;
+            public string tiedRival;
+            public bool tiedRivalIsSibling;
             public SlotDto[] slots;
         }
 
