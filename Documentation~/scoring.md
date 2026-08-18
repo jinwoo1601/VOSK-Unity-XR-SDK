@@ -274,6 +274,7 @@ It does **not** mean "nothing matched". It fires whenever an utterance produced 
 | Every candidate fell under `minScore` | **fires** |
 | The winner was missing a required slot (command without `allowPartialMatch`) | **fires** |
 | A candidate was diverted to pending (partial match or `requiresConfirmation`) | **fires**, alongside `OnCommandPending` |
+| A follow-up fill completed a pending command but re-scored at or below zero | **fires** — the fill is refused and the pending is left standing |
 | A candidate was diverted to a **disambiguation** pending | silent |
 | A candidate was rejected by `minConfidence` | silent |
 | A candidate was suppressed by debounce | silent |
@@ -461,7 +462,7 @@ This is the case the start test has to ask the matcher to get right. Testing onl
 
 Each log entry is one **utterance**. Its `attempts` array holds one entry per *decision the recogniser logged* for that utterance. On the ordinary parse path that is one entry per extraction round — the winner of that round, accepted or rejected. Losing candidates are never logged, so a pattern's absence means it lost selection, not that it was never tried.
 
-Five paths short-circuit before the parse and publish a **single synthetic attempt** instead. All of them leave `pattern` empty, so an empty `pattern` is how you tell them apart:
+Six paths short-circuit before the parse and publish a **single synthetic attempt** instead. All of them leave `pattern` empty, so an empty `pattern` is how you tell them apart:
 
 | `rejectReason` | What happened |
 |----------------|---------------|
@@ -469,6 +470,7 @@ Five paths short-circuit before the parse and publish a **single synthetic attem
 | `cancelled via vocabulary` | Follow-up speech cancelled a pending command. The confirm case is the same entry with `accepted: true` and an empty `rejectReason`. |
 | `chosen via vocabulary, now awaiting confirmation` | The speaker answered an ambiguity, and the command they chose sets `requiresConfirmation` — so it did not fire, it asked again. `accepted: false`, and the *next* utterance's entry carries the confirmation. |
 | *(empty, `accepted: true`)* — or `still pending (partial: unfilled [...])` | Follow-up speech filled a pending command's missing slot. Empty reason with `accepted: true` means no required slot is left and the command fired. When the utterance filled some but not all of what was still missing, the same entry carries `accepted: false` and `still pending (partial: unfilled [...])` instead: the fill was kept, the command did not fire, and the pending is still live. |
+| `follow-up re-score <n> <= 0` | Follow-up speech filled a pending command's last missing slot, but the completed command re-scored zero or negative — so it was refused rather than fired (§1's floor, on the follow-up path). The refusal neither resolves nor advances the pending, so it stays subject to the ordinary endings — a confirm word, a cancel word, preemption by a complete new command, `CancelPendingCommand()`, replacement by the next partial match, or `pendingTimeout`. What it can no longer do is progress by further follow-up speech: the same fill re-scores non-positive every time. Reaching this at all means two definitions share one intent: the completeness check and the re-score then read different patterns for the same command. |
 | `timeout — cancelled` | A pending command timed out and was discarded. `inputText` is the *original* command's transcript, and `words` is empty — this entry is not an utterance at all. Under `FireAsIs` the same entry carries `accepted: true` and an empty `rejectReason` — **except for an unanswered ambiguity, which cancels under either setting**. |
 
 | Field | What it is | Section |

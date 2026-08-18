@@ -58,6 +58,17 @@ namespace VoXR.Commands
             _registeredSlotNames = registeredSlotNames;
         }
 
+        // A copy carrying a different score (issue #113), for re-arming a pending with a fill
+        // whose re-score is not admissible. It lives here rather than at the call site because
+        // _registeredSlotNames is private: a rebuild through the public constructor would
+        // silently drop it, and GetSlot would stop distinguishing a registered-but-unmatched
+        // slot from one the pattern never declared.
+        internal VoxrCommand WithScore(float score)
+        {
+            return new VoxrCommand(Intent, Slots, Confidence, score, RawText,
+                _registeredSlotNames, MatchedPatternIndex);
+        }
+
         /// <summary>
         /// Returns the value of a named slot, or an empty string if the slot was not matched.
         /// </summary>

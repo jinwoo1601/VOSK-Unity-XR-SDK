@@ -1397,6 +1397,204 @@ namespace VoXR.Tests.Runtime
             Assert.IsFalse(_recogniser.HasPendingCommand);
         }
 
+        // ======== Issue #113: a non-positive follow-up re-score ========
+
+        // Two definitions registered under one intent. Nothing in the package rejects that, and
+        // it is what makes the shape reachable: the two halves of the follow-up fire path resolve
+        // the intent differently. IsIncomplete goes through CommandSetManager's dictionary, which
+        // BuildLookup fills last-write-wins, so it reads the SHORT definition and calls the
+        // merged command complete. ScoreFollowUp scans the parser's command array and breaks on
+        // the first match, so it re-scores against the LONG one and charges the command for five
+        // required slots the matched pattern never had.
+        static VoxrSlotDefinition[] MakeDuplicateIntentSlots()
+        {
+            return new[]
+            {
+                new VoxrSlotDefinition("weapon", new[] { "missiles", "torpedoes" }),
+                new VoxrSlotDefinition("target", new[] { "hotel one", "hotel two" }),
+                new VoxrSlotDefinition("fuse", new[] { "impact" }),
+                new VoxrSlotDefinition("spread", new[] { "wide" }),
+                new VoxrSlotDefinition("yield", new[] { "low" }),
+                new VoxrSlotDefinition("bearing", new[] { "north" }),
+                new VoxrSlotDefinition("altitude", new[] { "high" }),
+            };
+        }
+
+        static VoxrCommandDefinition[] MakeDuplicateIntentCommands()
+        {
+            return new[]
+            {
+                // First in the array — the one ScoreFollowUp resolves. It scores -3/9 on
+                // "launch missiles target" and so never wins the parse; its only effect on the
+                // run is to supply the re-score's pattern.
+                new VoxrCommandDefinition("launch_weapon", new[]
+                {
+                    new[]
+                    {
+                        "launch", "{weapon}", "target", "{target}",
+                        "{fuse}", "{spread}", "{yield}", "{bearing}", "{altitude}",
+                    },
+                }, allowPartialMatch: true),
+                // Last in the array — the one the dictionary keeps, and the pattern the parse
+                // actually matches.
+                new VoxrCommandDefinition("launch_weapon", new[]
+                {
+                    new[] { "launch", "{weapon}", "target", "{target}" },
+                }, allowPartialMatch: true),
+            };
+        }
+
+        void ConfigureDuplicateIntent()
+        {
+            _recogniser.Configure(MakeDuplicateIntentSlots(), MakeDuplicateIntentCommands());
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+        }
+
+        // Same divergence, but the short definition keeps a second required slot, so the
+        // follow-up fill is PARTIAL. This is the shape the floor must NOT refuse: issue #77's
+        // re-arm is how a multi-slot exchange advances at all.
+        static VoxrCommandDefinition[] MakePartialFillDuplicateIntentCommands()
+        {
+            return new[]
+            {
+                new VoxrCommandDefinition("launch_weapon", new[]
+                {
+                    new[]
+                    {
+                        "launch", "{weapon}", "target", "{target}",
+                        "{fuse}", "{spread}", "{yield}", "{bearing}", "{altitude}",
+                    },
+                }, allowPartialMatch: true),
+                new VoxrCommandDefinition("launch_weapon", new[]
+                {
+                    new[] { "launch", "{weapon}", "target", "{target}", "{fuse}" },
+                }, allowPartialMatch: true),
+            };
+        }
+
+        void ConfigurePartialFillDuplicateIntent()
+        {
+            _recogniser.Configure(
+                MakeDuplicateIntentSlots(), MakePartialFillDuplicateIntentCommands());
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+        }
+
+        [Test]
+        public void FollowUpFill_PartialAndNonPositive_StillProgressesAndCanComplete()
+        {
+            // The floor sits BELOW the completeness split, and this is why. Placed above it, it
+            // refused partial fills too — which is not a floor but a stall: the fill was
+            // discarded, so every later answer re-derived the same non-positive score and was
+            // refused again, and the command could never be completed by any speech at all.
+            // Here the exchange has to run to completion.
+            ConfigurePartialFillDuplicateIntent();
+
+            var pendingEvents = new List<VoxrCommand>();
+            _recogniser.OnCommandPending += cmd => pendingEvents.Add(cmd);
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            // (1 + 1 + 1 - 1 - 1) / 5 = 0.20 against the short definition; the long one is
+            // -3/9 and is inadmissible, so the short one is the only candidate.
+            _recogniser.InjectText("launch missiles target");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+            Assert.AreEqual(1, pendingEvents.Count);
+
+            // Fills {target}, stops at {fuse}. Re-scores -1/9 against the LONG definition while
+            // the short one still calls it incomplete — so it must re-arm, not be refused.
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsFalse(recognised.HasValue, "a partial fill still does not fire");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "and the pending is still live");
+            Assert.AreEqual(2, pendingEvents.Count, "the re-arm reports progress (issue #77)");
+
+            var pending = _recogniser.EditorPendingCommand;
+            Assert.IsTrue(pending.HasValue);
+            Assert.IsTrue(
+                pending.Value.Command.HasSlot("target"), "the fill is KEPT, not discarded");
+            Assert.AreEqual(
+                new[] { "fuse" }, pending.Value.UnfilledSlots, "and only {fuse} is outstanding");
+
+            // The stored score is the retained 0.20, never the -1/9 that was re-scored. This is
+            // the half that moving the floor alone would have missed: a pending carries its
+            // command into three fire paths that re-test nothing — Complete, the confirm-word
+            // arm, and FireAsIs on timeout.
+            Assert.Greater(
+                pending.Value.Command.Score, 0f,
+                "a pending must never come to hold a score its own fire paths would refuse"
+            );
+
+            // And the exchange completes, which it could not do at all before the fix.
+            _recogniser.InjectText("impact");
+
+            Assert.IsTrue(recognised.HasValue, "the last slot lands and the command fires");
+            Assert.AreEqual("hotel one", recognised.Value.GetSlot("target"));
+            Assert.AreEqual("impact", recognised.Value.GetSlot("fuse"));
+            // (2 literals + 3 filled - 4 missed) / 9 = +1/9, back above the floor.
+            Assert.AreEqual(1f / 9f, recognised.Value.Score, 0.001f);
+        }
+
+        [Test]
+        public void FollowUpFill_ReScoreNonPositive_DoesNotReachAHandler()
+        {
+            // Issue #113. Both flush paths floor candidates at `Score <= 0` before anything
+            // reaches a subscriber, and scoring.md §1 states the rule as absolute: a candidate
+            // scoring zero or less is discarded and never competes. ScoreFollowUp had no such
+            // floor, and this is the construction that walks a -1/9 command straight through
+            // OnCommandConfirmed.
+            ConfigureDuplicateIntent();
+
+            VoxrCommand? confirmed = null;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandConfirmed += cmd => confirmed = cmd;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+
+            _recogniser.InjectText("launch missiles target");
+            Assert.IsTrue(_recogniser.HasPendingCommand, "{target} is unfilled, so it pends");
+
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsFalse(
+                confirmed.HasValue,
+                confirmed.HasValue
+                    ? $"fired with Score {confirmed.Value.Score:F4}"
+                    : "OnCommandConfirmed must not receive a non-positive score"
+            );
+            Assert.IsFalse(recognised.HasValue, "and neither must OnCommandRecognised");
+        }
+
+        [Test]
+        public void FollowUpFill_ReScoreNonPositive_LeavesThePendingAsItStands()
+        {
+            // The refusal is not a re-arm. The merged command is complete by slots, so
+            // AdvanceSlotFill would install a pending with nothing left to fill — one
+            // TryFollowUpSlotFill declines forever and FireAsIs would eventually fire carrying
+            // this same score. Leaving the pending untouched keeps pendingTimeout the thing that
+            // ends the exchange, and keeps the command it would fire the one that legitimately
+            // scored 0.5 on the first utterance.
+            ConfigureDuplicateIntent();
+
+            VoxrCommand? cancelled = null;
+            _recogniser.OnCommandCancelled += cmd => cancelled = cmd;
+
+            _recogniser.InjectText("launch missiles target");
+            _recogniser.InjectText("hotel one");
+
+            Assert.IsTrue(_recogniser.HasPendingCommand, "the pending survives the refusal");
+            Assert.IsFalse(cancelled.HasValue, "and is not cancelled by it");
+
+            var pending = _recogniser.EditorPendingCommand;
+            Assert.IsTrue(pending.HasValue);
+            Assert.IsFalse(
+                pending.Value.Command.HasSlot("target"),
+                "the refused fill is not kept — the pending is exactly what it was"
+            );
+        }
+
         // -------- Helpers --------
 
         void ForceTimeoutNow()
