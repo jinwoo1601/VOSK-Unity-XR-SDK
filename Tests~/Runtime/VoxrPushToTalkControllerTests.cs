@@ -17,6 +17,9 @@ namespace VoXR.Tests.Runtime
         // Only the authored-Continuous tests build this one; see AuthorContinuousInactive.
         GameObject _authoredGo;
 
+        // Only the destroyed-recogniser tests build this one; see UseCountingRecogniser.
+        GameObject _countingGo;
+
         int _startedCount;
         int _endedCount;
 
@@ -47,6 +50,9 @@ namespace VoXR.Tests.Runtime
             if (_authoredGo != null)
                 Object.DestroyImmediate(_authoredGo);
             _authoredGo = null;
+            if (_countingGo != null)
+                Object.DestroyImmediate(_countingGo);
+            _countingGo = null;
         }
 
         // -------- Fixtures --------
@@ -406,6 +412,116 @@ namespace VoXR.Tests.Runtime
                 "Switching away before the component was ever enabled must be silent: nothing "
                     + "had started, and nothing had announced a start for this to pair with"
             );
+        }
+
+        // -------- Missing or destroyed recogniser (issue #115) --------
+
+        // Unity overloads ==/!= on UnityEngine.Object so a destroyed component compares equal
+        // to null while its managed wrapper is still alive. `?.` does not call that overload,
+        // so the two destroyed-recogniser tests below are the ones the old `?.` in the setter
+        // failed: they destroy the component but keep the C# reference the controller holds.
+        //
+        // They assert the skip by COUNTING CALLS, not by expecting an exception. Dispatching
+        // into a destroyed recogniser never reached this caller in the first place:
+        // StartRecognition hands off to a discarded async Task, and StopRecognitionCore
+        // touches no Unity-side member on any platform. An Assert.DoesNotThrow here would be
+        // structurally incapable of failing — the trap VoxrPushToTalkPauseTests warns about,
+        // an assertion unable to see the very throw it exists to rule out. Counting is also
+        // what separates this from the event assertions: those would still pass if a future
+        // edit kept the events gated but restored `_speechRecogniser?.StartRecognition()`.
+        sealed class CountingSpeechRecogniser : VoxrSpeechRecogniser
+        {
+            internal int StartCalls { get; private set; }
+            internal int StopCalls { get; private set; }
+
+            internal override void StartRecognitionCore() => StartCalls++;
+
+            internal override void StopRecognitionCore() => StopCalls++;
+
+            // Keeps the base's private OnDestroy — and its ReleaseNativeResources() — off
+            // this double, exactly as VoxrPushToTalkPauseTests does. Load-bearing: Unity runs
+            // a base class's privately-declared messages on a subclass.
+            void OnDestroy() { }
+        }
+
+        // The double gets its own GameObject rather than replacing the fixture's _speech,
+        // which SetUp also wires into _command. Only the controller is under test here.
+        CountingSpeechRecogniser UseCountingRecogniser()
+        {
+            _countingGo = new GameObject("CountingRecogniser");
+            var counting = _countingGo.AddComponent<CountingSpeechRecogniser>();
+            _controller.SpeechRecogniser = counting;
+            return counting;
+        }
+
+        static void AssumeDestroyedButAlive(VoxrSpeechRecogniser recogniser)
+        {
+            Assume.That(recogniser == null, Is.True, "Precondition: the recogniser reads as null");
+            Assume.That(
+                ReferenceEquals(recogniser, null),
+                Is.False,
+                "Precondition: the managed wrapper is still alive — reading as null while "
+                    + "still referenced is the exact state `?.` mishandles, and a plain null "
+                    + "would make this test a duplicate of the null case below"
+            );
+        }
+
+        [Test]
+        public void ListeningMode_SetToContinuous_RecogniserDestroyed_IsNoOp()
+        {
+            var recogniser = UseCountingRecogniser();
+            Object.DestroyImmediate(recogniser);
+            AssumeDestroyedButAlive(recogniser);
+
+            _controller.ListeningMode = VoxrListeningMode.Continuous;
+
+            Assert.AreEqual(
+                0,
+                recogniser.StartCalls,
+                "Switching to Continuous must skip a destroyed recogniser, not dispatch into it"
+            );
+            Assert.AreEqual(
+                0,
+                _startedCount,
+                "Nothing started, so nothing may announce a start — the same pairing PressTalk "
+                    + "and the authored-Continuous enable already keep"
+            );
+        }
+
+        [Test]
+        public void ListeningMode_SetToPushToTalk_RecogniserDestroyed_IsNoOp()
+        {
+            var recogniser = UseCountingRecogniser();
+
+            _controller.ListeningMode = VoxrListeningMode.Continuous;
+            Assume.That(recogniser.StartCalls, Is.EqualTo(1), "Precondition: the live start ran");
+            Assume.That(_startedCount, Is.EqualTo(1), "Precondition: the live start announced");
+
+            Object.DestroyImmediate(recogniser);
+            AssumeDestroyedButAlive(recogniser);
+
+            _controller.ListeningMode = VoxrListeningMode.PushToTalk;
+
+            Assert.AreEqual(
+                0,
+                recogniser.StopCalls,
+                "Switching back must skip a destroyed recogniser, not dispatch into it"
+            );
+            Assert.AreEqual(
+                0,
+                _endedCount,
+                "Nothing stopped, so nothing may announce a stop — ReleaseTalk is already "
+                    + "silent on a missing recogniser for the same reason"
+            );
+        }
+
+        [Test]
+        public void ListeningMode_SetToContinuous_RecogniserNull_IsNoOp()
+        {
+            _controller.SpeechRecogniser = null;
+
+            Assert.DoesNotThrow(() => _controller.ListeningMode = VoxrListeningMode.Continuous);
+            Assert.AreEqual(0, _startedCount);
         }
 
         [UnityTest]
