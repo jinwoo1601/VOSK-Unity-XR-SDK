@@ -318,11 +318,17 @@ deliberate trade-offs rather than oversights.
   validation passes — `RunValidationWarnings()` for slot values and aliases, and
   `WarnOnExcessiveOptionalExpansion()` for a pattern past the eager-flush
   expansion cap. The warnings are correct, just noisier than they should be.
-  Two further scans are Editor-only: the droppable-required-literal check
+  Three further scans are Editor-only: the droppable-required-literal check
   (demoted in [#81](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/81) —
-  in a player build it no longer contributes) and the sibling-discriminator
-  warning, which is the loudest of the set. So in the Editor all **four** passes
-  re-run on every switch; a player build re-runs only the unconditional two.
+  in a player build it no longer contributes), the sibling-discriminator
+  warning, which is the loudest of the set, and the duplicate-intent check
+  ([#120](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/120)).
+  That last one compounds this limitation rather than merely joining it: the
+  duplication it reports can be *created* by the switch — two sets that each
+  carry a command under the same intent are only in conflict while both are
+  active — so it re-reports on every switch that keeps them active together.
+  So in the Editor all **five** passes re-run on every switch; a player build
+  re-runs only the unconditional two.
 - **Workaround**: None at user level. This is a candidate for cleanup —
   validation should run once per `Configure()` call, not per parser rebuild.
   Filed as a low-priority follow-up.

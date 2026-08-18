@@ -5627,6 +5627,100 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void DuplicateIntent_InterchangeableDefinitions_ReportsCopiesNotADisagreement()
+        {
+            // The other shape the scan meets, and the one the first cut of this warning got
+            // wrong: two registrations no consumer can tell apart. Both intent resolutions land
+            // on an identical definition, so nothing disagrees — telling the author otherwise,
+            // while quoting the same pattern on both sides, is a false advisory. It is still a
+            // real authoring mistake, so it is still reported, with the remedy that applies.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    @"Intent 'fire_at' is registered 2 times by definitions no consumer can "
+                        + @"tell apart \(first pattern ""fire at \{target\}""\)"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[] { FireAt(), FireAt() }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_SamePatternsDifferentFlags_ReportsTheDisagreement()
+        {
+            // The flags are part of what makes two definitions distinguishable, and this is the
+            // pair that proves the test covers them: identical patterns, but one of them
+            // requiresConfirmation. That is the case the issue asked to be stated plainly —
+            // whether a destructive command asks before firing decided by registration order —
+            // so it must take the DIVERGENT report, not the copies one.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("Intent 'fire_at' is registered by 2 command definitions")
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[]
+                {
+                    FireAt(),
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[] { new[] { "fire", "at", "{target}" } },
+                        requiresConfirmation: true
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void DuplicateIntent_SamePatternsDifferentOrder_ReportsTheDisagreement()
+        {
+            // Pattern order is identity, not presentation: MatchedPatternIndex indexes this
+            // array, so resolving the wrong definition indexes a different pattern. Two
+            // definitions listing the same patterns in opposite order are therefore
+            // distinguishable, and take the divergent report.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex("Intent 'fire_at' is registered by 2 command definitions")
+            );
+
+            var parser = new VoxrCommandParser(
+                DuplicateIntentSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[]
+                        {
+                            new[] { "fire", "at", "{target}", "now" },
+                            new[] { "fire", "at", "{target}" },
+                        }
+                    ),
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[]
+                        {
+                            new[] { "fire", "at", "{target}" },
+                            new[] { "fire", "at", "{target}", "now" },
+                        }
+                    ),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void DuplicateIntent_IntentsDifferingOnlyInCase_SayNothing()
         {
             // Ordinal, matching both resolutions this mirrors — BuildLookup's dictionary is
