@@ -37,7 +37,7 @@ Select **Assets > Create > VoXR > Command Definition**.
 Configure each command asset:
 - **Intent** -- the intent name that fires in `OnCommandRecognised` (e.g. `launch_weapon`)
 - **Patterns** -- one or more pattern strings with space-separated tokens. Use the same syntax as the code API: `launch {?quantity} {weapon} target {target}`
-- **Allow Partial Match** -- when enabled, a match that left required slots unfilled enters pending state instead of being rejected, so follow-up speech can fill them. It is also the precondition for [both ways an incomplete command still fires](command-recognition.md#the-two-ways-an-incomplete-command-still-fires), so the handler must tolerate every required slot being absent.
+- **Allow Partial Match** -- when enabled, a match that left required slots unfilled enters pending state instead of being rejected, so follow-up speech can fill them. A winner that missed its own **first required element** is [barred](scoring.md#the-leading-required-miss-bar) before this is consulted, so it enters no pending at any score. It is also the precondition for [both ways an incomplete command still fires](command-recognition.md#the-two-ways-an-incomplete-command-still-fires), so the handler must tolerate every required slot being absent.
 - **Requires Confirmation** -- when enabled, even a fully-matched command enters pending state and waits for an [explicit confirmation](command-recognition.md#explicit-confirmation) phrase before firing.
 
 Each string entry represents one alternative pattern for the same intent. A token takes one of four forms:
@@ -96,7 +96,7 @@ Three more scan the patterns:
 - **Two intents separated by one word** -- two *different* intents differing at exactly one required word, which tie when that word is dropped, leaving registration order to pick the intent. Editor-only.
 - **More than 12 optional elements in one pattern** -- the eager-flush analysis cannot expand it, and is then abandoned for the **whole** command set: with `eagerFlushOnCompleteMatch` on, no command commits early and every complete match is held for the full hold or buffer window. Unlike the two above, this one fires in player builds as well.
 
-The two grammar-shape hazards, with their remedies and the limits of each scan, are covered in full under [Authoring hazards](command-recognition.md#authoring-hazards).
+The grammar-shape hazards, with their remedies and the limits of each scan, are covered in full under [Authoring hazards](command-recognition.md#authoring-hazards).
 
 ---
 

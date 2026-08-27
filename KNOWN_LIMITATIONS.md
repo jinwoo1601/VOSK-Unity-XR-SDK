@@ -429,7 +429,12 @@ deliberate trade-offs rather than oversights.
   candidates were blocked this way and **28 were recovered** by a later extraction
   round. This is the only one that was not. Re-swept after #82 changed the orphan
   run's terminator: **28 blocked, 27 recovered**, and the same single case still
-  silent.
+  silent. Re-swept again after the leading-required-miss bar (#124): **unchanged
+  at 28 blocked, 27 recovered**, still this one case. The bar suppresses a round's
+  result but leaves the search restarting in the same place, so it cannot change
+  which later rounds occur — only whether they produce a command. It would reduce
+  the recovered count only where a recovering round's own winner missed its first
+  required element, which no row of this corpus does.
 - **Root cause**: selection ranks earliest start above score, so a later-starting
   candidate cannot be promoted however much better it scores — coverage can only
   reorder candidates that begin at the same token. Normally sequential extraction
@@ -437,6 +442,44 @@ deliberate trade-offs rather than oversights.
   consumed span covers the start the better candidate needed, as it does here.
 - **Workaround**: none at user level. Rare by measurement (1 in 699), and it
   requires the winning pattern to span the alternative's start.
+
+### A command whose first word the decoder dropped is silent rather than recovered
+
+- **Symptom**: A command you said in full produces nothing at all. The transcript
+  shows every word except the first one of the pattern, and before this change the
+  command fired at a reduced score. The round leaves no record — no scored attempt
+  for that pattern and no `rejectReason` naming it. Where nothing else in the
+  utterance fired either, the log carries only the synthetic `no match` entry, so
+  there is nothing to distinguish it from an utterance that matched nothing.
+- **Repro**: With the demo grammar, say "heading two seven zero" (the leading "set"
+  dropped by the decoder). `set_heading` matches the rest, scores `2 / 3` = `0.667`,
+  clears the default `minScore` — and does not fire. Before #124 it fired.
+- **Where seen**: issue #124, and the package's own 699-utterance fixture corpus.
+  Measured over that corpus, gated at `0.60`: **9 rows lose a genuinely spoken
+  command this way**, against 39 rows where an invented one is suppressed. No row
+  loses a command that scored a clean `1.00`, and no surviving command's score
+  changes.
+- **Root cause**: a round's **winner** whose first required element matched nothing
+  is refused, whatever it scored — see
+  [the bar](Documentation~/scoring.md#the-leading-required-miss-bar). The rule is
+  positional because the first required element is the verb: losing an argument
+  leaves the action identified, losing the verb leaves no evidence that any action
+  was requested. **Nothing in the transcript distinguishes "the speaker never said
+  it" from "the speaker said it and the decoder dropped it"** — both arrive as the
+  same token sequence — so the refusal cannot be made selective, and this silence is
+  the deliberate price of not firing commands nobody uttered.
+- **Workaround**: none at the moment of failure — the speaker says the command
+  again. `minScore` and `coverageWeight` do not reach it, and lengthening the pattern
+  does not either. What reduces how often it happens is grammar-side: keep a
+  pattern's first required element a word the decoder hears reliably (not a short
+  unstressed function word), and give the intent an additional phrasing that reaches
+  the words your speakers actually produce — see
+  [A bare pattern's tail](Documentation~/command-recognition.md#a-bare-patterns-tail-can-be-read-as-another-command).
+- **Note**: the trade is deliberate and was measured before it was taken. The
+  alternative — excluding such candidates from selection rather than from firing --
+  destroys 11 cleanly spoken commands on the same corpus, because a barred candidate
+  winning its round is what absorbs leading debris that would otherwise be charged to
+  the next command.
 
 ### Default `bufferWindow` is too short for split commands on Quest 3
 
@@ -600,14 +643,22 @@ deliberate trade-offs rather than oversights.
   `switch to navigation`); or give the more destructive of the pair
   `requiresConfirmation`; or — where both phrasings must exist verbatim — register the
   safer one first, since the tie-break is deterministic.
-- **What does not work**: moving the difference *earlier* in the pattern.
-  `weapons mode` and `navigation mode` tie exactly as the longer pair does; all that
-  changes is that a two-element tie scores `0.5` and falls under `minScore`, so
-  nothing fires instead of the wrong thing. Grow the pattern back
-  (`weapons mode active`) and the wrong-command behaviour returns at `0.67`.
+- **What now works, and used to not**: moving the difference *earlier* in the
+  pattern, so the differing word is each pattern's **first required element**.
+  `weapons mode` and `navigation mode` still tie at `0.5`, and `weapons mode active`
+  against `navigation mode active` still ties at `0.67` — but dropping a leading
+  required element now bars both candidates from firing, at any pattern length, so
+  the outcome is silence rather than the wrong command. This entry previously said
+  the difference-earlier fix does not help and that the wrong-command behaviour
+  returns once the pattern grows; the leading-required-miss bar (#124) reversed
+  both. Note what it buys and what it does not: silence instead of a wrong action,
+  with the speaker having to repeat themselves, and no help at all on an utterance
+  where the discriminating word *was* heard.
 - **Note**: This shape predates the current miss cost. At four or more elements it
   already cleared the gate; reducing the miss cost extends it down to three-element
-  patterns, which is where two-word-prefix grammars live.
+  patterns, which is where two-word-prefix grammars live. That reach applies to a
+  **non-leading** discriminator only — where the differing word leads, both
+  candidates are barred and nothing fires at any length, per the entry above.
 
 ### A pattern with more than six optional elements is not checked for siblings
 
@@ -658,10 +709,16 @@ deliberate trade-offs rather than oversights.
 
 - **Symptom**: A grammar carries the sibling shape above, the wrong command fires,
   and no construction-time warning was ever logged for it.
-- **Repro**: Register `["cease", "fire"]` and `["resume", "fire"]`, lower `minScore`
-  to `0.4`, and say either one with the first word dropped. Both score `0.5`, the
-  tie is live, and the command that fires is whichever was registered first — but
-  the Editor logged nothing at construction.
+- **Repro**: Register `["cease", "fire"]` and `["cease", "burn"]`, lower `minScore`
+  to `0.4`, and say "cease" with the second word dropped. Both score
+  `(1 + 0) / 2` = `0.5`, the tie is live, and the command that fires is whichever
+  was registered first — but the Editor logged nothing at construction.
+  **The discriminating word must not be the pattern's first required element.**
+  The earlier version of this repro used `["cease", "fire"]` against
+  `["resume", "fire"]` with the *first* word dropped; since #124 both candidates are
+  barred for missing their leading required element, so nothing fires at `0.4` or at
+  any other threshold and the tie is never live. That shape now has the opposite
+  problem from the one this entry is about.
 - **Root cause**: Losing one required element from a pattern worth `D` leaves
   `(D − 1) / D`, so a two-element pattern drops to `0.5`. At the default `minScore`
   of `0.6` that is *below the gate* — both siblings are rejected and nothing fires,
@@ -683,11 +740,15 @@ deliberate trade-offs rather than oversights.
   0.6 the same pair is rejected on score and nothing fires, which is the outcome this
   entry says is not the problem.) See
   [Ambiguous commands](Documentation~/command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
-  Failing that: if you run below the default `minScore`, treat short sibling pairs as
-  hazardous whether or not the Editor flagged them — the rule is that any two patterns
-  of different intents differing at exactly one required word can tie once that word
-  is dropped. Raising `minScore` back to `0.6` or above restores the correspondence
-  between what the warning reports and what can actually happen.
+  This works only where the tie is actually live, which since #124 means the
+  discriminating word must not be either pattern's **first required element** — where
+  it is, the round's winner is barred, no pending opens, and there is nothing to ask
+  about. Failing that: if you run below the default `minScore`, treat short sibling
+  pairs as hazardous whether or not the Editor flagged them — the rule is that any two
+  patterns of different intents differing at exactly one **non-leading** required word
+  can tie once that word is dropped. Raising `minScore` back to `0.6` or above
+  restores the correspondence between what the warning reports and what can
+  actually happen.
 - **Note**: The reverse error would be worse. Warning unconditionally would put a
   "the wrong intent can fire" claim in front of every author running default
   settings, for grammars where nothing fires at all.
