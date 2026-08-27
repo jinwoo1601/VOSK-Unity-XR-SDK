@@ -96,7 +96,7 @@ Three more scan the patterns:
 - **Two intents separated by one word** -- two *different* intents differing at exactly one required word, which tie when that word is dropped, leaving registration order to pick the intent. Editor-only.
 - **More than 12 optional elements in one pattern** -- the eager-flush analysis cannot expand it, and is then abandoned for the **whole** command set: with `eagerFlushOnCompleteMatch` on, no command commits early and every complete match is held for the full hold or buffer window. Unlike the two above, this one fires in player builds as well.
 
-The grammar-shape hazards, with their remedies and the limits of each scan, are covered in full under [Authoring hazards](command-recognition.md#authoring-hazards).
+The two scanned grammar-shape hazards, with their remedies and the limits of each scan, are covered in full under [Authoring hazards](command-recognition.md#authoring-hazards) — which also documents a shape nothing scans for.
 
 ---
 

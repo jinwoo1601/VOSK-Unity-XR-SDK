@@ -432,9 +432,12 @@ deliberate trade-offs rather than oversights.
   silent. Re-swept again after the leading-required-miss bar (#124): **unchanged
   at 28 blocked, 27 recovered**, still this one case. The bar suppresses a round's
   result but leaves the search restarting in the same place, so it cannot change
-  which later rounds occur — only whether they produce a command. It would reduce
-  the recovered count only where a recovering round's own winner missed its first
-  required element, which no row of this corpus does.
+  where later rounds start — only whether they produce a command. (A barred round
+  does not consume a result-buffer slot, so in a grammar small enough for that
+  buffer to fill it can let a later round run that would otherwise never have been
+  reached; the corpus grammar registers eleven commands, well clear of that bound.)
+  It would reduce the recovered count only where a recovering round's own winner
+  missed its first required element, which no row of this corpus does.
 - **Root cause**: selection ranks earliest start above score, so a later-starting
   candidate cannot be promoted however much better it scores — coverage can only
   reorder candidates that begin at the same token. Normally sequential extraction
@@ -455,10 +458,11 @@ deliberate trade-offs rather than oversights.
   dropped by the decoder). `set_heading` matches the rest, scores `2 / 3` = `0.667`,
   clears the default `minScore` — and does not fire. Before #124 it fired.
 - **Where seen**: issue #124, and the package's own 699-utterance fixture corpus.
-  Measured over that corpus, gated at `0.60`: **9 rows lose a genuinely spoken
-  command this way**, against 39 rows where an invented one is suppressed. No row
-  loses a command that scored a clean `1.00`, and no surviving command's score
-  changes.
+  Measured over that corpus, gated at `0.60`: 48 rows change and 17 stop firing
+  anything at all — of those 17, **9 lose a genuinely spoken command this way** and
+  the other 8 were invented commands the bar exists to suppress (39 invented
+  commands are suppressed across all 48 rows). No row loses a command that scored a
+  clean `1.00`, and no surviving command's score changes.
 - **Root cause**: a round's **winner** whose first required element matched nothing
   is refused, whatever it scored — see
   [the bar](Documentation~/scoring.md#the-leading-required-miss-bar). The rule is
@@ -474,9 +478,9 @@ deliberate trade-offs rather than oversights.
   pattern's first required element a word the decoder hears reliably (not a short
   unstressed function word), and give the intent an additional phrasing that reaches
   the words your speakers actually produce — see
-  [A bare pattern's tail](Documentation~/command-recognition.md#a-bare-patterns-tail-can-be-read-as-another-command).
+  [A bare pattern's tail](Documentation~/command-recognition.md#do-not-leave-a-bare-patterns-tail-readable-as-another-command).
 - **Note**: the trade is deliberate and was measured before it was taken. The
-  alternative — excluding such candidates from selection rather than from firing --
+  alternative — excluding such candidates from selection rather than from firing —
   destroys 11 cleanly spoken commands on the same corpus, because a barred candidate
   winning its round is what absorbs leading debris that would otherwise be charged to
   the next command.
@@ -647,18 +651,16 @@ deliberate trade-offs rather than oversights.
   pattern, so the differing word is each pattern's **first required element**.
   `weapons mode` and `navigation mode` still tie at `0.5`, and `weapons mode active`
   against `navigation mode active` still ties at `0.67` — but dropping a leading
-  required element now bars both candidates from firing, at any pattern length, so
-  the outcome is silence rather than the wrong command. This entry previously said
-  the difference-earlier fix does not help and that the wrong-command behaviour
-  returns once the pattern grows; the leading-required-miss bar (#124) reversed
-  both. Note what it buys and what it does not: silence instead of a wrong action,
+  required element now bars whichever of the two wins the round, at any pattern
+  length, so the outcome is silence rather than the wrong command. Note what it buys
+  and what it does not: silence instead of a wrong action,
   with the speaker having to repeat themselves, and no help at all on an utterance
   where the discriminating word *was* heard.
 - **Note**: This shape predates the current miss cost. At four or more elements it
   already cleared the gate; reducing the miss cost extends it down to three-element
   patterns, which is where two-word-prefix grammars live. That reach applies to a
-  **non-leading** discriminator only — where the differing word leads, both
-  candidates are barred and nothing fires at any length, per the entry above.
+  **non-leading** discriminator only — where the differing word leads, the round's
+  winner is barred and nothing fires at any length, per the entry above.
 
 ### A pattern with more than six optional elements is not checked for siblings
 
