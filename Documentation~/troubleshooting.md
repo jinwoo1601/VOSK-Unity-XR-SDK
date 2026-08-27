@@ -45,7 +45,8 @@ Add `RECORD_AUDIO` to your Android manifest or enable it in Player Settings > An
 - Check that grammar mode is active (`freeSpeechMode = false`).
 - Lower `minScore` and `minConfidence` temporarily to see if matches are being filtered by thresholds.
 - Use `OnUnrecognisedSpeech` to log raw transcripts and compare against your patterns.
-- Open the [Command Debug Window](editor-testing.md#command-debug-window) to see the match breakdown: for each command the parser extracted, the pattern that **won** selection, its score and confidence against the thresholds, and why it was accepted or rejected. Losing candidates are not shown -- a pattern's absence means it lost selection, not that it was never tried.
+- **Check whether the transcript is missing the pattern's *first* required element.** If it is, the round's winner was [barred](scoring.md#the-leading-required-miss-bar) and no threshold reaches it — see [A command reports nothing at all](#a-command-reports-nothing-at-all-though-it-clearly-part-matched).
+- Open the [Command Debug Window](editor-testing.md#command-debug-window) to see the match breakdown: for each command the parser extracted, the pattern that **won** selection, its score and confidence against the thresholds, and why it was accepted or rejected. Losing candidates are not shown, and neither is a round whose winner was [barred](scoring.md#the-leading-required-miss-bar) for missing its first required element -- so a pattern's absence means it lost selection or won its round and was barred, not that it was never tried.
 - For a pattern across a whole playtest rather than one utterance, read the [session debug log](editor-testing.md#session-debug-log) written to `Library/VoxrDebugLogs/` when Play Mode ends -- it records every match attempt of the session, so repeated near-threshold rejections are easy to spot.
 - To interpret the numbers in either view -- what produced a given `score`, why that pattern won, which gate stopped it -- see [Matching and Scoring](scoring.md), whose [worked examples](scoring.md#7-worked-examples) trace three common outcomes end to end.
 
@@ -66,6 +67,8 @@ It worked before, the transcript looks right, and the score in the log is lower 
 
 Work out `matched / elements` for the winning pattern. If the reported `score` is lower, the difference is the tokens outside the match.
 
+**If the log holds no scored attempt naming that pattern, this is not coverage.** A round whose winner missed its *first required element* is [barred](scoring.md#the-leading-required-miss-bar) and logs nothing for that round, so there is no score to be lower than anything. Where nothing else in the utterance fired either, all you get is the synthetic `no match` entry — which now covers two different cases, so its presence does not rule this out. That refusal is positional: `minScore`, `coverageWeight` and a longer pattern all leave it untouched. See [A command reports nothing at all, though it clearly part-matched](#a-command-reports-nothing-at-all-though-it-clearly-part-matched).
+
 - **If you had tuned `coverageWeight` down, check the value survived the upgrade.** It was named `skippedWordPenalty` before #65. The component's own value migrates, but a prefab-*instance* override of the old name may not -- and a lost override silently restores the `1.0` default, which produces exactly this symptom.
 - Register the fuller phrasing as an additional pattern, so the demotion has somewhere to land. This is the intended response.
 - Bring natural trailing words into the grammar as optional literals (`?please`, `?now`).
@@ -76,9 +79,16 @@ Work out `matched / elements` for the winning pattern. If the reported `score` i
 
 A score near `0.50` with slots that *did* extract is the signature of exactly one dropped required literal on a **two-element** pattern -- `(0 + 1) / 2`. Two elements is the floor: half the evidence is genuinely ambiguous (`cease fire` heard as "fire" is a different command where `fire` is registered), so it stays rejected by design.
 
-**On three or more elements this no longer happens.** One dropped required literal costs `1/N`, so a three-element pattern scores `2/3` = `0.67` and fires; the same drop on a seven-element pattern scores `6/7` = `0.86`. If you are seeing `~0.50` on a longer pattern, more than one element missed.
+**Check which element went missing before reaching for a threshold.** If it was the pattern's *first required* one -- as in the `cease fire` example above -- the score is not what refused the command: it is [barred](scoring.md#the-leading-required-miss-bar), and no value of `minScore` reaches it.
 
-Lowering `minScore` is still the wrong fix (it lets genuinely partial matches through everywhere else). For the two-element case, lengthen the pattern or accept the ambiguity. See [Short patterns are disproportionately fragile](scoring.md#short-patterns-are-disproportionately-fragile).
+**On three or more elements this no longer happens -- provided the dropped word was not the pattern's first required element.** One dropped required literal costs `1/N`, so a three-element pattern scores `2/3` = `0.67` and fires; the same drop on a seven-element pattern scores `6/7` = `0.86`. If you are seeing `~0.50` on a longer pattern, more than one element missed.
+
+Lowering `minScore` is still the wrong fix (it lets genuinely partial matches through everywhere else). What to do instead depends on **which** element went missing:
+
+- **A non-leading element** -- lengthen the pattern, or accept the ambiguity. Lengthening genuinely works here: it raises the score of the surviving evidence, and a three-element pattern already clears the gate.
+- **The first required element** -- neither lengthening nor any threshold recovers it, because the refusal is positional. The command must be said again. To stop it recurring, change the grammar: give the intent a phrasing that reaches the words your speakers actually produce ([A bare pattern's tail can be read as another command](command-recognition.md#do-not-leave-a-bare-patterns-tail-readable-as-another-command)).
+
+See [Short patterns are disproportionately fragile](scoring.md#short-patterns-are-disproportionately-fragile) and [the bar](scoring.md#the-leading-required-miss-bar).
 
 ### The wrong command fires, consistently, and its score looks healthy
 
@@ -86,19 +96,23 @@ Two *different* intents whose patterns differ at exactly one required word canno
 
 The healthy-looking score is the tell: nothing went wrong with the match. The word that would have decided is the word that went missing, so no threshold or penalty reaches this.
 
-**Check the Editor console at construction.** The parser warns about this shape by name, listing the intents, the patterns as you wrote them, and the element they differ at. Two cases it deliberately stays quiet about: patterns of the *same* intent (the same command dispatches either way), and pairs too short for the tie to clear the default `minScore` — a two-element pair scores `0.5`, and *both* siblings are rejected, so you get silence rather than a wrong command. If you have lowered `minScore` below `0.6`, the second exclusion no longer holds and you may hit a live tie the warning never reported; `KNOWN_LIMITATIONS.md` carries that case.
+**Check the Editor console at construction.** The parser warns about this shape by name, listing the intents, the patterns as you wrote them, and the element they differ at. Two cases it deliberately stays quiet about: patterns of the *same* intent (the same command dispatches either way), and pairs too short for the tie to clear the default `minScore` — a two-element pair scores `0.5`, and *both* siblings are rejected, so you get silence rather than a wrong command. If you have lowered `minScore` below `0.6`, the second exclusion no longer holds and you may hit a live tie the warning never reported — but only where the differing word is **non-leading**, since a dropped *first* required element bars the round's winner and nothing fires at any threshold. `KNOWN_LIMITATIONS.md` carries that case.
 
 **The eager-flush gate no longer commits early on this shape.** Where the buffer fits two different intents exactly equally and they differ at one required word, it declines and waits out the full window instead of firing a coin flip mid-utterance. That covers the **middle**-of-pattern case the gate's tail rule cannot see — `set {ship} mode on` against `set {ship} level on`, heard as "set alpha on". The same command still fires, at the end of the window rather than immediately, so the wrong-command symptom above is unchanged; only its timing is.
 
 **The fix that actually resolves it: turn on `disambiguateSiblingTies`.** The gate above buys the decision one thing — it happens once, at the flush, on a final transcript — and that is where the recogniser can *ask*. (That gate needs `eagerFlushOnCompleteMatch`, which is off by default; the flag does not, and works either way.) With the flag on, an ambiguous utterance fires nothing, raises `OnCommandPending` with `PendingAmbiguity` set, and the speaker says the one distinguishing word (`weapons`, `navigation`) to settle it. It is off by default because it needs somewhere to put the question: with no `OnCommandPending` subscriber the command is lost rather than merely mis-picked. See [Ask instead of guessing](command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
 
-Where you cannot prompt, the grammar-side fixes still apply: diverge by more than one word, or give the more destructive of the pair `requiresConfirmation`. Where both phrasings must exist verbatim, register the safer one first. See [Do not separate two commands by a single word](command-recognition.md#do-not-separate-two-commands-by-a-single-word).
+Where you cannot prompt, the grammar-side fixes still apply: diverge by more than one word; make the differing word each pattern's *first* required element, so a dropped discriminator bars the winner and nothing fires instead of the wrong thing; or give the more destructive of the pair `requiresConfirmation`. Where both phrasings must exist verbatim, register the safer one first. See [Do not separate two commands by a single word](command-recognition.md#do-not-separate-two-commands-by-a-single-word).
 
 ### A command reports nothing at all, though it clearly part-matched
 
-Distinct from a score rejection: there is no scored attempt in the log either, because the candidate never became one. A pattern that **missed more of its required elements than it matched** is refused admission before selection, whatever it would have scored -- so a very sparse partial match produces no result rather than a low-scoring one.
+Distinct from a score rejection: there is no scored attempt in the log either. **Two different rules produce this, and they are told apart by *which* elements missed, not how many.**
 
-Count the pattern's required elements against how many the transcript actually supplied. Optional elements count toward neither side. See [Admission](scoring.md#admission-what-counts-as-a-candidate-at-all).
+**A count -- the candidate never became one.** A pattern that **missed more of its required elements than it matched** is refused admission before selection, whatever it would have scored, so a very sparse partial match produces no result rather than a low-scoring one. Count the pattern's required elements against how many the transcript actually supplied; optional elements count toward neither side. See [Admission](scoring.md#admission-what-counts-as-a-candidate-at-all).
+
+**A position -- the candidate won and was barred.** If the pattern's **first required element** matched nothing, the candidate did become one: it competed, won its round, and consumed the tokens it matched. It was then [barred from firing](scoring.md#the-leading-required-miss-bar), and a barred round writes no attempt at all -- not even a rejected one. **Counting matched against missed elements will not find this**, because the count can be perfectly healthy: `cease fire now` heard as "fire now" matches two of three and scores `0.67`. Look at *which* element is missing, and check whether it is the first one the pattern requires.
+
+The two are easy to tell apart once you know to ask. A sparse match that failed admission looks wrong; a barred round looks fine except that its command is simply absent.
 
 ### Commands match but with wrong slot values
 

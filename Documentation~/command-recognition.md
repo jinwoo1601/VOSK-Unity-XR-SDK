@@ -34,6 +34,10 @@ Parser (pattern match + scoring)
 Sequential Extraction
     |  extracts multiple commands left-to-right from a single utterance
     |  ("cease fire launch missiles target hotel one" -> two commands)
+    |
+    |  leading-required-miss bar -- applied within extraction, before any
+    |  threshold: a round whose winner missed its FIRST required element
+    |  consumes its span and yields no command, so a round can produce nothing
     v
 Threshold Filter
     |  rejects commands below minScore or minConfidence
@@ -103,7 +107,7 @@ Optional literal tokens also work: `"?the"`, `"?a"`. However, single-character w
 
 **The `?` for an optional slot goes *inside* the braces: `{?quantity}`.** Writing `?{quantity}` does not make the slot optional -- it parses as a required *literal* token no utterance can ever produce, so every match of that pattern silently misses a required element, with no warning and no exception.
 
-Two pattern shapes carry authoring hazards the parser warns about at construction: a required function word standing between a bare pattern and its slot, and two commands separated by a single word. A third hazard is not a pattern shape at all -- one intent registered by more than one command definition. All three are covered in [Authoring hazards](#authoring-hazards), after the scoring and buffering concepts they depend on.
+Two pattern shapes carry authoring hazards the parser warns about at construction: a required function word standing between a bare pattern and its slot, and two commands separated by a single word. A third hazard is not a pattern shape at all -- one intent registered by more than one command definition. A fourth shape, a bare pattern whose tail can be read as another command, carries no construction-time warning at all. All are covered in [Authoring hazards](#authoring-hazards), after the scoring and buffering concepts they depend on.
 
 ---
 
@@ -289,12 +293,13 @@ By default the buffer is purely time-driven: every command -- complete or not --
 - **A prefix of a longer command**, or a **trailing slot that could still grow** (a multi-word enumerated value such as `"red"` -> `"red dragon"`, or a variable-length number sequence) -> keeps waiting the full window, so split commands are still recovered. "Prefix" is judged against slot vocabularies, not just pattern shape: a lone `{burn_level}` is *not* a prefix of `decelerate {burn_level}`, because no value of the slot begins with "decelerate".
 - **Missing a required slot** (the pattern's literals are all in, but an argument has not been spoken yet) -> keeps waiting the full window, even where the arithmetic leaves the partial match above `minScore`. Unlike the case above it never qualifies for the shortened `prefixHoldSeconds` hold, because it is not a complete match. An unspoken slot consumes no words, so such a buffer otherwise looks complete right up to the moment the missing words arrive.
 - **Still owing its last word** (the pattern's final required element has not been spoken yet, as in "switch to" against `switch to weapons`) -> keeps waiting the full window. A missing word consumes nothing, so such a buffer looks complete by every other measure; where a sibling command shares the prefix, committing would fire whichever of them happens to be registered first.
+- **Missing its own first required element** -> keeps waiting the full window. The eager gate refuses a winner whose first required element matched nothing, above the point where the shortened `prefixHoldSeconds` hold would be armed, so such a buffer never qualifies for it. See [the bar](scoring.md#the-leading-required-miss-bar).
 - **Ambiguous between two intents** -> keeps waiting the full window. Where the buffer fits two patterns of *different* intents exactly equally — same score, same span, same literal count — and they differ at just one required word, the winner would be decided by registration order alone. The gate declines rather than commit a coin flip early. This covers the *medial* drop the tail rule above cannot see: `set {ship} mode on` against `set {ship} level on`, heard as "set alpha on". The same command still fires at the end of the window — or, with `disambiguateSiblingTies` on, the speaker is asked which they meant. See [the one-word hazard](#do-not-separate-two-commands-by-a-single-word).
 - **Split command** -> fires as soon as its second half completes, instead of waiting another full window on top.
 - **Out-of-grammar preamble** (a station address such as "Helm, ...", reported by VOSK as `[unk]`) is skipped, so an addressed command commits as fast as the bare one. Only a *leading* run is skipped: anything left over at the end -- recognised or `[unk]` -- is treated as an in-progress tail and keeps waiting, as does a leading word VOSK did resolve.
 - **While a command is pending, the eager path is skipped entirely.** Confirmations, slot-fills, and disambiguation answers always wait the full `bufferWindow` -- `prefixHoldSeconds` does not shorten them either. Push-to-talk's release flush is the way to give follow-up speech a deterministic endpoint.
 
-The feature is off by default; leaving it off preserves the exact time-only behaviour above. Each command's eligibility is computed once when commands are configured, so the only per-utterance cost is a single speculative parse of the buffer.
+The feature is off by default; leaving it off preserves the exact time-only behaviour above. Each command's eligibility is computed once when commands are configured, so the per-utterance cost is one speculative parse of the buffer per VOSK result, not per command.
 
 **Grammars past the analysis limit.** Deciding eligibility means expanding a pattern's optional elements, which is exponential (2^optionals), so a pattern carrying more than 12 of them is refused rather than partially analysed -- and since a partially analysed set could commit the wrong command, the refusal covers the whole command set. Nothing in it then commits early; every complete match is *held* instead, so it waits `prefixHoldSeconds` where that is set and the full `bufferWindow` where it is not. The parser names the offending pattern, its intent, and its optional count in a warning at construction, so the condition surfaces when the grammar is authored rather than mid-session.
 
@@ -312,7 +317,7 @@ Prefix Hold Seconds              0.6    // held matches wait 0.6s, not 2.0s
 
 With `["fire"]` and `["fire", "at", "{target}"]` registered, "fire" alone now fires ~0.6s after the speaker stops instead of ~2.0s, while "fire at hotel one" still parses as the longer command -- the continuation lands well inside 0.6s.
 
-- Applies **only** to a buffer that already parses as one complete, confident command spanning the whole buffer (bar a leading `[unk]` run). Partial speech mid-split-command and speech that matches nothing keep the full `bufferWindow`.
+- Applies **only** to a buffer that already parses as one complete, confident command spanning the whole buffer (bar a leading `[unk]` run). Partial speech mid-split-command and speech that matches nothing keep the full `bufferWindow` — and so does a buffer whose winner was [barred](scoring.md#the-leading-required-miss-bar) for missing its first required element, which the eager gate refuses before it can arm the shortened hold. The barred candidate never fires on either path; what happens at the end of the window depends on the rest of the utterance, which may still yield a command from a later round.
 - A grammar too complex for the eligibility precompute to analyse (above) never commits early, but its complete matches are held like any other, so the hold applies to them too.
 - **Never lengthens** the wait: a value above `bufferWindow` is ignored.
 - Re-evaluated on every VOSK result, so a continuation that does arrive puts the buffer back on the full window for the rest of the utterance.
@@ -349,7 +354,7 @@ If the user says the same command twice quickly (or VOSK produces overlapping re
 
 ## Authoring hazards
 
-The parser scans the grammar at construction for shapes that silently misbehave -- two that go wrong when the recogniser drops a word, and one that is wrong in the registration list itself -- and warns about each in the Editor. All are worth designing away rather than discovering in the field.
+The parser scans the grammar at construction for shapes that silently misbehave -- two that go wrong when the recogniser drops a word, and one that is wrong in the registration list itself -- and warns about each in the Editor. A third drop-a-word shape below — a bare pattern whose tail can be read as another command — is **not** machine-detected: nothing warns about it at construction. All are worth designing away rather than discovering in the field.
 
 ### Never leave a required function word between a bare pattern and its slot
 
@@ -427,18 +432,31 @@ What deferring buys is exactly one thing: the decision happens once, at the flus
 - **Same-intent patterns are not reported.** Two phrasings of one command dispatch the same intent whichever wins, so the tie is between things you made equivalent on purpose — `set` / `hold` / `keep` / `maintain distance {range}` is not a hazard.
 - **Ties that cannot clear `minScore` are not reported.** Losing one required element from a pattern worth `D` leaves `(D − 1) / D`, so a two-element pattern falls to 0.5 — below the default gate, where *both* siblings are rejected and nothing fires. That is a different problem from the wrong command firing, and saying "the wrong intent can fire" about it would be untrue.
 
-The second exclusion has a cost worth knowing: the parser is built from the grammar alone and never sees your configured `minScore`, so it judges against the default. **If you run below `minScore` 0.6, short sibling pairs become live without the warning noticing** — see `KNOWN_LIMITATIONS.md`.
+The second exclusion has a cost worth knowing: the parser is built from the grammar alone and never sees your configured `minScore`, so it judges against the default. **If you run below `minScore` 0.6, short sibling pairs with a *non-leading* discriminator become live without the warning noticing** — see `KNOWN_LIMITATIONS.md`. Where the discriminator leads, no threshold makes the tie live: the round's winner is barred either way.
 
-**Remedies**, in the order worth trying:
+**Remedies**, in the order worth trying. Note that 2 and 3 are a **fork, not a ladder**: making the discriminator lead means nothing fires on the tie, so there is never a pending for 3 to ask from or for 4 to confirm. Choose between silence and a question; 1 avoids the choice.
 
 1. **Make the two commands differ in more than one element.** The only fix that removes the tie rather than managing it: with two differing words, losing one still leaves the other to decide. Prefer it whenever the phrasing is yours to choose.
-2. **[Turn on `disambiguateSiblingTies`](#ambiguous-commands-ask-instead-of-guessing) and let the speaker settle it.** The only remedy that keeps both phrasings *and* gets the right command. Needs somewhere to put the question — see below.
-3. **Give the more destructive of the pair `requiresConfirmation`**, so a coin flip costs a confirmation prompt rather than an action. Worth doing *alongside* 2, not instead of it: the two combine into "which did you mean?" then "are you sure?".
-4. **Where both phrasings must exist verbatim and you cannot prompt, register the safer one first** — the tie-break is deterministic, so first-registered is what fires. This is choosing which way to lose, not a fix.
+2. **Make the differing word the pattern's *first required element*.** Where the discriminator leads, dropping it triggers [the leading-required-miss bar](scoring.md#the-leading-required-miss-bar): whichever of the two wins the tie missed its own first required element, so it is barred and the round yields nothing — **nothing fires instead of the wrong thing**, at any pattern length. `weapons mode` and `navigation mode` still tie at `(0 + 1) / 2`, and so do `weapons mode active` and `navigation mode active` at `0.67`; the difference is that neither pair can now fire on the tie. This converts a wrong command into silence, which is a real improvement but not a free one: the speaker must say the command again, it does nothing for an utterance where the discriminator *was* heard, and it forecloses remedies 3 and 4 for that pair.
+3. **[Turn on `disambiguateSiblingTies`](#ambiguous-commands-ask-instead-of-guessing) and let the speaker settle it.** The only remedy that keeps both phrasings *and* gets the right command. Needs somewhere to put the question — see below. Note it cannot rescue the case in 2: whichever candidate wins that round is barred, so the round yields nothing and there is no pending to ask from.
+4. **Give the more destructive of the pair `requiresConfirmation`**, so a coin flip costs a confirmation prompt rather than an action. Worth doing *alongside* 3, not instead of it: the two combine into "which did you mean?" then "are you sure?".
+5. **Where both phrasings must exist verbatim and you cannot prompt, register the safer one first** — the tie-break is deterministic, so first-registered is what fires. This is choosing which way to lose, not a fix.
 
-Note what is *not* on that list. **Making the difference come earlier in the pattern does not help.** `weapons mode` and `navigation mode` differ at their first element instead of their last, and tie exactly as before — `(0 + 1) / 2` for both. What changes with a shorter pattern is only that the tie falls under `minScore`, so nothing fires instead of the wrong thing. That is an improvement, but a small and accidental one, and it disappears the moment the pattern grows: `weapons mode active` and `navigation mode active` tie at `0.67` and fire the first-registered again.
+Remedy 2 is a reversal of earlier advice. Before the bar, moving the difference earlier genuinely did not help — the pair tied identically wherever the discriminating word sat, and a short pair fell under `minScore` only by accident of length. That accident is now a rule, and it holds at every length.
 
 One further warning fires if a discriminating value is also cancel vocabulary. Follow-up handling checks cancel before anything else, so if that ambiguity is routed back to the speaker, answering with that word would cancel rather than choose it. It is judged against *your* `cancelVocabulary` if you set one, and against the defaults (`cancel`, `abort`, `negative`, …) if you did not — so overriding the vocabulary to dodge a collision actually silences the warning, and a collision you introduce *with* an override is reported. It is also only raised for values that could really be offered as an answer: a value whose only same-set partners share its intent is never asked about, so it is never reported.
+
+### Do not leave a bare pattern's tail readable as another command
+
+Sequential extraction offers whatever a winning command leaves behind to the next round, and a leftover tail can match the *tail* of some other intent's pattern — one whose leading word was never spoken. Say **"time to target track one two four four"** at a grammar holding `query_time_to_target : ["time","to","target"]` and `intercept_target : ["intercept","track","{track}"]`, and round 1 fires the query while round 2 finds `track one two four four` matching `intercept_target` minus its verb.
+
+[The leading-required-miss bar](scoring.md#the-leading-required-miss-bar) stops that from firing, and it needs no configuration. But silence is not the same as being understood, and the bar cannot tell "the speaker never said it" from "the decoder dropped it" — so where the tail is a shape your speakers actually produce, fix it in the grammar. Three approaches, in the order worth trying:
+
+1. **Let a legitimate pattern claim the tail.** Give the intent that *owns* those words a phrasing that reaches them: adding `time to target track {track}` as a second pattern of `query_time_to_target` makes the whole utterance one command scoring `1.00`, degrading to `0.80` when the decoder drops `track`. This is the best outcome, because the speaker gets the command they asked for rather than silence.
+2. **Register a benign intent for the standalone fragment.** An intent on `["track", "{track}"]` covers the case where the tail arrives alone — after a pause longer than `bufferWindow`, say. It displaces the phantom on **score**, not on registration order, so it does not depend on declaration sequence.
+3. **Put `requiresConfirmation` on destructive intents.** This covers the whole class rather than one shape of it, because it diverts on *consequence* rather than on match shape. Worth doing regardless of the other two.
+
+All three work on any version and are worth applying whether or not you rely on the bar.
 
 ### Register each intent exactly once
 
@@ -469,7 +487,7 @@ The warning names the intent, how many definitions carry it, and the first patte
 
 ## Ambiguous Commands: Ask Instead of Guessing
 
-Everything above stops the recogniser committing to a coin flip early. It does not stop it coin-flipping at the end — the flush still picks the first-registered pattern. **`disambiguateSiblingTies` is what replaces that guess with a question.**
+Everything above stops the recogniser committing to a coin flip early. It does not stop it coin-flipping at the end — the flush still picks the first-registered pattern. **`disambiguateSiblingTies` is what replaces that guess with a question — with one exception: where the two patterns differ at their **first required element**, dropping it [bars](scoring.md#the-leading-required-miss-bar) whichever wins the round, so nothing fires and there is no pending to ask from. That case is remedy 2 above, and this flag does not reach it.**
 
 **This is independent of `eagerFlushOnCompleteMatch`.** The refusal described above is an eager-gate rule and only applies when you have turned eager flush on; the flag below acts on the *flush* path, which every utterance takes. Eager flush is off by default — that does not exempt you from this hazard, and does not stop the flag fixing it.
 
@@ -486,7 +504,7 @@ The speaker says "set alpha mode on". VOSK drops `mode`. With the flag off, `set
 3. You prompt however suits your game — this package ships no speech synthesis and no UI.
 4. The speaker says **`level`**, one word. `set_level` fires with its slots intact (`ship = alpha`), through `OnCommandConfirmed`, then `OnCommandRecognised`, then `OnCommandsRecognised` (a one-element batch).
 
-**If the chosen command sets `requiresConfirmation`, step 4 asks again instead of firing** — "which?" first, then "are you sure?", which is the only coherent order, since you cannot confirm an intent you have not identified. `OnCommandPending` raises a second time, `PendingAmbiguity` is now null (this question is a confirmation), and the confirm vocabulary resolves it. Worth planning for: remedy 3 above tells you to mark the more destructive sibling `requiresConfirmation`, so taking both remedies together is exactly what produces this two-stage exchange.
+**If the chosen command sets `requiresConfirmation`, step 4 asks again instead of firing** — "which?" first, then "are you sure?", which is the only coherent order, since you cannot confirm an intent you have not identified. `OnCommandPending` raises a second time, `PendingAmbiguity` is now null (this question is a confirmation), and the confirm vocabulary resolves it. Worth planning for: remedy 4 above tells you to mark the more destructive sibling `requiresConfirmation`, so taking both remedies together is exactly what produces this two-stage exchange.
 
 The answer needs no grammar work: discriminating values are pattern literals, so the decoder already knows them.
 
@@ -520,7 +538,7 @@ The third kind is [ambiguity](#ambiguous-commands-ask-instead-of-guessing), and 
 
 ### Partial Match with Follow-Up Slot-Fill
 
-Set `allowPartialMatch: true` on a command definition to let it enter pending state when matched with unfilled required slots, instead of being refused. The diversion is decided by completeness alone, independently of `minScore` -- a command scoring `0.8` with a missing argument routes to pending exactly as a sub-threshold one does.
+Set `allowPartialMatch: true` on a command definition to let it enter pending state when matched with unfilled required slots, instead of being refused. The diversion is decided by completeness alone, independently of `minScore` -- a command scoring `0.8` with a missing argument routes to pending exactly as a sub-threshold one does. One thing is consulted before completeness: [the leading-required-miss bar](scoring.md#the-leading-required-miss-bar). A winner that missed its own first required element is refused outright, so it never reaches this diversion at any score.
 
 ```csharp
 var launchCmd = new VoxrCommandDefinition("launch_weapon",
@@ -574,7 +592,7 @@ Configure `pendingTimeout` (default 5s) and `pendingTimeoutBehavior` on `VoxrCom
 
 ### The two ways an incomplete command still fires
 
-A command missing a required argument does not fire on the ordinary path: it is refused outright, or, with `allowPartialMatch`, held pending for slot-fill. Two opt-ins deliberately override that, and both hand your handler a command with arguments absent:
+A command missing a required argument does not fire on the ordinary path: it is refused outright, or, with `allowPartialMatch`, held pending for slot-fill. (A third case reaches neither branch: a winner that missed its *first required element* is [barred](scoring.md#the-leading-required-miss-bar) before completeness is consulted, so it is not rejected for incompleteness and not held pending either — the round simply yields nothing.) Two opt-ins deliberately override the ordinary path, and both hand your handler a command with arguments absent:
 
 - **Confirming a partial match.** Saying a confirm phrase while a command waits for slot-fill fires it as it stands. The confirm check runs before slot-fill, and it is taken at face value — the user has been shown what is missing (via `OnCommandPending`) and said go anyway.
 - **`FireAsIs` on timeout.** The name is the contract: whatever was filled when the window closed is what fires.
@@ -598,7 +616,7 @@ Test with `HasSlot`, not with the value: `GetSlot` returns `string.Empty` for a 
 
 If a new complete command is recognised while a command is pending, the pending command is cancelled and the new command fires normally. This prevents stale pending commands from blocking normal operation.
 
-The order is worth knowing for prompt UIs: the superseded pending is cancelled *first*, so `OnCommandCancelled` fires before the new command's events -- and before the fresh `OnCommandPending` when the new utterance is itself ambiguous or incomplete. An *incomplete* new command whose definition does **not** allow partial matching never preempts: taking a half-finished command away to put nothing in its place would be a loss, so the live pending stays. An incomplete command that *does* set `allowPartialMatch` enters pending itself and displaces the old one -- cancel first, as above.
+The order is worth knowing for prompt UIs: the superseded pending is cancelled *first*, so `OnCommandCancelled` fires before the new command's events -- and before the fresh `OnCommandPending` when the new utterance is itself ambiguous or incomplete. An *incomplete* new command whose definition does **not** allow partial matching never preempts: taking a half-finished command away to put nothing in its place would be a loss, so the live pending stays. An incomplete command that *does* set `allowPartialMatch` enters pending itself and displaces the old one -- cancel first, as above. An utterance whose only winner was [barred](scoring.md#the-leading-required-miss-bar) does not preempt either, for the same reason and by the same general rule: it produces no accepted command, so there is nothing to put in the pending's place. It also does not cancel a live pending or interrupt follow-up slot-fill.
 
 ### Grammar Integration
 
@@ -617,13 +635,14 @@ Two lifecycle interactions worth knowing:
 
 ## Unrecognised Speech
 
-When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in five situations:
+When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in six situations:
 
 1. **No pattern match** -- the parser could not match any command pattern against the transcript.
 2. **Every match fell under `minScore`** -- patterns matched, but no candidate scored high enough to fire.
 3. **A match was missing a required argument** -- the command may have scored well, but a required slot went unfilled and the command does not set `allowPartialMatch`. The completeness rule is independent of score, so this is the one case where "unrecognised" does not mean "scored badly".
 4. **A match was diverted to pending** -- a partial match or a `requiresConfirmation` command entered the pending state; `OnCommandPending` fires as well.
-5. **A follow-up fill was refused for re-scoring at or below zero** -- follow-up speech completed a pending command, but the re-score landed at or below zero, so the same floor the flush paths apply refused it (see [the session-log table](scoring.md#reading-a-session-log)). The pending is left standing. Reaching this at all means two definitions share one intent.
+5. **The winning candidate's first required element was never heard** -- the round's winner was [barred](scoring.md#the-leading-required-miss-bar). It may have scored well above `minScore`; the refusal is positional, not arithmetic, and the round leaves no session-log attempt behind.
+6. **A follow-up fill was refused for re-scoring at or below zero** -- follow-up speech completed a pending command, but the re-score landed at or below zero, so the same floor the flush paths apply refused it (see [the session-log table](scoring.md#reading-a-session-log)). The pending is left standing. Reaching this at all means two definitions share one intent.
 
 It does **not** fire in three others: a candidate rejected by `minConfidence`, one suppressed by `commandCooldown` debounce, or one diverted to a **disambiguation** pending. The first two are silent on the reasoning that the user did say a valid command, just not confidently or not soon enough after the last one. The third is silent because telling you the speech was not understood, in the same frame you were asked to prompt about it, is exactly the confusion `disambiguateSiblingTies` exists to remove. See [the gates](scoring.md#what-onunrecognisedspeech-actually-means) for the full table.
 

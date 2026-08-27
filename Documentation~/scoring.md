@@ -1,6 +1,6 @@
 # Matching and Scoring
 
-The reference for the model that decides whether a spoken command fires: how a candidate match is scored, which candidate wins when several match, and what the two acceptance gates do with the winner.
+The reference for the model that decides whether a spoken command fires: how a candidate match is scored, which candidate wins when several match, and what the bar and the two acceptance gates do with the winner.
 
 Read this when you are tuning `minScore` / `minConfidence`, diagnosing why a command was rejected, interpreting a [session debug log](editor-testing.md#session-debug-log), or authoring patterns that must not shadow each other. For the surrounding pipeline — buffering, pending commands, grammar mode — see [Command Recognition](command-recognition.md).
 
@@ -15,7 +15,8 @@ Everything here describes `VoxrCommandParser`, which is deterministic: the same 
 | **Token** | One whitespace-separated word of the transcript. `[unk]` is VOSK's token for audio it could not resolve to a grammar word. |
 | **Element** | One entry of a pattern array: a required literal (`"target"`), an optional literal (`"?by"`), a required slot (`"{weapon}"`), or an optional slot (`"{?quantity}"`). |
 | **Candidate** | One (command, pattern, start token) triple that the parser scored. Every pattern of every active command is tried at every non-`[unk]` start position. |
-| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners are logged as a scored attempt — losing candidates are not logged. One exception: a rival that *tied* the winner exactly is named on the attempt — as `Tied with:` in the Editor's last-match panel and in batch-runner diagnostics, and as [`tiedRival` / `tiedRivalIsSibling`](#reading-a-session-log) in the exported session log. Even then only winners are logged: the rival is named *on* the winner's attempt, never as an attempt of its own. |
+| **Winner** | The single candidate selection picks per extraction round. Only winners reach the gates, and only winners are logged as a scored attempt — losing candidates are not logged. A winner that is [barred](#the-leading-required-miss-bar) does neither, and is the one exception to both halves. One exception: a rival that *tied* the winner exactly is named on the attempt — as `Tied with:` in the Editor's last-match panel and in batch-runner diagnostics, and as [`tiedRival` / `tiedRivalIsSibling`](#reading-a-session-log) in the exported session log. Even then only winners are logged: the rival is named *on* the winner's attempt, never as an attempt of its own. |
+| **Barred winner** | A winner whose **first required element** matched nothing. It competes, wins and consumes its span like any other, but is refused before the gates and is logged nowhere — see [the leading-required-miss bar](#the-leading-required-miss-bar). |
 
 ---
 
@@ -57,7 +58,7 @@ Before any of the ordering below, a candidate must clear two filters:
 
 The second is a count, not a threshold: there is nothing to configure, and it is unrelated to `minScore`. It exists because a pattern that missed most of what it requires is not a weak reading of the utterance, it is a different command — and admitting one has knock-on effects, since a candidate that wins a round consumes tokens and changes what later rounds see.
 
-The visible consequence is that a very sparse partial match now produces *no* result at all rather than a low-scoring one. If you are debugging a command that reports nothing whatsoever, check whether the pattern matched at least half its required elements before assuming a score problem.
+The visible consequence is that a very sparse partial match now produces *no* result at all rather than a low-scoring one. If you are debugging a command that reports nothing whatsoever, check whether the pattern matched at least half its required elements before assuming a score problem. If the count is healthy, check *which* element missed — a pattern that wins its round having matched nothing of its **first** required element is [barred](#the-leading-required-miss-bar) and also reports nothing, at any score.
 
 ### Short patterns are disproportionately fragile
 
@@ -67,11 +68,13 @@ A miss costs a fixed `1.0` of credit but the denominator is not fixed, so the sa
 |---------|-----------|-------------------|-------|---------------------|
 | `decelerate by {burn_level}` (3 elements) | "decelerate hard burn" | `(1 + 0 + 1) / 3` = `2 / 3` | **0.67** | accepted |
 | `launch {weapon} target {target} on my mark` (7 elements) | "launch missiles hotel one on my mark" | `(6 × 1 + 0) / 7` = `6 / 7` | **0.86** | accepted |
-| `cease fire` (2 elements) | "fire" | `(0 + 1) / 2` = `1 / 2` | **0.50** | rejected |
+| `cease fire` (2 elements) | "fire" | `(0 + 1) / 2` = `1 / 2` | **0.50** | rejected — and [barred](#the-leading-required-miss-bar) besides |
 
-In all three the pattern accounts for the whole utterance, so [§2](#2-coverage) adds nothing and the ratio above *is* the score. Both of the first two dropped exactly one required literal, and in both the slots were recognised and extracted. Both now clear the gate — a single dropped function word no longer silences a pattern of three or more elements.
+In all three the pattern accounts for the whole utterance, so [§2](#2-coverage) adds nothing and the ratio above *is* the score. Both of the first two dropped exactly one required literal, and in both the slots were recognised and extracted. Both now clear the gate — a single dropped function word no longer silences a pattern of three or more elements, **provided the word that went missing was not the pattern's first required element** ([the bar](#the-leading-required-miss-bar)).
 
 **Two elements is the floor.** `cease fire` heard as "fire" is half the evidence, and half the evidence is genuinely ambiguous — with a `fire` command registered it is a different command entirely — so the cost stays proportional to length rather than being abolished.
+
+**And in this particular row the score is no longer what refuses it.** The element that went missing is `cease`, the pattern's *first required* one, so the candidate is [barred from firing](#the-leading-required-miss-bar) whatever it scores. Lowering `minScore` will not recover it, and neither will lengthening the pattern: `cease fire now` heard as "fire now" scores `0.67`, clears the default gate, and is still refused.
 
 The authoring lesson is unchanged and still worth following: do not make a short pattern depend on a short unstressed word — see [the function-word hazard](command-recognition.md#never-leave-a-required-function-word-between-a-bare-pattern-and-its-slot), which the parser warns about at construction. What has changed is that ignoring it now costs accuracy rather than silence.
 
@@ -145,7 +148,7 @@ Only the literal `[unk]` token is exempt, and that is what a *grammar-constraine
 
 On the **leading** side, tokens consumed by a previously extracted command are not charged against the next one: the count is taken from where the round began, so chained commands do not penalise each other.
 
-The **trailing** side works differently, and the difference is worth knowing. It has no notion of a round at all — the orphan run is a property of the utterance and the grammar, measured forward from the candidate's consumed span. It usually lands in the same place, because a token a later round will explain by missing its way into it terminates the run now — that is what [worked example D](#d-two-commands-in-one-breath-and-one-of-them-loses-a-word) shows. The two are not the same question, though: the start test asks only whether a pattern *could* be matched from a token with more evidence for than against, while "a later round explains it" also requires that candidate to win its round and clear the gate. Where it would not, the token is left uncharged and still unexplained — the erring direction is a score left higher than ideal, never a command charged for words that were someone else's.
+The **trailing** side works differently, and the difference is worth knowing. It has no notion of a round at all — the orphan run is a property of the utterance and the grammar, measured forward from the candidate's consumed span. It usually lands in the same place, because a token a later round will explain by missing its way into it terminates the run now. The two are not the same question, though: the start test asks only whether a pattern *could* be matched from a token with more evidence for than against, while "a later round explains it" also requires that candidate to win its round, clear [the bar](#the-leading-required-miss-bar) and clear the gate. Where it would not, the token is left uncharged and still unexplained — the erring direction is a score left higher than ideal, never a command charged for words that were someone else's. [Worked example D](#d-two-commands-in-one-breath-and-one-of-them-loses-its-first-word) is exactly that divergence: the orphan run terminates because a pattern *could* start there, and the round that starts there then yields nothing.
 
 ### Setting the weight
 
@@ -192,6 +195,8 @@ Both score a clean `1.00`, and it is the orphan test that keeps them there: `cea
 
 Extraction stops when no candidate is [admitted](#admission-what-counts-as-a-candidate-at-all) — which means either nothing scored above `0` or nothing matched at least as many required elements as it missed — when a match would consume no tokens, or when the result buffer (one slot per active command) is full.
 
+**A round can also end without stopping extraction and without producing a command.** Where the round's winner missed its first required element it is [barred](#the-leading-required-miss-bar): it still consumes the span it matched, the search still restarts after it, and no result is written for that round. So the number of commands an utterance yields is not the number of rounds it took.
+
 Two consequences for pattern authoring:
 
 - **A pattern that is a prefix of another can steal its head.** If the shorter one wins a round, the remainder of the utterance is offered to the next round — where it may match a *different* command instead of being read as the tail it was meant to be. Two keys guard against it, over complementary cases. Coverage (key 2) charges the shorter pattern for the tail it abandons — but only while no active pattern could begin a match there. Where one could, coverage charges nothing and the span tie-break (key 3) settles it instead, for candidates that score equally. Neither helps when the longer form is scoring lower for some other reason.
@@ -199,9 +204,44 @@ Two consequences for pattern authoring:
 
 ---
 
-## 5. The two gates
+## 5. The bar and the two gates
 
-The winner of each round faces two independent thresholds, and then a completeness check that no score can override. The thresholds live on `VoxrCommandRecogniser`.
+The winner of each round faces one positional bar, then two independent thresholds, and then a completeness check that no score can override. The thresholds live on `VoxrCommandRecogniser`; the bar has nothing to configure.
+
+### The leading-required-miss bar
+
+**A winner whose *first required element* matched nothing does not fire, whatever it scored.** It still competed, still won its round, and still consumes the tokens it matched — but it produces no result, and the round yields nothing.
+
+The rule is **positional, not arithmetic**, which is why no threshold reaches it. In a command grammar the first required element is the **verb**: what to *do*. The elements after it are arguments: what to do it *to*. Losing an argument still leaves the action identified, and the score reports the damage while the gate decides. Losing the verb leaves no evidence that any action was requested at all — only that some words happened to match a pattern's tail. `minScore` sees `2/3` and cannot ask *which* third went missing.
+
+```
+Grammar: query_time_to_target : ["time", "to", "target"]
+         intercept_target     : ["intercept", "track", "{track}"]
+
+"time to target track one two four four"
+  before : query_time_to_target 1.00   +  intercept_target 0.67  <-- "intercept" was never spoken
+  now    : query_time_to_target 1.00
+```
+
+Optional elements are skipped when locating the first required one, so an unspoken `?please` or `{?quantity}` never triggers the bar. The rule is the same whether that first required element is a literal or a slot.
+
+**What the bar does not change.** No score moves, and no scoring constant moves: every command that fires carries exactly the score it carried before. What changes is whether an already-computed score is allowed to produce a result.
+
+**That the barred round still consumes is the point, not an oversight.** The leading coverage term charges unexplained tokens to whichever candidate wins the round, so a barred candidate winning and consuming its span is what keeps that debris off the *next* command:
+
+```
+"target hotel one cease fire"
+  -> approach_target wins round 1, is barred, and consumes "target hotel one"
+  -> cease_fire      then scores 2 / 2 = 1.00, exactly as if the debris were not there
+```
+
+Had the barred candidate been excluded from selection instead, `cease_fire` would have been charged for those three tokens — `2 / (2 + 3)` = `0.40`, below the gate — and a cleanly spoken command would have been lost. Measured over 699 utterances, refusing to *compete* destroys 11 commands scoring a clean `1.00`; refusing to *fire* destroys none.
+
+**Everything downstream follows from the round yielding nothing.** A barred winner opens no pending state of any kind — `allowPartialMatch` does not route it to slot-fill, `requiresConfirmation` does not ask you to confirm it, and `disambiguateSiblingTies` does not raise a "which did you mean?" about it. It records no session-log attempt (see [Reading a session log](#reading-a-session-log)), and where nothing else in the utterance fired, the utterance reports through `OnUnrecognisedSpeech`.
+
+**What it costs.** Where the leading word genuinely *was* spoken and the decoder dropped it, the command used to be recovered at a reduced score and is now silent. Nothing in the transcript distinguishes "never spoken" from "spoken and lost", so the only remedy is to say the command again — see [Known Limitations](../KNOWN_LIMITATIONS.md). Measured on the same 699 utterances: 9 rows lose a genuine command this way, against 39 invented ones suppressed.
+
+**Grammar-side mitigations** are in [Command Recognition](command-recognition.md#do-not-leave-a-bare-patterns-tail-readable-as-another-command).
 
 ### `minScore` (default `0.6`)
 
@@ -239,7 +279,7 @@ This matters most for `NumberSequence` slots, which are the commands most likely
 
 A winner missing a **required slot** does not fire, whatever it scored. The check is deliberately not arithmetic: the `−1.0` slot-miss penalty makes a missing argument score *lower*, but the score is not what stops the command firing — a five-element pattern with one missed required slot scores exactly `3/5` = `0.60`, clears the default `minScore`, and is still refused. Session-log `rejectReason`: `required slot unfilled`.
 
-With `allowPartialMatch` on the command, an incomplete winner — above the gate or below it — enters the [pending state](command-recognition.md#pending-commands) for slot-fill instead (`entered pending (partial: unfilled [...])`). Without it, the utterance is reported through `OnUnrecognisedSpeech`. Missed required *literals* are not part of this check: a command with every argument present still fires over a dropped function word, which is what §1's reduced miss cost exists to allow.
+With `allowPartialMatch` on the command, an incomplete winner — above the gate or below it — enters the [pending state](command-recognition.md#pending-commands) for slot-fill instead (`entered pending (partial: unfilled [...])`). **[The bar](#the-leading-required-miss-bar) is consulted first**, so a winner that missed its first required element opens no pending at any score, and this flag does not divert it. Without it, the utterance is reported through `OnUnrecognisedSpeech`. Missed required *literals* are not part of this check: a command with every argument present still fires over a dropped function word, which is what §1's reduced miss cost exists to allow.
 
 ### Tuning them jointly
 
@@ -260,7 +300,7 @@ A command that clears both gates can still not fire. In order:
 
 That order is deliberate: a command already on cooldown should not raise a question the speaker then answers into a cooldown, and a disambiguation has to precede a confirmation — you cannot confirm an intent you have not identified. The two-question exchange that produces is worked through in [Ambiguous commands](command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
 
-And below `minScore`, `allowPartialMatch` diverts to pending rather than rejecting: `entered pending (partial: unfilled [...])`.
+And below `minScore`, `allowPartialMatch` diverts to pending rather than rejecting: `entered pending (partial: unfilled [...])` — unless the winner was [barred](#the-leading-required-miss-bar), which precedes every filter in this table.
 
 > The numbers inside a `rejectReason` are formatted with the **Editor's current culture**, so on a comma-decimal locale the field reads `score 0,50 < minScore 0,60`. If you grep a session log, match on the surrounding words rather than the whole literal. The numeric `score` / `aggregateConfidence` *fields* are unaffected — JSON numbers are written invariantly.
 
@@ -272,6 +312,7 @@ It does **not** mean "nothing matched". It fires whenever an utterance produced 
 |---------|------------------------|
 | No pattern matched at all | fires |
 | Every candidate fell under `minScore` | **fires** |
+| The winning candidate's first required element was never heard ([the bar](#the-leading-required-miss-bar)) | **fires** |
 | The winner was missing a required slot (command without `allowPartialMatch`) | **fires** |
 | A candidate was diverted to pending (partial match or `requiresConfirmation`) | **fires**, alongside `OnCommandPending` |
 | A follow-up fill completed a pending command but re-scored at or below zero | **fires** — the fill is refused and the pending is left standing |
@@ -300,17 +341,20 @@ A verdict above `None` requires **all** of:
 1. **Score ≥ `minScore`** — the same number the flush path would compute, coverage included.
 2. **The match starts at the first recognised token** — a leading `[unk]` run is skipped for free.
 3. **The match reaches the end of the buffer** — nothing left over, recognised or `[unk]`.
-4. **Every required slot in the winning pattern matched.** Required *literals* are exempt here, but see 5.
+4. **Every required slot in the winning pattern matched.** Required *literals* are exempt here, but see 5 and 6.
 5. **No required element sits after the last element that actually matched.**
-6. **Confidence ≥ `minConfidence`, or `-1`.**
+6. **The winner's first required element matched something** — the same [bar](#the-leading-required-miss-bar) the flush path applies.
+7. **Confidence ≥ `minConfidence`, or `-1`.**
 
-None of the six is implied by its neighbours, which is why each exists:
+None of the seven is implied by its neighbours, which is why each exists:
 
 - **(1)** The scan mirrors an extraction round starting at token 0, so it charges [coverage](#2-coverage) identically to the flush and the two can never disagree about a buffer they both see.
 - **(2)** Nothing arriving later extends an utterance leftward, so out-of-grammar preamble ("Helm, ...") does not block a commit. A leading word VOSK *did* resolve does block it, and what that buys is completeness rather than agreement: a run of recognised words the match did not consume means the buffer holds more than this one command, and committing would fire on part of it.
 - **(3)** Whichever candidate is checked here has nothing trailing it, so its *own* trailing charge is always zero. That does **not** make the trailing term irrelevant — it still runs in selection, and selection picks the candidate these conditions are then applied to. On the buffer "decelerate hard burn", coverage demotes bare `decelerate` and hands the check to the buffer-spanning `decelerate by {burn_level}`, which commits; at `coverageWeight = 0` the bare form wins selection instead, fails this condition, and the verdict is `None`.
 - **(4)** Condition 3 does not imply it: a missed slot consumes no *recognised* token, so it never moves the end of the match past anything the pattern matched — and where it does carry the end over a trailing `[unk]` run, that only makes condition 3 pass more readily. Either way a pattern can appear to span the buffer while still missing an argument.
 - **(5)** Condition 3 cannot express this either, for the same reason: a miss consumes nothing, so a pattern whose *trailing* elements were never spoken looks exactly like one that genuinely finished at the buffer end. A **medial** miss satisfies this condition and can still commit — "launch all missiles hotel one" drops the "target" literal but fills every slot and lands its last element on the buffer's final token, so nothing arriving next was owed to it. (Completeness is all this condition asks; a medial miss that leaves two *intents* tied is caught by the ambiguity rule below.) A **terminal** miss is refused: with `["switch", "to", "weapons"]` and `["switch", "to", "navigation"]` registered, the buffer "switch to" matches both at `(1 + 1 + 0) / 3` = `0.67`, and the winner is decided by registration order — committing there fires the *wrong* command, not merely an early one.
+- **(6)** Nothing above it asks *which* element went missing. Condition 5 catches a **terminal** miss and condition 4 a missing argument, but a pattern that lost only its **leading** required element satisfies both — `["cease", "fire", "now"]` heard as "fire now" matches its last two elements, fills every slot, spans the buffer, and scores `0.67`, so condition 1 does not refuse it either. This condition is **not** inherited from the shared selection order: it is an explicit refusal in `TryEagerCommit`, and it exists to protect the **buffer** rather than to prevent a fire. Committing consumes and clears the accumulated transcript, so without it a half-spoken command would be flushed early and discarded and its continuation parsed as a separate utterance. The flush path bars such a winner either way, so nothing this condition refuses could have fired.
+- **(7)** Acoustic confidence is orthogonal to everything above it: a pattern can match perfectly, span the buffer and still have been heard badly. `-1` means no per-word data was available and the check is bypassed rather than failed.
 
 `Commit` additionally requires **both** of:
 
@@ -435,38 +479,49 @@ Note the slot's own `confidence` (`0.5`, the minimum over tokens 2–4) is *high
 
 That ≈0.50 floor on "two" is also why `minConfidence` defaults to `0.4` rather than higher: at `0.5` every `NumberSequence` command containing "two" would be rejected outright. Lowering it below `0.4` trades against noise-triggered false matches.
 
-### D. Two commands in one breath, and one of them loses a word
+### D. Two commands in one breath, and one of them loses its first word
 
 Grammar: `cease_fire` = `["cease", "fire"]`, `approach_target` = `["approach", "target", "{target}"]`.
 
 Utterance: **"cease fire target hotel one"** — the speaker said both commands; VOSK dropped the second one's "approach".
 
 1. **Round 1.** `cease fire` matches at token 0 and consumes two tokens. What follows is `target hotel one`. No pattern *starts with* "target" — `approach_target` starts with "approach" — but `approach target {target}` does match there, missing only that literal, and matching two of its three required elements against one miss clears the **start test**: strictly more matched than missed, one notch stronger than [admission](#admission-what-counts-as-a-candidate-at-all). So the orphan run terminates at "target", nothing is charged, and `cease fire` scores `2 / 2` = **1.00**.
-2. **Round 2.** The search restarts at token 2, so the leading term re-bases and nothing before it is charged again. `approach target {target}` misses its `approach` literal but matches the rest and consumes to the end: `2 / 3` = **0.67**. It fires too.
+2. **Round 2 wins, consumes, and produces nothing.** The search restarts at token 2. `approach target {target}` misses its `approach` literal but matches the rest and consumes to the end, scoring `2 / 3` = **0.67** — comfortably above the gate. It is nonetheless [barred](#the-leading-required-miss-bar): `approach` is its first required element and it matched nothing. Nothing in the transcript distinguishes this from an utterance where `approach` was never spoken at all, which is exactly why the refusal cannot be selective — see [what it costs](#the-leading-required-miss-bar).
+
+```json
+{ "intent": "cease_fire", "pattern": "cease fire",
+  "score": 1.0, "accepted": true }
+```
+
+**Reading that entry:** one command fired, and **the log holds one attempt for a two-round parse**. Round 2 left no entry at all — not an accepted one, not a rejected one. If you are looking for `approach_target` and finding nothing, that absence *is* the finding.
+
+Note what round 2 still did: it consumed `target hotel one`, so no third round re-scans those tokens. What holds round 1 at `1.00` is not that consumption but the **start test** — `approach target {target}` being *matchable* at "target", which is settled before any round runs and does not depend on round 2 winning, clearing the bar, or firing. Consumption pays off in the opposite arrangement, where the barred round comes **first** and its span would otherwise be charged to the command after it ([the bar](#the-leading-required-miss-bar)).
+
+**The contrast trace — say the second command in full.** Utterance: **"cease fire approach target hotel one"**.
 
 ```json
 { "intent": "cease_fire", "pattern": "cease fire",
   "score": 1.0, "accepted": true }
 { "intent": "approach_target", "pattern": "approach target {target}",
-  "score": 0.67, "accepted": true,
-  "slots": [ { "name": "target", "value": "hotel one", "startWord": 3, "endWord": 5 } ] }
+  "score": 1.0, "accepted": true,
+  "slots": [ { "name": "target", "value": "hotel one", "startWord": 4, "endWord": 6 } ] }
 ```
 
-**Reading those entries:** both commands fire, and the damaged one carries the lower score — which is the shape to expect. The command spoken cleanly is not charged for the other's words, because the token the second command *would* be matched from is the token the first one's orphan run stops at. Say the second command in full and both fire at `1.00`.
+Both fire at `1.00`. Nothing about two commands in one breath is a problem; the first trace differs in exactly one respect — its second command's verb never reached the transcript.
 
-This is the case the start test has to ask the matcher to get right. Testing only what patterns *start with* charged `cease_fire` for all three trailing tokens — `2 / (2 + 3)` = `0.40`, below the gate — so the command that lost a word fired and the one spoken perfectly did not. Measured over 699 utterances, that shape accounted for 11 intent changes and 1 count change before it was closed.
+**Round 1 is the half this example has always been about, and the bar does not touch it.** The start test is what keeps `cease_fire` at `1.00`: testing only what patterns *start with* would charge it for all three trailing tokens — `2 / (2 + 3)` = `0.40`, below the gate — and the cleanly spoken command would be lost. Measured over 699 utterances, that shape accounted for 11 intent changes and 1 count change before it was closed. The orphan run terminates at "target" because `approach target {target}` is *matchable* there — a property of the grammar and the tokens, settled before any round runs and untouched by where the bar sits. What the after-selection placement does buy is the other half: a barred candidate still **consumes** its span, so leading debris never lands on the command that follows it.
 
 ---
 
 ## Reading a session log
 
-Each log entry is one **utterance**. Its `attempts` array holds one entry per *decision the recogniser logged* for that utterance. On the ordinary parse path that is one entry per extraction round — the winner of that round, accepted or rejected. Losing candidates are never logged, so a pattern's absence means it lost selection, not that it was never tried.
+Each log entry is one **utterance**. Its `attempts` array holds one entry per *decision the recogniser logged* for that utterance. On the ordinary parse path that is one entry per *emitting* extraction round — the winner of that round, accepted or rejected. Losing candidates are never logged, and neither is a round whose winner was [barred](#the-leading-required-miss-bar). So a pattern's absence has two readings, not one: it lost selection, or **it won its round and was barred**. Neither means it was never tried — selection tries every pattern at every token. The second leaves no trace for that round, which is what makes it worth knowing about.
 
-Six paths short-circuit before the parse and publish a **single synthetic attempt** instead. All of them leave `pattern` empty, so an empty `pattern` is how you tell them apart:
+Six paths publish a **single synthetic attempt** instead. Three never reach a parse — the confirm/cancel resolution, the answer to a disambiguation prompt, and the pending timeout. The other three are published *after* a full parse: `no match` when it produced no result, and both follow-up entries, whose path is chosen from what the parse returned. All of them leave `pattern` empty, so an empty `pattern` is how you tell them apart:
 
 | `rejectReason` | What happened |
 |----------------|---------------|
-| `no match` | The parser extracted nothing. `intent` is empty too, and `aggregateConfidence` is `0` — *not* the `-1` sentinel, which only ever comes from a real matched span. |
+| `no match` | No round produced a result. `intent` is empty too, and `aggregateConfidence` is `0` — *not* the `-1` sentinel, which only ever comes from a real matched span. **This no longer implies nothing matched:** an utterance whose every round was [barred](#the-leading-required-miss-bar) lands here too, having matched patterns well above the gate. |
 | `cancelled via vocabulary` | Follow-up speech cancelled a pending command. The confirm case is the same entry with `accepted: true` and an empty `rejectReason`. |
 | `chosen via vocabulary, now awaiting confirmation` | The speaker answered an ambiguity, and the command they chose sets `requiresConfirmation` — so it did not fire, it asked again. `accepted: false`, and the *next* utterance's entry carries the confirmation. |
 | *(empty, `accepted: true`)* — or `still pending (partial: unfilled [...])` | Follow-up speech filled a pending command's missing slot. Empty reason with `accepted: true` means no required slot is left and the command fired. When the utterance filled some but not all of what was still missing, the same entry carries `accepted: false` and `still pending (partial: unfilled [...])` instead: the fill was kept, the command did not fire, and the pending is still live. |
@@ -491,11 +546,12 @@ The diagnoses below cover most of what sends you to the log. The first question 
 | Symptom | Diagnosis |
 |---------|-----------|
 | `score` ≈ 0.67 on a three-element pattern, slots extracted | One dropped required literal, nothing left unexplained (§1) — above the gate, so it fires. |
-| `score` ≈ 0.5 on a **two**-element pattern | One dropped required literal, and two elements is the floor: half the evidence stays rejected (§1). |
+| `score` ≈ 0.5 on a **two**-element pattern | One dropped required literal, and two elements is the floor: half the evidence stays rejected (§1). If the dropped literal was the *first* one, the score is not what refused it — see [the bar](#the-leading-required-miss-bar), which no threshold change reaches. |
 | `score` well below `matched / elements`, on a short pattern | Coverage (§2). The match left recognised tokens unexplained before or after it — most often natural trailing words the grammar does not contain. |
-| A command that fired before the upgrade and no longer does | Same cause, and the expected shape of the #65 change (§7 B2). Register the fuller phrasing, mark the trailing words optional, or lower `coverageWeight`. |
-| The command that *lost* a word fired; the one spoken cleanly was rejected at ≈0.40 | Two commands in one utterance, the second missing its leading word (§7 D). |
-| no result at all for a pattern that clearly part-matched | The candidate missed more required elements than it matched and was refused [admission](#admission-what-counts-as-a-candidate-at-all) (§1). |
+| A command that fired before the upgrade and no longer does, **and still logs a scored attempt** | Same cause, and the expected shape of the #65 change (§7 B2). Register the fuller phrasing, mark the trailing words optional, or lower `coverageWeight`. |
+| A command that fired before the upgrade and no longer does, with **no logged attempt at all** | Not coverage — its first required element was never heard, so the round was [barred](#the-leading-required-miss-bar). No threshold or pattern length reaches it. |
+| A stranded tail produced no second command, and the log holds fewer attempts than the utterance had rounds | The winner of that round missed its first required element and was [barred](#the-leading-required-miss-bar) (§7 D). Nothing is wrong with the parse — the words for a second command were not spoken. If they *were* spoken and the decoder dropped the first one, the only remedy is to say the command again; to stop a *tail* being read as a command at all, register a pattern that claims it ([Command Recognition](command-recognition.md#do-not-leave-a-bare-patterns-tail-readable-as-another-command)). |
+| no result at all for a pattern that clearly part-matched | Two different causes, and they are told apart by *which* elements missed rather than how many. **A count:** the candidate missed more required elements than it matched and was refused [admission](#admission-what-counts-as-a-candidate-at-all) (§1) — it never became a candidate. **A position:** the candidate's *first* required element missed, so it competed, won and consumed, and was [barred](#the-leading-required-miss-bar) (§5). Counting matched against missed elements will not distinguish them; look at which element went missing. |
 | `rejectReason` = `required slot unfilled`, `score` above the gate | The [completeness check](#completeness-independent-of-score) (§5): a required argument was never heard. Independent of `minScore` — no threshold change reaches it. Set `allowPartialMatch` to route it to slot-fill, or re-prompt off `OnUnrecognisedSpeech`. |
 | `score` = 1.0 but `aggregateConfidence` below the gate | One acoustically weak word (§5). Check `words`; consider a slot alias. |
 | The wrong one of two **sibling** commands fired (patterns one word apart), and its `score` looks healthy | Neither command did anything wrong: the discriminating word was dropped and selection fell through to registration order (§3). The Editor's last-match panel names the rival on a `Tied with:` line (`— sibling, one dropped word apart`), and the session log records it as `tiedRival` with `tiedRivalIsSibling: true`. Turn on [`disambiguateSiblingTies`](command-recognition.md#ambiguous-commands-ask-instead-of-guessing) to be asked instead of guessed at. |

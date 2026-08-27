@@ -43,12 +43,16 @@ Aggregated results from `RunAll`.
 
 Result of running a single `VoxrTestCase` through the batch test runner. One result covers the whole utterance even when the parser extracted several commands from it: the fields describe the round that was accepted, or the strongest rejected round when none was — so a case cannot assert a second extracted intent.
 
+**A [barred](../scoring.md#the-leading-required-miss-bar) round never reaches the runner at all.** Where a round's winner missed its first required element the parser emits nothing for that round, so the runner has no round to describe for it — but any *other* round that emitted is still reported as usual. For `scoring.md` §7 D's `"cease fire target hotel one"` the result is `cease_fire` at `Score` `1.00`, not a rejection.
+
+Only when **every** round was barred does the case come back with `ActualIntent` null, `Score` `0` and `Confidence` `-1`, indistinguishable from an utterance nothing matched — even though a pattern matched every element but its first and scored well above `minScore` (up to `0.86` on a seven-element pattern). A case that expected an intent surfaces it as `FailureReason` `expected intent '…' but no pattern matched`; a case that expects rejection simply passes, with `FailureReason` null.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `TestCase` | `VoxrTestCase` | The test case that produced this result. |
-| `ActualIntent` | `string` | The intent that was accepted, or null when no command passed the thresholds -- or when the best candidate was refused for a missing required slot (`required slot unfilled`), which is a separate check from the thresholds. |
+| `ActualIntent` | `string` | The intent that was accepted, or null when no command passed the thresholds -- or when the round the runner reports was refused for a missing required slot (`required slot unfilled`), or when **every** round was barred for missing its first required element so no round was left to report. Both are separate checks from the thresholds. |
 | `ActualSlots` | `VoxrSlotMatch[]` | Slot matches from the accepted command. Never null — an empty array when nothing was accepted or the accepted command took no slots. |
-| `Score` | `float` | The score of the round that was **accepted** — the runner stops at the first round clearing the gates, so this is not the highest score seen. When nothing was accepted it is the highest score among the rejected rounds, and `0` when nothing matched at all. |
+| `Score` | `float` | The score of the round that was **accepted** — the runner stops at the first round clearing the gates, so this is not the highest score seen. When nothing was accepted it is the highest score among the rejected rounds, and `0` when no round was left to report — which covers both "nothing matched" and "every round that matched was barred". |
 | `Confidence` | `float` | Minimum word confidence across matched tokens (-1 if unavailable). |
 | `Passed` | `bool` | True if the actual result matches expectations. |
 | `FailureReason` | `string` | Human-readable failure reason, or null if passed. |
