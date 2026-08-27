@@ -923,6 +923,80 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void EagerFlush_LeadingRequiredMiss_KeepsTheBufferForTheRestOfTheUtterance()
+        {
+            // The eager refusal (issue #124, DR-5) at the level where its harm actually shows —
+            // the other half of TryEagerCommit_LeadingRequiredMiss_ReturnsNone, which drives the
+            // gate as a pure function and so cannot observe what happens after a refusal.
+            //
+            // That gap is a documented trap in this suite, not a hypothetical: the section note
+            // above records that issue #74 item 2's two most important tests were never built
+            // "because every eager test called TryEagerCommit as a pure function and so
+            // structurally could not observe what happened after a refusal". Issue #70's gate
+            // carries both halves for the same reason (see EagerFlush_PatternStillOwingItsLast
+            // Word_FiresTheRightCommand); this one had only the pure-function half.
+            //
+            // What the refusal actually protects is the BUFFER — not G-1, which the flush-path
+            // bar secures on its own. Commit makes the recogniser call FlushBuffer, which
+            // consumes and CLEARS the accumulated transcript. So without the refusal the first
+            // half below is flushed and thrown away, and "target hotel one" then arrives to an
+            // empty buffer as a separate utterance instead of completing the command.
+            _recogniser.Configure(MakeSlots(), MakeCommands());
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int firedCount = 0;
+            VoxrCommand? lastFired = null;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                firedCount++;
+                lastFired = cmd;
+            };
+
+            // "missiles target" against launch {weapon} target {target}: "launch" was never
+            // heard, so this is leading-missed. It must not commit early.
+            _recogniser.InjectText("missiles target");
+
+            Assert.AreEqual(0, firedCount, "a leading-missed candidate must not commit early");
+
+            // The buffer has to have SURVIVED that refusal. If the eager gate had committed,
+            // this arrives to an emptied buffer and cannot complete anything.
+            _recogniser.InjectText("hotel one");
+
+            Assert.AreEqual(
+                0,
+                firedCount,
+                "still barred on the merged buffer — the verb is missing from the whole utterance"
+            );
+
+            // Drain what accumulated, so the control below starts from an empty buffer. The
+            // flush re-scores "missiles target hotel one" and bars it again, firing nothing —
+            // which is itself the proof that the two injections above were being MERGED rather
+            // than silently dropped, since a dropped buffer would have nothing left to flush.
+            string unrecognised = null;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(0, firedCount, "the barred buffer flushes to nothing");
+            Assert.AreEqual(
+                "missiles target hotel one",
+                unrecognised,
+                "and it flushes the MERGED text, which is what proves the buffer survived"
+            );
+
+            // The control, now on a clean buffer: the same command spoken with its verb, split
+            // across two injections exactly as above, merges and fires. Without this the two
+            // assertions above would also pass if eager flushing were simply broken.
+            _recogniser.InjectText("launch missiles");
+            _recogniser.InjectText("target hotel one");
+
+            Assert.AreEqual(1, firedCount, "the split utterance still merges and fires");
+            Assert.AreEqual("launch_weapon", lastFired.Value.Intent);
+            Assert.AreEqual("hotel one", lastFired.Value.GetSlot("target"));
+        }
+
+        [Test]
         public void MissedLiteral_BoundaryCase_ExactlySixTenths_Fires()
         {
             // G1 ruling 2, at the level that can actually test it. Two drops on a five-element

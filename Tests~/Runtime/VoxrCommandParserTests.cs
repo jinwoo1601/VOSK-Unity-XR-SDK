@@ -2784,6 +2784,48 @@ namespace VoXR.Tests.Runtime
             LogAssert.NoUnexpectedReceived();
         }
 
+        [Test]
+        public void LeadingMiss_ABarredIncumbentBeatenByACleanRival_UnbarsTheRound()
+        {
+            // The bar is round state, not candidate state, and it therefore has to be CLEARED
+            // when a better candidate is adopted. `bestLeadingRequiredMissed` is assigned
+            // unconditionally at the adopt site, like every other best* field — a barred
+            // candidate can be the incumbent for part of the scan and still lose it.
+            //
+            // Nothing else in this suite exercises that. In every other leading-miss test the
+            // barred candidate is either the only candidate or is adopted LAST, so a sticky
+            // variant — `bestLeadingRequiredMissed |= matchResult.LeadingRequiredMissed;` —
+            // passes all of them while silently barring a round a clean command won. That edit
+            // is a plausible tidy-up, which is exactly why this pins the behaviour.
+            //
+            // The fixture makes `advance` the incumbent first: registration order puts it first,
+            // and it scores 2/3 with "alpha" missing. `hold` is then scored, matches the buffer
+            // exactly at 1.0, and wins. If adoption did not clear the flag, the round would be
+            // barred by the candidate that LOST it and Parse would return nothing.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "advance",
+                        new[] { new[] { "alpha", "bravo", "charlie" } }
+                    ),
+                    new VoxrCommandDefinition("hold", new[] { new[] { "bravo", "charlie" } }),
+                }
+            );
+
+            var result = ParseOne(parser, "bravo charlie");
+
+            Assert.AreEqual("hold", result.Command.Intent, "the clean rival won the round");
+            Assert.AreEqual(
+                1.0f,
+                result.Command.Score,
+                0.001f,
+                "and the round is not barred by the candidate it beat"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
         // --- Back to the numbers Documentation~/scoring.md publishes (issue #83) ---
 
         [Test]
