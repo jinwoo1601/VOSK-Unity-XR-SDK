@@ -5131,6 +5131,114 @@ namespace VoXR.Tests.Runtime
             LogAssert.NoUnexpectedReceived();
         }
 
+        // The RUNTIME half of the test above, in both registration orders.
+        //
+        // Why these two exist: the test above asserts only that the construction-time warning
+        // FIRES for a mixed set. The reason it is owed is a claim about what happens at parse
+        // time — the candidates tie exactly, registration order decides the round, and one
+        // order hands it to the member the bar does not touch, which fires. That claim is the
+        // whole justification for the EVERY-not-any quantifier, and it is now published in
+        // five shipped documents: CHANGELOG.md, Documentation~/command-recognition.md,
+        // Documentation~/troubleshooting.md, Documentation~/scoring.md and
+        // KNOWN_LIMITATIONS.md. Until these two tests, nothing in this suite ever PARSED a
+        // mixed-anchor pair, so a change that settled such a round some other way would have
+        // falsified all five pages and broken no test.
+        //
+        // The fixture is "alpha fire" against '{?ship} cease fire' and '{ship} resume fire' —
+        // the ship value spoken, the discriminator ("cease" / "resume") dropped. Both patterns
+        // then score (1 + 0 + 1) / 3 = 2/3 with one matched literal each and the same consumed
+        // span, so every CompareCandidate key compares equal and the incumbent keeps the
+        // round. Only cease_fire is barred: its optional slot credits no required match, so
+        // "cease" is its ANCHOR and it matched nothing, while resume_fire's required '{ship}'
+        // matched and anchors it.
+        //
+        // Two facts hold that tie together, and neither is local to the bar:
+        //   - a MATCHED optional slot credits MatchScore to BOTH sides of the ratio — the slot
+        //     branch of TryMatchScored stops distinguishing optional from required once the
+        //     slot matched — so '{?ship}' lifts cease_fire to exactly the 2/3 that
+        //     resume_fire's required '{ship}' reaches. Weigh it like an optional LITERAL
+        //     instead, OptionalLiteralScore on both sides, and the scores separate, the tie
+        //     evaporates, and the set stops exercising the quantifier at all.
+        //   - MatchedRequired is not one of CompareCandidate's keys. Admit it as one and
+        //     registration order stops deciding anything here: resume_fire's two matched
+        //     required elements would outrank cease_fire's one in BOTH orders, and the second
+        //     test would fire a command where it now expects silence.
+        //
+        // Both are construction-time warnings for a mixed set, so each queues the same
+        // LogAssert.Expect the test above does, with the quoted patterns in that test's
+        // registration order.
+
+        [Test]
+        public void MixedAnchorSet_UnbarredMemberRegisteredFirst_ItFires()
+        {
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"\\{ship\\} resume fire\" and "
+                        + "\"\\{\\?ship\\} cease fire\" that differ only at element 2"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    Sib("resume_fire", SibP("{ship}", "resume", "fire")),
+                    Sib("cease_fire", SibP("{?ship}", "cease", "fire")),
+                }
+            );
+
+            var result = ParseOne(parser, "alpha fire");
+
+            Assert.AreEqual(
+                "resume_fire",
+                result.Command.Intent,
+                "the tie falls to registration order, and the first-registered member is the "
+                    + "one the bar does not touch"
+            );
+            Assert.AreEqual(
+                2f / 3f,
+                result.Command.Score,
+                0.001f,
+                "the same 2/3 the barred member reaches — which is why they tie"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MixedAnchorSet_BarredMemberRegisteredFirst_NothingFires()
+        {
+            // The other order, and the half that pins the bar rather than the tie. cease_fire
+            // wins the round on registration order and is then refused by position, so the
+            // round consumes its span and emits nothing — and with every token consumed there
+            // is no second round for resume_fire to win. The bar is applied to the round's
+            // WINNER, so the losing rival is not promoted in its place.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"\\{\\?ship\\} cease fire\" and "
+                        + "\"\\{ship\\} resume fire\" that differ only at element 2"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    Sib("cease_fire", SibP("{?ship}", "cease", "fire")),
+                    Sib("resume_fire", SibP("{ship}", "resume", "fire")),
+                }
+            );
+
+            Assert.AreEqual(
+                0,
+                parser.Parse("alpha fire").Length,
+                "the winner missed its own first required element, so the round yields nothing "
+                    + "and the tied rival is not promoted behind it"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
         [Test]
         public void SiblingWarning_OptionalLiteralCarriesTheFrameOverTheGate()
         {

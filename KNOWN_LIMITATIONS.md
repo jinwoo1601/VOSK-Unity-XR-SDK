@@ -748,7 +748,8 @@ deliberate trade-offs rather than oversights.
   to `0.4`, and say "cease" with the second word dropped. Both score
   `(1 + 0) / 2` = `0.5`, the tie is live, and the command that fires is whichever
   was registered first — but the Editor logged nothing at construction.
-  **The discriminating word must not be the pattern's first required element.**
+  **The discriminating word must not be *every* competing pattern's first
+  required element.**
   The earlier version of this repro used `["cease", "fire"]` against
   `["resume", "fire"]` with the *first* word dropped; since #124 both candidates are
   barred for missing their leading required element, so nothing fires at `0.4` or at

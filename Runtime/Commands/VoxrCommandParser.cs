@@ -361,12 +361,16 @@ namespace VoXR.Commands
         // (WarnOnSiblingDiscriminator), where set sizes are already known and they can still
         // act on it.
         //
-        // Normally, not always, since issue #124 item 3: the cap note rides on the sibling
-        // warning, so a set that warning withholds is capped in silence — including one whose
-        // discriminating word is every member's first required element. Silent, and harmless
-        // for the same reason the warning is withheld: that set can only tie when the word is
-        // dropped, and a round that drops it is barred from firing, so the question the cap
-        // limits is never asked.
+        // Normally, not always: the cap note rides on the sibling warning, so a set that
+        // warning withholds is capped in silence. That is not new with issue #124 item 3 — a
+        // same-intent set and a set under the (D-1)/D reachability score were already capped
+        // without a word. Item 3 added a THIRD way in rather than the exception itself: a set
+        // whose discriminating word is every member's first required element. Silent, and for
+        // that third shape harmless for the same reason the warning is withheld — it can only
+        // tie when the word is dropped, and the round that drops it bars its own winner, so
+        // the question the cap limits is never asked. (Which of the three gates is exact, and
+        // which only at the default minScore, is set out where the note is built, in
+        // BuildSiblingWarning.)
         internal const int MaxDisambiguationRivals = 4;
 
         // Whether the flush loop records which sibling rival tied the winner. The Editor always
@@ -1655,13 +1659,18 @@ namespace VoXR.Commands
                 // KNOWN_LIMITATIONS rather than papered over. Erring the other way would put
                 // a knowingly false claim in front of every author who did not touch the knob.
                 //
-                // SECOND, by POSITION. The leading-required-miss bar lets a candidate that
-                // missed its first required element compete and consume, but not fire. So when
-                // the discriminator is that element — the pattern's ANCHOR — in EVERY member,
-                // dropping it bars whoever wins the round, and the round emits nothing at all.
-                // "Selection falls through to registration order, so the wrong intent can
-                // fire" is then false in its second half: the fall-through happens, and then
-                // no intent fires.
+                // SECOND, by POSITION. The leading-required-miss bar lets the round's WINNER
+                // compete and consume when it missed its first required element, but not fire.
+                // So when the discriminator is that element — the pattern's ANCHOR — in EVERY
+                // member, dropping it bars whoever wins the round, and the round emits nothing
+                // at all. "Selection falls through to registration order, so the wrong intent
+                // can fire" is then false in its second half: the fall-through happens, and
+                // then no intent fires.
+                //
+                // Read exactly as scoped. The bar reaches the round's winner and no further
+                // (issue #126 is the rival half, still open), so what this justifies is that
+                // for such a set the winner is barred and that round yields nothing — not that
+                // a leading-missed candidate can never fire anywhere.
                 //
                 // This condition reads no configuration, which is exactly what the (D-1)/D
                 // test cannot say for itself. It is positional and therefore
@@ -1797,10 +1806,18 @@ namespace VoXR.Commands
         }
 
         // Is the discriminator the ANCHOR — the first element that credits MatchedRequired —
-        // of every member? Then the tie the warning describes cannot fire: reaching it means
-        // dropping that element, and since issue #124 a candidate that missed its anchor may
-        // compete and consume but may not produce a result, on the flush path and the eager
-        // one alike.
+        // of every member? Then the round that tie is reached in yields nothing: reaching it
+        // means dropping that element, so whichever member WINS the round missed its own
+        // anchor, and since issue #124 the round's winner may compete and consume but may not
+        // produce a result, on the flush path and the eager one alike. Every member being
+        // anchored is what makes that true of whoever wins, which is why the quantifier is
+        // EVERY.
+        //
+        // Scoped to the WINNER on purpose. The bar is applied to the round's winner alone, so
+        // this says nothing about a leading-missed candidate that LOSES the round and is
+        // offered to the speaker as a disambiguation rival (issue #126, open). What it says is
+        // narrower: for this set, whoever wins the round is barred, so no command fires from
+        // that round and no pending opens out of it.
         //
         // Read off the AUTHORED pattern and compared against the member's OWN authored index,
         // never the frame's. The frame is one expansion's shape, so two members differing by a
@@ -2242,11 +2259,25 @@ namespace VoXR.Commands
             //
             // Emitted only from this message, so it inherits all three of the gates on the
             // warning: same-intent, the (D-1)/D reachability score, and — since issue #124
-            // item 3 — the discriminator being every member's first required element. Each of
-            // the three withholds a set that can never put its values to the speaker: a
-            // same-intent tie is never routed at all, and neither of the other two shapes
-            // produces a result to route. Telling an author their synonym list is too long to
-            // ask about would, under any of them, be advice about a question never asked.
+            // item 3 — the discriminator being every member's first required element.
+            //
+            // TWO of the three are exact, and under those two the note is owed nothing. A
+            // same-intent tie is never routed to the speaker at all; and where the
+            // discriminator is every member's anchor, whichever member wins the round is
+            // barred, so that set produces no result to route. Telling an author their synonym
+            // list is too long to ask about would, under either, be advice about a question
+            // never asked.
+            //
+            // The SCORE gate is exact only at the DEFAULT minScore, which is the only
+            // threshold the parser is ever handed (the reachability scan says so where it is
+            // applied, and KNOWN_LIMITATIONS states it as a limitation). Lower minScore below
+            // (D-1)/D and those ties become live while both the warning and this note stay
+            // withheld: six cross-intent commands ["fire","alpha"] ... ["fire","foxtrot"] score
+            // (2-1)/2 = 0.5, so nothing is reported, yet at a configured 0.4 the tie fires and
+            // the set spans six values against a cap of five. That author is owed the note and
+            // does not get it. It is the score gate's existing limitation inherited here, not a
+            // new one — narrowing it would need the configured threshold, which construction
+            // does not have.
             string capNote =
                 values.Count > 1 + MaxDisambiguationRivals
                     ? $" This set spans {values.Count} discriminating values and runtime "
