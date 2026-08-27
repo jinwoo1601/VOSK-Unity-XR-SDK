@@ -1643,8 +1643,17 @@ namespace VoXR.Commands
                 // refuses the candidate by position before the gate is consulted at all. That
                 // makes this reachability test conservative rather than wrong — a leading
                 // discriminator can never fire at any D, so a set the test admits at D >= 3 may
-                // still be unable to fire. Narrowing it is item 3's (feat-leading-miss-warning),
-                // not this scan's: no set in the package's own grammar differs at element 1.
+                // still be unable to fire. Narrowing it belongs with issue #124 item 3, the
+                // author-facing half, not with this scan.
+                //
+                // Nothing is mis-warned today, and note the reason carefully, because the
+                // tempting shorter claim is false. The demo grammar DOES contain sets whose
+                // discriminator is leading — SiblingSets_DemoGrammar_VolumeAndOrderAreStable
+                // pins four of them (cease_fire@1 twice, mode_weapons@1, mode_all@1, in that
+                // test's 1-based formatting). Every one is already withheld by the (D-1)/D test
+                // above, and the single set that survives to warn, mode_weapons@3, has an
+                // interior discriminator the bar never touches. So the two filters agree on
+                // today's grammar by coincidence of arithmetic, not by construction.
                 //
                 // Judged against the DEFAULT, because the parser constructor is never handed the
                 // recogniser's configured minScore. An author who lowers it below (D-1)/D
@@ -2568,8 +2577,12 @@ namespace VoXR.Commands
 
                 // Written BEFORE _resultCount advances, so index i of _tiedSiblingBuf describes
                 // index i of _resultBuf — the alignment the recogniser relies on when it walks
-                // the two in lockstep. Written on every round, including RivalCount = 0, so a
-                // round that found no tie clears whatever the previous round left here.
+                // the two in lockstep. Written on every EMITTING round, including
+                // RivalCount = 0, so a round that found no tie clears whatever the previous
+                // round left here. A barred round (issue #124) returns above this point and
+                // writes nothing, which is safe for the same reason: it also does not advance
+                // _resultCount, so the slot it skipped is either rewritten by the next
+                // emitting round or sits at/past _resultCount where nothing reads it.
                 //
                 // Under the same gate as the buffers themselves: with nothing recording, they
                 // are null and nothing downstream reads them.
@@ -3003,6 +3016,28 @@ namespace VoXR.Commands
             // dropped discriminator, recorded in KNOWN_LIMITATIONS.md rather than guarded here.
             public bool HasUnmatchedRequiredTail;
 
+            // Whether the pattern's FIRST REQUIRED element matched nothing — the verb, in a
+            // command grammar. Optional elements are skipped when locating it, so a pattern led
+            // by an unmatched optional is not flagged, and a pattern with no required elements
+            // at all never sets it. Drives the leading-miss bar in ParseInternal and the eager
+            // refusal in TryEagerCommit (issue #124, design DR-1/DR-3/DR-5).
+            //
+            // Orthogonal to the required COUNTS below, and the distinction is the whole rule:
+            // they ask HOW MANY required elements were missed, this asks WHICH one. Losing an
+            // argument leaves the action identified; losing the verb leaves no evidence any
+            // action was requested. A threshold cannot express that difference.
+            //
+            // Declared HERE, third in the bool run, and not after MissedRequired where the
+            // build plan put it: this struct is returned BY VALUE from TryMatchScored into the
+            // innermost body of both selection loops, and C# lays a plain struct out in
+            // declaration order. The two bools above leave two bytes of padding before EndIdx,
+            // so a third one lands in that hole for free and the struct stays 32 bytes; append
+            // it after the trailing ints instead and it costs a byte plus three of new padding,
+            // widening every per-candidate copy to 36. Measured, not assumed. This also matches
+            // architecture §2.1's own wording, "beside the two completeness flags it already
+            // carries".
+            public bool LeadingRequiredMissed;
+
             // Where the match stopped, including any [unk] skipped ahead of a trailing
             // element that matched nothing. Drives searchStart and the eager whole-buffer gate.
             public int EndIdx;
@@ -3025,17 +3060,6 @@ namespace VoXR.Commands
             public int MatchedRequired;
             public int MissedRequired;
 
-            // Whether the pattern's FIRST REQUIRED element matched nothing — the verb, in a
-            // command grammar. Optional elements are skipped when locating it, so a pattern led
-            // by an unmatched optional is not flagged, and a pattern with no required elements
-            // at all never sets it. Drives the leading-miss bar in ParseInternal and the eager
-            // refusal in TryEagerCommit (issue #124, design DR-1/DR-3/DR-5).
-            //
-            // Orthogonal to the two counts above, and the distinction is the whole rule: they
-            // ask HOW MANY required elements were missed, this asks WHICH one. Losing an
-            // argument leaves the action identified; losing the verb leaves no evidence any
-            // action was requested. A threshold cannot express that difference.
-            public bool LeadingRequiredMissed;
         }
 
         // How a candidate ranks against the current incumbent. Three states rather than the
@@ -4121,9 +4145,28 @@ namespace VoXR.Commands
             // leading-required-miss bar (issue #124) is deliberately not one of them: DR-3
             // places it in ParseInternal's post-selection block, which this method does not
             // call. So the bar reaches this path only through the explicit condition below, and
-            // that condition is load-bearing rather than defensive — delete it and a
-            // leading-missed candidate commits early and fires, with every flush-path test still
-            // passing.
+            // that condition is load-bearing rather than defensive.
+            //
+            // Load-bearing for a narrower reason than canon states, and the correction is worth
+            // carrying because the overstated version invites its own refutation. Design §2.4
+            // and §5.2 argue the condition is needed because "an eager commit IS a fire". It is
+            // not: Commit makes the recogniser call FlushBuffer, which routes through
+            // ProcessParsedResults into ParseInternal — the very method the bar lives in — so a
+            // leading-missed winner is barred there and the utterance reports unrecognised
+            // either way. A reader who follows Commit two hops finds that out and is then
+            // licensed to delete the condition as provably redundant, which is the outcome this
+            // note exists to prevent.
+            //
+            // What deleting it actually costs is the BUFFER. Commit consumes and clears the
+            // accumulated transcript at partial-poll time; the eager gate exists to speculate
+            // about what the flush will do, so it must mirror every flush-side refusal or it
+            // discards a buffer on a verdict the flush would not have reached. A leading-missed
+            // candidate would flush early and report "didn't catch that" a whole buffer window
+            // sooner, and — worse — the continuation that would have completed a legitimate
+            // command arrives to an emptied buffer and is parsed as a separate utterance. That
+            // is the shape EagerFlush_SplitCommand_FiresWhenSecondHalfCompletes pins from the
+            // other side. Recorded as an erratum against design §2.4/§5.2; DR-5's ruling that
+            // this path needs its own explicit condition is unaffected and stands.
             //
             // Completeness: every required SLOT must actually have matched (issue #66).
             // Nothing else here asserts that. The score arithmetic only sinks such candidates
@@ -4172,18 +4215,32 @@ namespace VoXR.Commands
 
             // The leading-required-miss bar (issue #124, design DR-5). Unlike the admission rule
             // noted above, this one is NOT inherited from the comparator — see the amended note.
-            // A candidate whose first required element matched nothing may never fire, and an
-            // eager commit IS a fire, so it must be refused here as well as at the flush.
+            // A candidate whose first required element matched nothing may never produce a
+            // result, and committing here would flush the buffer expecting one, so this scan
+            // has to refuse it as the flush does. See the note above for why "an eager commit
+            // IS a fire" (design §2.4) overstates it, and what the refusal really protects.
             //
             // None, for the same reason the two conditions above use it: at this gate refusing
             // costs only latency, and the flush applies the bar properly once the transcript is
-            // final. There is no case where this delays a command that would otherwise have
-            // fired correctly — a candidate this refuses could not have fired on either path.
+            // final. A candidate this refuses could not have produced a result on either path,
+            // so nothing that would otherwise have fired correctly is lost.
             //
             // Sits AFTER the tail condition so the two completeness conditions (#66, #70) stay
             // adjacent — they are one idea and this is a different one — and after the score
             // gate above, which is what keeps the score gate the first refusal for a two-element
             // pattern heard as its own tail.
+            //
+            // ACCEPTED, and unlike the sibling condition below: sitting here also converts
+            // HoldExtendable into None for a barred winner on an extendable or un-analysable
+            // pattern, lengthening that wait from prefixHoldSeconds to the full bufferWindow.
+            // The sibling refusal is placed below the hold returns precisely to avoid that, on
+            // the principle that a refusal must not lengthen a wait it is not responsible for.
+            // The difference is that the sibling case may still fire after the wait, so the
+            // longer wait buys nothing, whereas a barred candidate produces no result at any
+            // length of wait — so the only cost here is how soon the speaker is told, on an
+            // utterance already destined for OnUnrecognisedSpeech. DR-5 rules this position
+            // (beside #66/#70); moving it below the hold returns would be a design change.
+            // Inert at the shipped default, where prefixHoldSeconds is 0.
             if (bestLeadingRequiredMissed)
                 return EagerCommitVerdict.None;
 

@@ -861,6 +861,66 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void LeadingRequiredMiss_AboveTheGate_FiresOnlyTheCommandThatWasSpoken()
+        {
+            // Issue #124 as reported, at the level the report is about. Every other
+            // recogniser-level pin for this rule uses a candidate that was ALREADY below
+            // minScore and therefore already not firing — 0.50 for the two-element miss, 0.25
+            // for the pending case. Those prove the bar does no harm; none of them proves it
+            // does the thing it was built for, because none reaches the branch that fires.
+            //
+            // This one does. The phantom scores 0.6667, clears the 0.60 gate, fills its slot,
+            // and is complete — so before the bar it went straight down the accepting branch and
+            // raised OnCommandRecognised for a command whose verb ("intercept") was never
+            // spoken. A read-only query executed a manoeuvre order, and a subscriber could not
+            // tell: OnCommandRecognised fires once per command, so the two arrived looking like
+            // two things the speaker asked for.
+            _recogniser.Configure(
+                new[] { VoxrSlotDefinition.NumberSequence("track", 1, 4) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "query_time_to_target",
+                        new[] { new[] { "time", "to", "target" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "intercept_target",
+                        new[] { new[] { "intercept", "track", "{track}" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+
+            int firedCount = 0;
+            VoxrCommand? lastFired = null;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                firedCount++;
+                lastFired = cmd;
+            };
+
+            _recogniser.InjectText("time to target track one two four four");
+
+            Assert.AreEqual(1, firedCount, "the phantom second command no longer fires");
+            Assert.AreEqual("query_time_to_target", lastFired.Value.Intent);
+            Assert.AreEqual(
+                1.0f,
+                lastFired.Value.Score,
+                0.001f,
+                "and the command that WAS spoken is untouched — no score moves under the bar"
+            );
+
+            // Control: spoken with its verb, the same command fires normally at the same gate.
+            firedCount = 0;
+            _recogniser.InjectText("intercept track one two four four");
+
+            Assert.AreEqual(1, firedCount, "a genuine command is unaffected");
+            Assert.AreEqual("intercept_target", lastFired.Value.Intent);
+            Assert.AreEqual("one two four four", lastFired.Value.GetSlot("track"));
+        }
+
+        [Test]
         public void MissedLiteral_BoundaryCase_ExactlySixTenths_Fires()
         {
             // G1 ruling 2, at the level that can actually test it. Two drops on a five-element

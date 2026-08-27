@@ -917,15 +917,26 @@ namespace VoXR.Tests.Runtime
             );
         }
 
+        // ---------- Leading-required-miss bar (issue #124, design DR-5) ----------
+
         [Test]
         public void TryEagerCommit_LeadingRequiredMiss_ReturnsNone()
         {
             // The leading-required-miss bar on the eager path (issue #124, design DR-5), and the
             // one condition in this method that is NOT inherited from the comparator. DR-3 puts
             // the bar in ParseInternal's post-selection block, which TryEagerCommit never calls,
-            // so without the explicit gate a leading-missed candidate commits early and FIRES —
-            // while every flush-path test stays green, because the flush path is correct and is
-            // simply never reached. An eager commit is a fire, so that defeats the feature.
+            // so without this gate a leading-missed candidate commits early — while every
+            // flush-path test stays green, because the flush path is correct and is simply
+            // never reached.
+            //
+            // What that costs is the BUFFER, not a wrong command. Canon (design §2.4) says "an
+            // eager commit IS a fire"; it is not — Commit makes the recogniser call FlushBuffer,
+            // which routes back into ParseInternal, where the bar refuses the winner anyway. The
+            // damage is that the accumulated transcript is consumed and reported unrecognised a
+            // whole buffer window early, so a continuation that would have completed a genuine
+            // command arrives to an emptied buffer and is parsed as a separate utterance. That
+            // is the shape EagerFlush_SplitCommand_FiresWhenSecondHalfCompletes protects from
+            // the other side. Recorded as an erratum against §2.4; DR-5's ruling stands.
             //
             // The fixture has to reach the bar and NO earlier refusal, and that is the whole
             // difficulty — every gate BELOW the bar would also answer None, which would make the
@@ -957,6 +968,8 @@ namespace VoXR.Tests.Runtime
                 "the anchor is present, so nothing about this candidate is barred"
             );
         }
+
+        // ---------- Back to the unfilled required slot (issue #66) ----------
 
         [Test]
         public void TryEagerCommit_MedialUnfilledRequiredSlot_ReturnsNone()

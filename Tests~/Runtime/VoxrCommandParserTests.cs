@@ -2515,6 +2515,13 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(1.0f, control[1].Command.Score, 0.001f);
         }
 
+        // --- The leading-required-miss bar (issue #124, design DR-1/DR-2/DR-3/DR-8) ---
+        //
+        // A candidate whose FIRST required element matched nothing may compete and consume,
+        // but may not fire. These pin the rule itself, the shield that makes refuse-to-FIRE
+        // the right fork, and the three things it must NOT do: bar an interior miss, bar a
+        // leading unmatched OPTIONAL, or branch on element type.
+
         [Test]
         public void Coverage_LeadingDebris_DoesNotCostTheCommandThatFollowsIt()
         {
@@ -2695,6 +2702,41 @@ namespace VoXR.Tests.Runtime
                 parser.Parse("to weapons").Length,
                 "the first REQUIRED element is what missed, optional or not"
             );
+
+            // The optional SLOT arm of the same rule. An unmatched optional literal and an
+            // unmatched optional slot are two different branches of TryMatchScored — the first
+            // falls out of IsOptionalLiteral, the second out of the isSlot/isOptional path —
+            // and only one of them is exercised above. DR-2 refused to let element type split
+            // the rule on the required side; the skip has to be uniform on the optional side
+            // too, or a pattern led by a droppable ARGUMENT gets barred for dropping it.
+            var slotLed = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("quantity", new[] { "all", "two" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_salvo",
+                        new[] { new[] { "{?quantity}", "launch", "salvo" } }
+                    ),
+                }
+            );
+
+            var omitted = ParseOne(slotLed, "launch salvo");
+
+            Assert.AreEqual("launch_salvo", omitted.Command.Intent);
+            Assert.AreEqual(
+                1.0f,
+                omitted.Command.Score,
+                0.001f,
+                "a leading optional SLOT is skipped when locating the first required element"
+            );
+
+            // And the mirror: with the optional slot present but the first required element
+            // gone, the bar does apply.
+            Assert.AreEqual(
+                0,
+                slotLed.Parse("all salvo").Length,
+                "the optional slot matched; 'launch' is the anchor and it did not"
+            );
             LogAssert.NoUnexpectedReceived();
         }
 
@@ -2741,6 +2783,8 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("alpha one", control.Command.GetSlot("track"));
             LogAssert.NoUnexpectedReceived();
         }
+
+        // --- Back to the numbers Documentation~/scoring.md publishes (issue #83) ---
 
         [Test]
         public void Coverage_LosingCandidateTerms_MatchWhatTheWorkedExamplesPublish()
