@@ -356,9 +356,17 @@ namespace VoXR.Commands
         // three. Four leaves a set clear of the largest measured shape with room to spare, at a
         // cost of _resultBuf.Length * 4 rival records and the matching slot slab.
         //
-        // A set with more members than this offers the first four choices and sets Truncated —
-        // never a silent cap. The author is told at construction (WarnOnSiblingDiscriminator),
-        // where set sizes are already known and they can still act on it.
+        // A set with more members than this offers the first four choices and sets Truncated,
+        // and the author is normally told at construction as well
+        // (WarnOnSiblingDiscriminator), where set sizes are already known and they can still
+        // act on it.
+        //
+        // Normally, not always, since issue #124 item 3: the cap note rides on the sibling
+        // warning, so a set that warning withholds is capped in silence — including one whose
+        // discriminating word is every member's first required element. Silent, and harmless
+        // for the same reason the warning is withheld: that set can only tie when the word is
+        // dropped, and a round that drops it is barred from firing, so the question the cap
+        // limits is never asked.
         internal const int MaxDisambiguationRivals = 4;
 
         // Whether the flush loop records which sibling rival tied the winner. The Editor always
@@ -1630,40 +1638,58 @@ namespace VoXR.Commands
                 // The filter is HERE and not in FindSiblingSets on purpose: the relation stays
                 // exactly as DR-1 defines it, so a later consumer that does care about a
                 // same-intent tie still sees one.
-                // ...and only if the tie is REACHABLE. Losing one required element out of a
-                // frame worth D leaves (D-1)/D, so a two-element pattern drops to 0.5 — under
-                // the shipped minScore default, which rejects BOTH siblings. Nothing fires,
-                // rather than the wrong thing, and this repo already pins that twice
+                // ...and only if the tie is REACHABLE, which since issue #124 item 3 is two
+                // questions rather than one. Neither subsumes the other, so both are asked.
+                //
+                // FIRST, by SCORE. Losing one required element out of a frame worth D leaves
+                // (D-1)/D, so a two-element pattern drops to 0.5 — under the shipped minScore
+                // default, which rejects BOTH siblings. Nothing fires, rather than the wrong
+                // thing, and this repo already pins that twice
                 // (MissedLiteral_TwoElementPattern_BarredByPosition and its recogniser-level
                 // counterpart _DoesNotFire). Warning "the wrong intent can fire" there is
                 // false, and the remedy it offers is inert when no command fires at all.
                 //
-                // Since issue #124 those two pin it for a different reason than the score: when
-                // the dropped element is the pattern's FIRST required one, the leading-miss bar
-                // refuses the candidate by position before the gate is consulted at all. That
-                // makes this reachability test conservative rather than wrong — a leading
-                // discriminator can never fire at any D, so a set the test admits at D >= 3 may
-                // still be unable to fire. Narrowing it belongs with issue #124 item 3, the
-                // author-facing half, not with this scan.
-                //
-                // Nothing is mis-warned today, and note the reason carefully, because the
-                // tempting shorter claim is false. The demo grammar DOES contain sets whose
-                // discriminator is leading — SiblingSets_DemoGrammar_VolumeAndOrderAreStable
-                // pins four of them (cease_fire@1 twice, mode_weapons@1, mode_all@1, in that
-                // test's 1-based formatting). Every one is already withheld by the (D-1)/D test
-                // above, and the single set that survives to warn, mode_weapons@3, discriminates
-                // on the LAST of three elements — a trailing discriminator, which the bar never
-                // touches because the bar asks only about the FIRST required element. So the two filters agree on
-                // today's grammar by coincidence of arithmetic, not by construction.
-                //
-                // Judged against the DEFAULT, because the parser constructor is never handed the
-                // recogniser's configured minScore. An author who lowers it below (D-1)/D
+                // Judged against the DEFAULT, because the parser constructor is never handed
+                // the recogniser's configured minScore. An author who lowers it below (D-1)/D
                 // makes these ties live and gets no warning — a real limitation, stated in
                 // KNOWN_LIMITATIONS rather than papered over. Erring the other way would put
                 // a knowingly false claim in front of every author who did not touch the knob.
+                //
+                // SECOND, by POSITION. The leading-required-miss bar lets a candidate that
+                // missed its first required element compete and consume, but not fire. So when
+                // the discriminator is that element — the pattern's ANCHOR — in EVERY member,
+                // dropping it bars whoever wins the round, and the round emits nothing at all.
+                // "Selection falls through to registration order, so the wrong intent can
+                // fire" is then false in its second half: the fall-through happens, and then
+                // no intent fires.
+                //
+                // This condition reads no configuration, which is exactly what the (D-1)/D
+                // test cannot say for itself. It is positional and therefore
+                // threshold-independent: it stays correct for the author who lowered minScore
+                // out from under the score test above, and that author is the one the score
+                // test silently fails.
+                //
+                // EVERY member, not any. Where they disagree — one anchored, one not — the two
+                // candidates tie EXACTLY, because MatchedRequired is not one of
+                // CompareCandidate's keys (see the key list there): registration order still
+                // decides the round, and one order hands it to the member that is NOT barred,
+                // which fires. The message's claim is true about that set, so it keeps it.
+                //
+                // Nothing in the demo grammar changes hands, and note the reason carefully,
+                // because the tempting shorter claim is false. The demo grammar DOES contain
+                // sets whose discriminator is leading —
+                // SiblingSets_DemoGrammar_VolumeAndOrderAreStable pins four of them
+                // (cease_fire@1 twice, mode_weapons@1, mode_all@1, in that test's 1-based
+                // formatting). Every one was ALREADY withheld by the (D-1)/D test, and the
+                // single set that survives to warn, mode_weapons@3, discriminates on the LAST
+                // of three elements — a trailing discriminator, which the anchor test never
+                // touches because it asks only about the FIRST required element. So the two
+                // conditions agree on today's grammar by coincidence of arithmetic, not by
+                // construction.
                 if (
                     !IsSingleIntent(set)
                     && ScoreAfterDroppingDiscriminator(set.Frame) >= DefaultMinScore
+                    && !DiscriminatorIsEveryMembersAnchor(set)
                 )
                     UnityEngine.Debug.LogWarning(BuildSiblingWarning(set));
 
@@ -1767,6 +1793,46 @@ namespace VoXR.Commands
                     )
                 )
                     return false;
+            return true;
+        }
+
+        // Is the discriminator the ANCHOR — the first element that credits MatchedRequired —
+        // of every member? Then the tie the warning describes cannot fire: reaching it means
+        // dropping that element, and since issue #124 a candidate that missed its anchor may
+        // compete and consume but may not produce a result, on the flush path and the eager
+        // one alike.
+        //
+        // Read off the AUTHORED pattern and compared against the member's OWN authored index,
+        // never the frame's. The frame is one expansion's shape, so two members differing by a
+        // leading optional sit at different indices in it — asking the frame would read the
+        // one carrying the optional as unanchored, invent a disagreement, and warn about a set
+        // in which both members are barred.
+        //
+        // CreditsRequired, not IsRequiredLiteral: that one exists to decide what may BE a
+        // discriminator and so declines slots, while the bar does not — TryMatchScored latches
+        // it under `!isOptional` for slots and literals alike. Scanning with IsRequiredLiteral
+        // would step over a leading required SLOT, land on the first literal instead, and
+        // withhold the warning from a set that really can fire.
+        bool DiscriminatorIsEveryMembersAnchor(SiblingSet set)
+        {
+            for (int i = 0; i < set.Members.Length; i++)
+            {
+                var member = set.Members[i];
+                string[] pattern = _commands[member.CommandIndex].Patterns[member.PatternIndex];
+
+                int anchor = -1;
+                for (int e = 0; e < pattern.Length; e++)
+                {
+                    if (CreditsRequired(pattern[e]))
+                    {
+                        anchor = e;
+                        break;
+                    }
+                }
+
+                if (anchor != member.AuthoredDiscriminatorIndex)
+                    return false;
+            }
             return true;
         }
 
@@ -2174,10 +2240,13 @@ namespace VoXR.Commands
             // offers the winner plus MaxDisambiguationRivals alternatives, so a set spanning
             // more distinct values than that cannot put them all in one question.
             //
-            // Emitted only from this message, so it inherits the same-intent and reachability
-            // gates: a same-intent set is never routed to the speaker at all, and telling an
-            // author their synonym list is too long to ask about would be advice about a
-            // question that is never asked.
+            // Emitted only from this message, so it inherits all three of the gates on the
+            // warning: same-intent, the (D-1)/D reachability score, and — since issue #124
+            // item 3 — the discriminator being every member's first required element. Each of
+            // the three withholds a set that can never put its values to the speaker: a
+            // same-intent tie is never routed at all, and neither of the other two shapes
+            // produces a result to route. Telling an author their synonym list is too long to
+            // ask about would, under any of them, be advice about a question never asked.
             string capNote =
                 values.Count > 1 + MaxDisambiguationRivals
                     ? $" This set spans {values.Count} discriminating values and runtime "

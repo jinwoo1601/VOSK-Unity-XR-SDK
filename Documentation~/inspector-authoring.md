@@ -93,7 +93,7 @@ Three checks read slot values and alias variants alike, and they run **in player
 Three more scan the patterns:
 
 - **Droppable required literal** -- a bare pattern plus a longer one that extends it with a required literal in front of a slot. Naming the literal and the slot at risk, it prescribes marking the literal optional (`?by`). Editor-only.
-- **Two intents separated by one word** -- two *different* intents differing at exactly one required word, which tie when that word is dropped, leaving registration order to pick the intent. Editor-only.
+- **Two intents separated by one word** -- two *different* intents differing at exactly one required word, which tie when that word is dropped, leaving registration order to pick the intent. Editor-only, and withheld in three cases where the tie is not a hazard -- covered under the limits linked below.
 - **More than 12 optional elements in one pattern** -- the eager-flush analysis cannot expand it, and is then abandoned for the **whole** command set: with `eagerFlushOnCompleteMatch` on, no command commits early and every complete match is held for the full hold or buffer window. Unlike the two above, this one fires in player builds as well.
 
 The two scanned grammar-shape hazards, with their remedies and the limits of each scan, are covered in full under [Authoring hazards](command-recognition.md#authoring-hazards) — which also documents a shape nothing scans for.

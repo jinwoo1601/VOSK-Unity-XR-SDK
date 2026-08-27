@@ -247,6 +247,97 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void LeadingRequiredMiss_SlotAnchor_OpensNoPending()
+        {
+            // The SLOT half of DR-2, on the pending path — the square neither existing pin
+            // covers, and the one architecture §10 calls the only place uniformity over element
+            // type changes observable behaviour at all.
+            // LeadingRequiredMiss_OpensNoPending directly above bars a LITERAL anchor
+            // ("launch"); LeadingMiss_AppliesToASlotAnchor_NotOnlyALiteralOne
+            // (VoxrCommandParserTests) bars a SLOT anchor, but at Parse level, where the §6.2
+            // erratum leaves it nothing to say about firing: a winner carrying an unfilled
+            // required slot is refused by the recogniser's completeness check REGARDLESS of
+            // score, so a slot-anchored phantom could not have fired anyway, bar or no bar.
+            //
+            // What the erratum does NOT reach is allowPartialMatch, because there the
+            // completeness check does not refuse the candidate — it ROUTES it, onto the
+            // pending/slot-fill path. So slot anchor x allowPartialMatch x pending is the one
+            // combination where DR-2's uniformity subtracts something the SPEAKER experiences:
+            // not a command that fails to fire, but a question they are never asked.
+            //
+            // Before the bar this utterance opened a pending and asked WHICH TRACK to steer —
+            // the argument of a command whose subject was never named, and a question the
+            // speaker cannot answer sensibly because they did not ask it. DR-8: a barred
+            // candidate is not a command to hold open.
+            //
+            // NOTE the deliberate difference from the two confirmation/disambiguation pins that
+            // close the same issue: this one needs NO score floor, and building it as if it did
+            // would misrepresent the path. The partial branch in VoxrCommandRecogniser routes on
+            // `cmd.Score > 0f && AllowPartialMatch && unfilled.Length > 0` and consults no
+            // threshold whatever — the literal-anchor pin above is let through at 0.25 — so
+            // there is no gate here that could refuse the phantom ahead of the bar and make this
+            // test pass for the wrong reason. The other two sit BELOW `cmd.Score < minScore` and
+            // are built to clear it.
+            _recogniser.Configure(
+                new[]
+                {
+                    new VoxrSlotDefinition("track", new[] { "alpha one", "bravo two" }),
+                    new VoxrSlotDefinition("bearing", new[] { "north east", "south west" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "steer_track",
+                        new[] { new[] { "{track}", "come", "to", "{bearing}" } },
+                        allowPartialMatch: true
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+
+            VoxrCommand? pending = null;
+            _recogniser.OnCommandPending += cmd => pending = cmd;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+            string unrecognised = null;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+
+            // {track} is the anchor and it matched nothing: -1 for the missed required slot,
+            // +1 each for "come", "to" and the filled {bearing}, over a frame worth 4 — so
+            // 2/4 = 0.50, with one unfilled required slot to prompt about. Every input the
+            // partial branch reads is satisfied, and only the bar stops it.
+            _recogniser.InjectText("come to south west");
+
+            Assert.IsFalse(recognised.HasValue, "nothing fires — no track was ever named");
+            Assert.IsFalse(
+                pending.HasValue,
+                "and nothing is held open: the speaker is not asked to complete a command they "
+                    + "never gave"
+            );
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+            Assert.AreEqual("come to south west", unrecognised);
+
+            // The control, and what makes the silence above about POSITION rather than
+            // arithmetic: the same grammar, the same single missed required element, the same
+            // 2/4 = 0.50, the same one unfilled slot — the miss moved to the tail. This one
+            // still opens a pending, so neither the score, nor the flag, nor the unfilled count
+            // explains what happened above.
+            _recogniser.InjectText("alpha one come to");
+
+            Assert.IsTrue(pending.HasValue, "a genuine incomplete command still opens a pending");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+            Assert.AreEqual("alpha one", pending.Value.GetSlot("track"));
+            Assert.AreEqual(
+                0.5f,
+                pending.Value.Score,
+                0.001f,
+                "the hand-derived score no longer holds — re-derive it and argue the new value"
+            );
+        }
+
+        [Test]
         public void IncompleteNewCommand_DoesNotCancelALivePending()
         {
             // The Step 4 half of #73, and the reason the completeness term has to be read twice.
@@ -547,6 +638,78 @@ namespace VoXR.Tests.Runtime
             _recogniser.InjectText("launch missiles target hotel one");
             _recogniser.InjectText("execute");
             Assert.IsTrue(confirmed.HasValue, "Custom 'execute' should confirm");
+        }
+
+        [Test]
+        public void LeadingRequiredMiss_RequiresConfirmation_AsksNothing()
+        {
+            // The second of the three downstream subtractions the #124 CHANGELOG entry
+            // publishes: requiresConfirmation "no longer asks you to confirm an action nobody
+            // requested". True, and until now guarded by nothing (issue #128). It follows from
+            // the same mechanism LeadingRequiredMiss_OpensNoPending pins — a barred round emits
+            // no result, and every pending route is fed by results — but "follows from" is not
+            // "is tested", and this is the most visible of the three: a modal confirmation
+            // prompt for a destructive order, raised by a fragment of overheard speech.
+            //
+            // THREE required elements, not two, and that is the whole design of the fixture. The
+            // confirmation branch sits BELOW `cmd.Score < minScore` in the recogniser's result
+            // loop, so the obvious two-element fixture heard with its first word dropped scores
+            // (2-1)/2 = 0.50, is discarded by the 0.60 gate before confirmation is ever
+            // considered, and would pass this test with the bar DELETED — a decorative pin,
+            // which is worse than none. At three the phantom scores (3-1)/3 = 0.667, clears the
+            // gate with room, and the bar is the only thing left that can refuse it.
+            //
+            // No slots either, so IsIncomplete cannot be what refuses it, and allowPartialMatch
+            // is off — AwaitingConfirmation is the only pending this grammar can open, so the
+            // OnCommandPending assertions below can only be about the confirmation prompt.
+            _recogniser.Configure(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "purge_tanks",
+                        new[] { new[] { "purge", "the", "tanks" } },
+                        allowPartialMatch: false,
+                        requiresConfirmation: true
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.PendingTimeout = 30f;
+
+            VoxrCommand? pending = null;
+            _recogniser.OnCommandPending += cmd => pending = cmd;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+            string unrecognised = null;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+
+            _recogniser.InjectText("the tanks");
+
+            Assert.IsFalse(pending.HasValue, "nobody is asked to confirm a purge nobody ordered");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+            Assert.IsFalse(recognised.HasValue, "and nothing fires either");
+            Assert.AreEqual("the tanks", unrecognised);
+
+            // The control, and the reason this pin is not decorative: the SAME grammar, the same
+            // count of missed required elements, the same (3-1)/3 = 0.667 — one interior word
+            // dropped instead of the anchor — and it still asks. The gate is demonstrably clear
+            // at this score, so position is the only difference between the prompt and the
+            // silence above.
+            _recogniser.InjectText("purge tanks");
+
+            Assert.IsTrue(pending.HasValue, "a real order is still confirmed");
+            Assert.AreEqual("purge_tanks", pending.Value.Intent);
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+            Assert.IsFalse(recognised.HasValue, "…confirmed rather than fired, as ever");
+            Assert.AreEqual(2f / 3f, pending.Value.Score, 0.001f);
+            Assert.GreaterOrEqual(
+                pending.Value.Score,
+                _recogniser.MinScore,
+                "and it clears the gate the recogniser is actually running, so the barred twin "
+                    + "above was refused by the bar and not by the threshold"
+            );
         }
 
         // ======== Combined AllowPartialMatch + RequiresConfirmation ========

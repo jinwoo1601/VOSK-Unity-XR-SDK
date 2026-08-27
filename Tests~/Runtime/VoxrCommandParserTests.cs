@@ -4368,15 +4368,25 @@ namespace VoXR.Tests.Runtime
         public void SiblingWarning_NamesARemedyThatActuallyRemovesTheTie()
         {
             // The message shipped saying "Diverge earlier", which does not work — and this
-            // grammar is the counter-example. These two diverge at the very FIRST element and
-            // tie exactly as "switch to weapons" / "switch to navigation" does. WHERE the
-            // patterns differ is irrelevant; DR-1 puts the discriminator at any position
-            // precisely because one differing element is fatal wherever it sits. Only differing
-            // in MORE THAN ONE element removes the tie, which is what the guide has always said
-            // and what the message now says too.
+            // grammar is the counter-example. These two tie exactly as "switch to weapons" /
+            // "switch to navigation" does, one element apart in the middle of the phrase. WHERE
+            // the patterns differ does not decide whether they TIE; DR-1 puts the discriminator
+            // at any position precisely because one differing element is fatal wherever it
+            // sits. Only differing in MORE THAN ONE element removes the tie, which is what the
+            // guide has always said and what the message now says too.
             //
             // Pinned because a remedy that does not work is worse than none: an author who
             // follows it rewrites the grammar, sees the same warning, and stops trusting it.
+            // This is the only test anywhere asserting the remedy string, so the fixture has to
+            // keep warning.
+            //
+            // It used to diverge at element 1, which read as the strongest possible statement
+            // of "wherever it sits". Since issue #124 item 3 that shape is withheld — not
+            // because it does not tie, but because the leading-miss bar means the tie ends with
+            // nothing firing rather than the wrong thing firing — so the discriminating word
+            // moved one place right to keep the message under test. Note what the narrowing
+            // does NOT say: "diverge earlier" is still not a remedy. It silences both commands
+            // instead of removing the ambiguity between them.
             LogAssert.Expect(
                 UnityEngine.LogType.Warning,
                 new Regex("differ in more than one element")
@@ -4386,8 +4396,8 @@ namespace VoXR.Tests.Runtime
                 Array.Empty<VoxrSlotDefinition>(),
                 new[]
                 {
-                    Sib("mode_weapons", SibP("weapons", "mode", "now")),
-                    Sib("mode_navigation", SibP("navigation", "mode", "now")),
+                    Sib("mode_weapons", SibP("mode", "weapons", "now")),
+                    Sib("mode_navigation", SibP("mode", "navigation", "now")),
                 }
             );
 
@@ -4438,13 +4448,17 @@ namespace VoXR.Tests.Runtime
             //
             // Three elements rather than the demo grammar's two, deliberately: at two the tie
             // scores 0.5 and is suppressed as unreachable, which would leave this test pinning
-            // nothing.
+            // nothing. The shared "order" in front is there for the same kind of reason — the
+            // discriminating word was element 1 until issue #124 item 3, which withholds a set
+            // whose word is every member's first required element, and a withheld set pins no
+            // intent list at all. One shared literal in front makes the word interior and
+            // leaves the dedup exactly the thing under test.
             LogAssert.Expect(
                 UnityEngine.LogType.Warning,
                 new Regex(
-                    "Intents 'cease_fire' and 'resume_fire' have patterns \"cease the fire\", "
-                        + "\"hold the fire\" and \"resume the fire\" that differ only at "
-                        + "element 1 \\(\"cease\", \"hold\" or \"resume\"\\)"
+                    "Intents 'cease_fire' and 'resume_fire' have patterns \"order cease fire\", "
+                        + "\"order hold fire\" and \"order resume fire\" that differ only at "
+                        + "element 2 \\(\"cease\", \"hold\" or \"resume\"\\)"
                 )
             );
 
@@ -4452,8 +4466,12 @@ namespace VoXR.Tests.Runtime
                 Array.Empty<VoxrSlotDefinition>(),
                 new[]
                 {
-                    Sib("cease_fire", SibP("cease", "the", "fire"), SibP("hold", "the", "fire")),
-                    Sib("resume_fire", SibP("resume", "the", "fire")),
+                    Sib(
+                        "cease_fire",
+                        SibP("order", "cease", "fire"),
+                        SibP("order", "hold", "fire")
+                    ),
+                    Sib("resume_fire", SibP("order", "resume", "fire")),
                 }
             );
 
@@ -4897,8 +4915,10 @@ namespace VoXR.Tests.Runtime
             // is stronger: on THIS pair the dropped discriminator is the pattern's first
             // required element, so the leading-miss bar refuses both candidates by position
             // whatever the threshold — see MissedLiteral_TwoElementPattern_BarredByPosition.
-            // The (D-1)/D test above is therefore conservative rather than wrong, and narrowing
-            // it is issue #124 item 3's job, not this test's.
+            // The (D-1)/D test above is therefore conservative rather than wrong, and item 3
+            // has since added that positional reason to the scan as a condition of its own —
+            // so this pair is now withheld twice over, and stays withheld if either condition
+            // is ever moved.
             //
             // Still DETECTED: the relation admits it, and a consumer that applies its own
             // threshold may care. Only the author-facing warning is withheld.
@@ -4915,6 +4935,197 @@ namespace VoXR.Tests.Runtime
             );
 
             var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), commands);
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // ---------- The anchor condition (issue #124 item 3) ----------
+        //
+        // A set whose discriminating word is the first REQUIRED element of EVERY member cannot
+        // fire the wrong intent: reaching the tie means dropping that word, and the
+        // leading-miss bar refuses a winner that missed its anchor, on the flush path and the
+        // eager one alike. The warning is withheld there because its central claim — "selection
+        // falls through to registration order, so the wrong intent can fire" — is false in its
+        // second half.
+        //
+        // The six below pin the rule and the three ways a plausible implementation of it goes
+        // wrong: the wrong required-ness predicate, the wrong index space, and the wrong
+        // quantifier. Every fixture below clears the (D-1)/D score gate on its own, so each of
+        // them genuinely reaches this condition rather than being withheld one gate earlier.
+
+        [Test]
+        public void SiblingWarning_LeadingDiscriminatorInEveryMember_IsWithheld()
+        {
+            // The shape the narrowing exists for. Three elements, so the score gate admits it
+            // at 2/3 = 0.667 and the scan used to warn — but "cease" and "resume" are each
+            // their own pattern's anchor, so the round that drops the word bars whichever of
+            // them wins it and nothing fires at all. NoUnexpectedReceived is the assertion:
+            // any warning here fails the test.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("cease_fire", SibP("cease", "fire", "now")),
+                    Sib("resume_fire", SibP("resume", "fire", "now")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_SameWordsWithAnInteriorDiscriminator_StillWarns()
+        {
+            // The control for the test above: the same three words, the same frame weight, the
+            // same 2/3 quotient — only the discriminating word moves off the front. "fire" is
+            // the anchor now and it MATCHES, so nothing is barred, the tie is the coin flip the
+            // message describes, and the warning is owed. Without this pair a change that
+            // withheld EVERY sibling warning would pass the test above and look correct.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"fire cease now\" and \"fire resume now\" that differ only at "
+                        + "element 2"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("cease_fire", SibP("fire", "cease", "now")),
+                    Sib("resume_fire", SibP("fire", "resume", "now")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_LeadingRequiredSlotBeforeTheDiscriminator_StillWarns()
+        {
+            // WHICH predicate answers "would this element credit a required match" — the one
+            // the runtime bar uses, not the one that decides what may BE a discriminator.
+            // IsRequiredLiteral declines slots, so a scan written with it steps over {ship} and
+            // {target}, lands on the discriminator itself at element 3, calls that the anchor
+            // and withholds this warning. TryMatchScored does no such thing: it latches under
+            // !isOptional, and a required slot credits MatchedRequired like any literal, so the
+            // winner here is not barred and the wrong intent really can fire.
+            //
+            // Two slots, not one: at one the frame is two elements and the score gate withholds
+            // the set at 0.5 before the anchor condition is ever consulted.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"\\{ship\\} \\{target\\} weapons\" and "
+                        + "\"\\{ship\\} \\{target\\} navigation\" that differ only at "
+                        + "element 3"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("ship", new[] { "alpha" }),
+                    new VoxrSlotDefinition("target", new[] { "bravo" }),
+                },
+                new[]
+                {
+                    Sib("mode_weapons", SibP("{ship}", "{target}", "weapons")),
+                    Sib("mode_navigation", SibP("{ship}", "{target}", "navigation")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_SymmetricLeadingOptional_IsStillWithheld()
+        {
+            // The anchor is the first element that CREDITS a required match, which is not the
+            // same thing as element 0. "?please" is optional, credits nothing and cannot be
+            // missed, so the bar latches on "cease": both members are anchored at authored
+            // index 1 and the set is withheld exactly as the bare pair above it is.
+            //
+            // A shortcut asking "is the discriminator at index 0" warns here. The surviving
+            // frame is the four-element one ("?please * fire now") — the longest-frame
+            // preference keeps it over the reading that omits the optional — so the word sits
+            // at frame index 1, not 0. The optional also lifts the frame's weight to 3.5, which
+            // admits the set at 2.5/3.5 = 0.714, so the score gate is not what withholds it.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("cease_fire", SibP("?please", "cease", "fire", "now")),
+                    Sib("resume_fire", SibP("?please", "resume", "fire", "now")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_LeadingOptionalOnOneSideOnly_IsStillWithheld()
+        {
+            // Nearly the fixture above and it catches a different defect. The optional is on
+            // ONE side, so the pair meets only through the three-element frame "* fire now",
+            // whose DiscriminatorIndex is 0. Read in FRAME space the members disagree —
+            // 'resume_fire' looks anchored, 'cease_fire' does not, because its word sits at
+            // authored index 1 — and a frame-indexed implementation reports that false
+            // disagreement by warning.
+            //
+            // In authored space they agree: each member's discriminating word IS its own first
+            // required element, so both candidates are barred and nothing fires whichever wins.
+            // Frame index and authored index are the same fact about different arrays, and only
+            // the authored array is the one the bar reads at runtime.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("cease_fire", SibP("?please", "cease", "fire", "now")),
+                    Sib("resume_fire", SibP("resume", "fire", "now")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_MembersDisagreeingOnTheAnchor_StillWarns()
+        {
+            // EVERY member, not any, and this is the set that separates the two readings. The
+            // {?ship} side skips its optional slot and anchors on "cease", so its discriminator
+            // IS its anchor; the {ship} side anchors on the required slot in front, so its
+            // discriminator is not. Exactly one of the two is barred when the word is dropped.
+            //
+            // That does not leave one clean winner, which is why the warning is still owed:
+            // MatchedRequired is not one of CompareCandidate's keys, so the two candidates tie
+            // exactly and registration order decides the round — and in one of the two orders
+            // the round goes to the member that is NOT barred, which fires. Reverse the two
+            // definitions and a different intent fires. "The wrong intent can fire" is true
+            // here in both halves.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "patterns \"\\{\\?ship\\} cease fire\" and "
+                        + "\"\\{ship\\} resume fire\" that differ only at element 2"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    Sib("cease_fire", SibP("{?ship}", "cease", "fire")),
+                    Sib("resume_fire", SibP("{ship}", "resume", "fire")),
+                }
+            );
 
             Assert.IsNotNull(parser);
             LogAssert.NoUnexpectedReceived();

@@ -1968,6 +1968,109 @@ namespace VoXR.Tests.Runtime
             );
         }
 
+        [Test]
+        public void Disambiguation_LeadingDiscriminator_AsksNothingAndFiresNothing()
+        {
+            // The third of the downstream subtractions the #124 CHANGELOG entry publishes:
+            // disambiguateSiblingTies "no longer raises 'which did you mean?' about two invented
+            // alternatives". Published and unguarded until now (issue #128), and it needs a
+            // fixture built for it — every other test in this section runs on ConfigureAsking,
+            // whose discriminator ("mode" / "level") is INTERIOR, and the bar asks only about a
+            // pattern's FIRST required element. Nothing already here could reach the shape the
+            // claim is about.
+            //
+            // THREE elements, for the same reason the confirmation pin in
+            // VoxrPendingCommandTests has three: TryBuildAmbiguity is reached from BELOW the
+            // `cmd.Score < minScore` filter, so ["cease","fire"] / ["resume","fire"] heard as
+            // "fire" — the two-word shape this is the obvious fixture for — scores
+            // (2-1)/2 = 0.50, is discarded by the 0.60 gate one step earlier, and would pass
+            // with the bar deleted. At three the tie scores (3-1)/3 = 0.667 and genuinely
+            // reaches the disambiguation branch.
+            //
+            // No LogAssert.Expect, unlike every other test in this section: this set's
+            // discriminator is every member's own anchor, so the construction-time sibling
+            // warning is withheld — the same grammar
+            // SiblingWarning_LeadingDiscriminatorInEveryMember_IsWithheld pins at parser level.
+            // NoUnexpectedReceived at the end asserts that rather than assuming it, and it is
+            // this test's own claim read from the authoring end: a set nobody can be asked about
+            // is a set the author is not warned about.
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new VoxrSlotDefinition[0],
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "cease_fire",
+                        new[] { new[] { "cease", "fire", "now" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "resume_fire",
+                        new[] { new[] { "resume", "fire", "now" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            int pendingCount = 0,
+                firedCount = 0,
+                unrecognisedCount = 0;
+            _recogniser.OnCommandPending += _ => pendingCount++;
+            _recogniser.OnCommandRecognised += _ => firedCount++;
+            _recogniser.OnUnrecognisedSpeech += _ => unrecognisedCount++;
+
+            // Both patterns lose their anchor and tie exactly — same score, same span, same
+            // literal count — so registration order would have handed the round to cease_fire,
+            // and the flag would have turned that into a question offering "cease" or "resume".
+            // The speaker said neither word.
+            _recogniser.InjectText("fire now");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(0, pendingCount, "no question is asked…");
+            Assert.AreEqual(0, firedCount, "…and nothing fires instead — both are barred");
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+            Assert.IsNull(_recogniser.PendingAmbiguity);
+            Assert.AreEqual(
+                1,
+                unrecognisedCount,
+                "the round emits no result at all, so the utterance is simply unrecognised"
+            );
+
+            // The control, and what stops both assertions above from passing for want of a tie:
+            // the same three words at the same 0.667, with the discriminator moved one place
+            // right so the anchor "fire" MATCHES. Nothing is barred, the tie is the coin flip
+            // this feature exists to replace, and the question is owed — at construction and at
+            // runtime alike. Position is the only difference between the two halves.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 2"));
+            _recogniser.Configure(
+                new VoxrSlotDefinition[0],
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "cease_fire",
+                        new[] { new[] { "fire", "cease", "now" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "resume_fire",
+                        new[] { new[] { "fire", "resume", "now" } }
+                    ),
+                }
+            );
+
+            _recogniser.InjectText("fire now");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(1, pendingCount, "an interior discriminator is still asked about");
+            Assert.AreEqual(0, firedCount, "and still fires nothing until it is answered");
+            Assert.IsTrue(_recogniser.PendingAmbiguity.HasValue);
+            CollectionAssert.AreEqual(
+                new[] { "cease", "resume" },
+                _recogniser.PendingAmbiguity.Value.DiscriminatingValues,
+                "the two words the speaker could have said, in registration order"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
         // -------- Duplicate intent created by activating two sets (issue #120) --------
 
         [Test]
