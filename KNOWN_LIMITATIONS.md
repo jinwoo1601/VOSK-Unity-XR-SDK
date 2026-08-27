@@ -637,16 +637,25 @@ deliberate trade-offs rather than oversights.
   the intents, the patterns as authored, the differing element and the competing
   values. It reports only what it can see going wrong: two patterns of *different*
   intents (within one intent the same command dispatches either way), where the tie
-  would actually clear the default `minScore`. See the note below for what that
-  second condition costs.
+  would actually clear the default `minScore`, and where the differing word is not
+  *every* pattern's **first required element** — where it is, dropping it bars
+  whichever candidate wins the round, so nothing fires and there is nothing to
+  report (see *What now works, and used to not* below). See the note below for what
+  that second condition costs; the third costs nothing, since it reads no
+  threshold.
 - **Workaround**: Turn on `disambiguateSiblingTies` and prompt from
   `OnCommandPending`, which is the only remedy that keeps both phrasings and still
   gets the right command. Where you cannot prompt: make the two commands differ in
   **more than one element**, so losing one word still leaves another to decide
   (`arm weapons` / `show navigation`, not `switch to weapons` /
-  `switch to navigation`); or give the more destructive of the pair
-  `requiresConfirmation`; or — where both phrasings must exist verbatim — register the
-  safer one first, since the tie-break is deterministic.
+  `switch to navigation`); or move the differing word to the front, so it is **every**
+  pattern's **first required element** — dropping it then bars whichever candidate
+  wins the round and that round yields nothing, which buys silence instead of a wrong
+  command at the price of the speaker having to say it again, does nothing for an
+  utterance where the word *was* heard, and correctly silences the construction-time
+  warning for that pair (see *What now works, and used to not* below); or give the
+  more destructive of the pair `requiresConfirmation`; or — where both phrasings must
+  exist verbatim — register the safer one first, since the tie-break is deterministic.
 - **What now works, and used to not**: moving the difference *earlier* in the
   pattern, so the differing word is each pattern's **first required element**.
   `weapons mode` and `navigation mode` still tie at `0.5`, and `weapons mode active`
@@ -655,12 +664,17 @@ deliberate trade-offs rather than oversights.
   length, so the outcome is silence rather than the wrong command. Note what it buys
   and what it does not: silence instead of a wrong action,
   with the speaker having to repeat themselves, and no help at all on an utterance
-  where the discriminating word *was* heard.
+  where the discriminating word *was* heard. It also stops the construction-time
+  warning above reporting that pair, correctly — the claim that warning makes would
+  no longer be true of it — so a warning that vanishes when you apply this is the
+  remedy landing, not the pair going away.
 - **Note**: This shape predates the current miss cost. At four or more elements it
   already cleared the gate; reducing the miss cost extends it down to three-element
-  patterns, which is where two-word-prefix grammars live. That reach applies to a
-  **non-leading** discriminator only — where the differing word leads, the round's
-  winner is barred and nothing fires at any length, per the entry above.
+  patterns, which is where two-word-prefix grammars live. That reach stops only where
+  the differing word leads **every** pattern in the set — there the round's winner is
+  barred and nothing fires at any length, per the entry above. Where it leads some but
+  not all of them the reach still holds, because the round can be handed to a
+  candidate the bar does not touch.
 
 ### A pattern with more than six optional elements is not checked for siblings
 
@@ -669,6 +683,15 @@ deliberate trade-offs rather than oversights.
   element warns as expected. With `disambiguateSiblingTies` on, the tie is also not
   offered as a question. (The eager-flush gate still refuses on this repro, for the
   reason below — but it is not exempt in general either.)
+- **First check it is this entry at all.** A missing sibling warning has a
+  *second* cause, and it has nothing to do with optional elements: where the
+  discriminating word is **every** member pattern's **first required element**,
+  the warning is withheld on purpose — dropping that word bars whichever
+  candidate wins the round, so nothing fires and there is nothing to report.
+  Look at the discriminating word before you count optional elements: if it
+  leads every pattern in the set, that deliberate withholding is what you are
+  seeing and this entry does not apply. See *Sibling patterns that differ at
+  one word fire the first-registered one* above.
 - **Repro**: Register `["engage", "?a", "?b", "?c", "?d", "?e", "?f", "?g",
   "shields", "online"]` against `["engage", "weapons", "online"]` and say
   "engage online". Remove any one of the seven optionals and the same utterance
@@ -711,11 +734,22 @@ deliberate trade-offs rather than oversights.
 
 - **Symptom**: A grammar carries the sibling shape above, the wrong command fires,
   and no construction-time warning was ever logged for it.
+- **First check it is this entry at all.** A missing sibling warning has a *second*
+  cause, and it has nothing to do with `minScore`: where the discriminating word is
+  **every** member pattern's **first required element**, the warning is withheld on
+  purpose — dropping that word bars whichever candidate wins the round, so that round
+  yields nothing, no command fires and no disambiguation question opens for that set.
+  Look at the discriminating word before you reach for a threshold: if it leads every
+  pattern in the set, that deliberate withholding is what you are seeing and this
+  entry does not apply — no `minScore` value makes such a tie live, because the
+  refusal is positional rather than arithmetic. See *Sibling patterns that differ at
+  one word fire the first-registered one* above.
 - **Repro**: Register `["cease", "fire"]` and `["cease", "burn"]`, lower `minScore`
   to `0.4`, and say "cease" with the second word dropped. Both score
   `(1 + 0) / 2` = `0.5`, the tie is live, and the command that fires is whichever
   was registered first — but the Editor logged nothing at construction.
-  **The discriminating word must not be the pattern's first required element.**
+  **The discriminating word must not be *every* competing pattern's first
+  required element.**
   The earlier version of this repro used `["cease", "fire"]` against
   `["resume", "fire"]` with the *first* word dropped; since #124 both candidates are
   barred for missing their leading required element, so nothing fires at `0.4` or at
@@ -743,14 +777,19 @@ deliberate trade-offs rather than oversights.
   entry says is not the problem.) See
   [Ambiguous commands](Documentation~/command-recognition.md#ambiguous-commands-ask-instead-of-guessing).
   This works only where the tie is actually live, which since #124 means the
-  discriminating word must not be either pattern's **first required element** — where
-  it is, the round's winner is barred, no pending opens, and there is nothing to ask
-  about. Failing that: if you run below the default `minScore`, treat short sibling
-  pairs as hazardous whether or not the Editor flagged them — the rule is that any two
-  patterns of different intents differing at exactly one **non-leading** required word
-  can tie once that word is dropped. Raising `minScore` back to `0.6` or above
-  restores the correspondence between what the warning reports and what can
-  actually happen.
+  discriminating word must not be **every** competing pattern's **first required
+  element** — where it leads them all, dropping it bars whichever candidate wins the
+  round, so that round yields nothing, no pending opens for that set, and there is
+  nothing to ask about. Where it leads only *some* of them the tie is still live: the
+  candidates tie exactly, registration order can hand the round to a candidate the bar
+  does not touch, and the flag does reach that. Failing that: if you run below the
+  default `minScore`, treat short sibling pairs as hazardous whether or not the Editor
+  flagged them — the rule is that any two patterns of different intents differing at
+  exactly one required word can tie once that word is dropped, and the word being
+  a *leading* one excuses the pair only when it leads **every** competing pattern:
+  where it leads one of them and not the other, the pair is as hazardous as any
+  other. Raising `minScore` back to `0.6` or above restores the correspondence
+  between what the warning reports and what can actually happen.
 - **Note**: The reverse error would be worse. Warning unconditionally would put a
   "the wrong intent can fire" claim in front of every author running default
   settings, for grammars where nothing fires at all.
