@@ -1651,8 +1651,9 @@ namespace VoXR.Commands
                 // discriminator is leading — SiblingSets_DemoGrammar_VolumeAndOrderAreStable
                 // pins four of them (cease_fire@1 twice, mode_weapons@1, mode_all@1, in that
                 // test's 1-based formatting). Every one is already withheld by the (D-1)/D test
-                // above, and the single set that survives to warn, mode_weapons@3, has an
-                // interior discriminator the bar never touches. So the two filters agree on
+                // above, and the single set that survives to warn, mode_weapons@3, discriminates
+                // on the LAST of three elements — a trailing discriminator, which the bar never
+                // touches because the bar asks only about the FIRST required element. So the two filters agree on
                 // today's grammar by coincidence of arithmetic, not by construction.
                 //
                 // Judged against the DEFAULT, because the parser constructor is never handed the
@@ -3036,6 +3037,12 @@ namespace VoXR.Commands
             // widening every per-candidate copy to 36. Measured, not assumed. This also matches
             // architecture §2.1's own wording, "beside the two completeness flags it already
             // carries".
+            //
+            // The precondition, so a later edit knows when this reasoning lapses: it holds
+            // because every field here is a primitive, which is what makes the struct
+            // managed-sequential. Add one reference-type field and CoreCLR and Mono are free to
+            // reorder, at which point declaration order stops meaning anything and nothing in
+            // the repo would notice — there is no size pin anywhere to catch it.
             public bool LeadingRequiredMissed;
 
             // Where the match stopped, including any [unk] skipped ahead of a trailing
@@ -3059,7 +3066,6 @@ namespace VoXR.Commands
             // of matched-optional credit to bite, which no pattern in this package carries.
             public int MatchedRequired;
             public int MissedRequired;
-
         }
 
         // How a candidate ranks against the current incumbent. Three states rather than the
@@ -3423,11 +3429,11 @@ namespace VoXR.Commands
                 SlotCount = slotCount,
                 MissedRequiredSlot = missedRequiredSlot,
                 HasUnmatchedRequiredTail = requiredAfterLastMatch > 0,
+                LeadingRequiredMissed = leadingRequiredMissed,
                 EndIdx = tokenIdx,
                 ConsumedEndIdx = consumedEndIdx,
                 MatchedRequired = matchedRequired,
                 MissedRequired = missedRequired,
-                LeadingRequiredMissed = leadingRequiredMissed,
             };
         }
 
@@ -4158,9 +4164,14 @@ namespace VoXR.Commands
             // note exists to prevent.
             //
             // What deleting it actually costs is the BUFFER. Commit consumes and clears the
-            // accumulated transcript at partial-poll time; the eager gate exists to speculate
-            // about what the flush will do, so it must mirror every flush-side refusal or it
-            // discards a buffer on a verdict the flush would not have reached. A leading-missed
+            // accumulated transcript at partial-poll time, so this gate must not commit on a
+            // verdict the PARSER's flush would refuse — otherwise it discards a buffer to
+            // produce nothing. Stated that narrowly on purpose: the tempting general form,
+            // "mirror every flush-side refusal", is false here and falsifiable in one hop, since
+            // the recogniser's cooldown gate is a flush-side refusal this scan is not handed
+            // (ProbeEagerCommit passes only minScore and minConfidence), so a debounced command
+            // already commits and consumes the buffer. Overstating the rule is how the previous
+            // version of this note invited its own deletion. A leading-missed
             // candidate would flush early and report "didn't catch that" a whole buffer window
             // sooner, and — worse — the continuation that would have completed a legitimate
             // command arrives to an emptied buffer and is parsed as a separate utterance. That

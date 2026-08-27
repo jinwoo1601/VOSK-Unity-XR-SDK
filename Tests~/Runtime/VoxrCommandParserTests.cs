@@ -2587,7 +2587,7 @@ namespace VoXR.Tests.Runtime
             };
             var parser = new VoxrCommandParser(slots, commands);
 
-            // The report: a read-only query executed a maneuver order. Round 2 matched
+            // The report: a read-only query executed a manoeuvre order. Round 2 matched
             // "track" + the digits and scored 0.6667 with "intercept" NEVER SPOKEN, and nothing
             // downstream could tell the two commands came from one utterance.
             var reported = parser.Parse("time to target track one two four four");
@@ -4856,7 +4856,7 @@ namespace VoXR.Tests.Runtime
             // required element, so the leading-miss bar refuses both candidates by position
             // whatever the threshold — see MissedLiteral_TwoElementPattern_BarredByPosition.
             // The (D-1)/D test above is therefore conservative rather than wrong, and narrowing
-            // it is item 3's job (feat-leading-miss-warning), not this test's.
+            // it is issue #124 item 3's job, not this test's.
             //
             // Still DETECTED: the relation admits it, and a consumer that applies its own
             // threshold may care. Only the author-facing warning is withheld.
@@ -5087,13 +5087,17 @@ namespace VoXR.Tests.Runtime
             LogAssert.NoUnexpectedReceived();
         }
 
+        // ---------- Leading-miss latch cost (issue #124, G-5) ----------
+
         [Test]
         public void LeadingMissLatch_AllocatesNothingPerCall()
         {
             // The leading-miss latch (issue #124) lives in TryMatchScored, which runs on the
             // innermost (command x pattern x startIdx) triple of both selection paths. It is
-            // two stack locals and at most one store per required miss, and this is what says
-            // so — G-5 asks that the bar add no allocation to the parse path.
+            // one stack local plus one MatchResult field, and at most one store per required
+            // miss — and this is what says the walk stays allocation-free, which is what G-5
+            // asks. (F15's "two stack locals" predates the field landing on MatchResult; the
+            // field is the per-candidate half and is why the struct's packing was checked.)
             //
             // Measured over TryEagerCommit for the reason the test above records: Parse
             // necessarily allocates the results it returns and can never be pinned at zero,

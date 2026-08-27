@@ -1584,7 +1584,7 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void TryEagerCommit_LeadingTwoElementTie_RefusesForScoreAtDefaultAndForTheTieBelowIt()
+        public void TryEagerCommit_LeadingTwoElementTie_RefusesForScoreAtDefaultAndForTheBarBelowIt()
         {
             // The asymmetry between this gate and the author-facing warning, pinned rather than
             // left to be discovered. "cease fire" / "resume fire" lose their discriminator to

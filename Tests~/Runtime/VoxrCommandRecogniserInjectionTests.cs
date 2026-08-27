@@ -860,6 +860,8 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual("fire", unrecognised);
         }
 
+        // -------- Leading-required-miss bar (issue #124, DR-1) --------
+
         [Test]
         public void LeadingRequiredMiss_AboveTheGate_FiresOnlyTheCommandThatWasSpoken()
         {
