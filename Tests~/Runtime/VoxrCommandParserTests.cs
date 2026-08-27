@@ -2459,7 +2459,7 @@ namespace VoXR.Tests.Runtime
         // page fails a test rather than a reader.
 
         [Test]
-        public void Coverage_SequentialExtraction_SparesTheFirstCommandWhenASecondLosesItsWord()
+        public void Coverage_SequentialExtraction_SparesTheFirstCommandAndBarsTheSecond()
         {
             // The other half of the test above, and scoring.md §7 D. The orphan run stops
             // wherever the MATCHER could begin, and the matcher begins a pattern whose leading
@@ -2470,6 +2470,19 @@ namespace VoXR.Tests.Runtime
             // Until issue #82 the run tested only what patterns start with, so cease_fire was
             // charged 2/(2+3) = 0.40 for three tokens the very next extraction round explained
             // — the command spoken cleanly was the one rejected while the damaged one fired.
+            //
+            // Since issue #124 the second round emits NOTHING, and the two halves of this test
+            // now say different things. Step 1 is untouched and is why the rename kept it: the
+            // orphan run still terminates at "target", so cease_fire still keeps 2/2 = 1.00.
+            // That assertion is #82's win and it must stay character-identical — the bar is two
+            // removes from it by construction, because orphan-run termination runs through
+            // IsAdmissibleStart's own count test and never calls the comparator.
+            //
+            // What changed is only whether the round-2 winner may be REPORTED. approach_target
+            // still wins round 2 and still consumes "target hotel one" — that is what re-bases
+            // searchStart — but its first required element, "approach", matched nothing, so the
+            // bar refuses it a result. The word was never spoken; firing it would be a command
+            // the speaker did not give.
             var slots = new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) };
             var commands = new[]
             {
@@ -2483,7 +2496,7 @@ namespace VoXR.Tests.Runtime
 
             var results = parser.Parse("cease fire target hotel one");
 
-            Assert.AreEqual(2, results.Length);
+            Assert.AreEqual(1, results.Length, "the phantom approach_target is barred");
             Assert.AreEqual("cease_fire", results[0].Command.Intent);
             Assert.AreEqual(
                 1.0f,
@@ -2491,17 +2504,329 @@ namespace VoXR.Tests.Runtime
                 0.001f,
                 "not charged: approach target {target} is matchable from \"target\""
             );
-            Assert.AreEqual("approach_target", results[1].Command.Intent);
-            Assert.AreEqual(2f / 3f, results[1].Command.Score, 0.001f);
-            Assert.AreEqual("hotel one", results[1].Command.GetSlot("target"));
 
             // Control: spoken in full, "approach" terminates the run and both keep 1.00.
+            // Unedited, and now the only place in this test where a second command fires at
+            // all — which makes it carry more than it used to.
             var control = parser.Parse("cease fire approach target hotel one");
 
             Assert.AreEqual(2, control.Length);
             Assert.AreEqual(1.0f, control[0].Command.Score, 0.001f);
             Assert.AreEqual(1.0f, control[1].Command.Score, 0.001f);
         }
+
+        // --- The leading-required-miss bar (issue #124, design DR-1/DR-2/DR-3/DR-8) ---
+        //
+        // A candidate whose FIRST required element matched nothing may compete and consume,
+        // but may not fire. These pin the rule itself, the shield that makes refuse-to-FIRE
+        // the right fork, and the three things it must NOT do: bar an interior miss, bar a
+        // leading unmatched OPTIONAL, or branch on element type.
+
+        [Test]
+        public void Coverage_LeadingDebris_DoesNotCostTheCommandThatFollowsIt()
+        {
+            // The shape that makes refuse-to-FIRE the right fork and refuse-to-compete the wrong
+            // one (issue #124, DR-4) — and the suite had no test for it before this feature.
+            //
+            // VoXR's two coverage terms are asymmetric. The trailing term stops at the first
+            // admissible start (that excusal IS issue #82); the LEADING term, SkippedBefore, is
+            // a bare prefix subtraction with no excusal at all. So leading debris is charged
+            // unconditionally to whichever candidate wins the round — and the only reason that
+            // has never hurt anyone is that a leading-missed candidate wins round 1 and CONSUMES
+            // the debris, re-basing searchStart past it before the real command is ever scored.
+            //
+            // The phantom is therefore a shield. Barring it from FIRING keeps the shield;
+            // barring it from COMPETING removes it. Under refuse-to-compete cease_fire would be
+            // charged all three leading tokens and score 2/(2+3) = 0.4000 — below the gate, so
+            // the whole utterance would fire nothing. On the 699-row corpus that mutation
+            // destroys 11 commands scoring 1.0000 today, which is issue #124's own failure class
+            // pointed the other way.
+            //
+            // The 1.0000 assertion is what carries that mutation. Asserting only the count and
+            // the intent would pass under refuse-to-compete too, because Parse applies no
+            // threshold of its own and would still return the 0.4000 result.
+            var slots = new[] { new VoxrSlotDefinition("target", new[] { "hotel one" }) };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition("cease_fire", new[] { new[] { "cease", "fire" } }),
+                new VoxrCommandDefinition(
+                    "approach_target",
+                    new[] { new[] { "approach", "target", "{target}" } }
+                ),
+            };
+            var parser = new VoxrCommandParser(slots, commands);
+
+            var results = parser.Parse("target hotel one cease fire");
+
+            Assert.AreEqual(1, results.Length, "the barred round emits nothing");
+            Assert.AreEqual("cease_fire", results[0].Command.Intent);
+            Assert.AreEqual(
+                1.0f,
+                results[0].Command.Score,
+                0.001f,
+                "the barred candidate still consumed the debris, so SkippedBefore charges nothing"
+            );
+        }
+
+        [Test]
+        public void LeadingMiss_TheReportedShapes_FireOnlyTheCommandThatWasSpoken()
+        {
+            // Issue #124 verbatim, on the reporter's own grammar. All three parser-visible rows
+            // in one fixture, because the third is what keeps the first two honest.
+            var slots = new[] { VoxrSlotDefinition.NumberSequence("track", 1, 4) };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "query_time_to_target",
+                    new[] { new[] { "time", "to", "target" } }
+                ),
+                new VoxrCommandDefinition(
+                    "intercept_target",
+                    new[] { new[] { "intercept", "track", "{track}" } }
+                ),
+            };
+            var parser = new VoxrCommandParser(slots, commands);
+
+            // The report: a read-only query executed a manoeuvre order. Round 2 matched
+            // "track" + the digits and scored 0.6667 with "intercept" NEVER SPOKEN, and nothing
+            // downstream could tell the two commands came from one utterance.
+            var reported = parser.Parse("time to target track one two four four");
+
+            Assert.AreEqual(1, reported.Length, "the phantom intercept_target is gone");
+            Assert.AreEqual("query_time_to_target", reported[0].Command.Intent);
+            Assert.AreEqual(
+                1.0f,
+                reported[0].Command.Score,
+                0.001f,
+                "the legitimate command is unharmed — no score moves under the bar"
+            );
+
+            // The same phantom fires STANDALONE, in round 1, with no first command present:
+            // at any bufferWindow a pause longer than the window delivers exactly this tail.
+            // Anything scoped to "the second command" would leave this open.
+            Assert.AreEqual(
+                0,
+                parser.Parse("track one two four four").Length,
+                "the standalone round-1 shape is closed too"
+            );
+
+            // The row that keeps the test honest: a bar that barred everything would pass both
+            // assertions above. Spoken with its verb, the command is untouched.
+            var genuine = ParseOne(parser, "intercept track one two four four");
+
+            Assert.AreEqual("intercept_target", genuine.Command.Intent);
+            Assert.AreEqual(1.0f, genuine.Command.Score, 0.001f);
+            Assert.AreEqual("one two four four", genuine.Command.GetSlot("track"));
+        }
+
+        [Test]
+        public void LeadingMiss_AsksWhichElementWasMissed_NotHowMany()
+        {
+            // The distinction the whole feature rests on, pinned as a contrast on one grammar.
+            // Both utterances drop exactly ONE required element and both would land on 0.6667;
+            // a threshold sees the same number twice and cannot tell them apart. The bar asks
+            // WHICH element went missing, and only the second one loses its verb.
+            //
+            // MissedLiteral_SlotStillExtracted already pins the interior half's value on its
+            // own. This exists for the comparison — delete the second assertion and the first
+            // stops being evidence about the bar at all.
+            var parser = new VoxrCommandParser(
+                BurnSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "decelerate_by",
+                        new[] { new[] { "decelerate", "by", "{burn_level}" } }
+                    ),
+                }
+            );
+
+            // Interior miss: the verb was spoken, the function word was dropped. The action is
+            // still identified and the score reports the damage — untouched by the bar (G-3).
+            var interior = ParseOne(parser, "decelerate hard burn");
+
+            Assert.AreEqual("decelerate_by", interior.Command.Intent);
+            Assert.AreEqual(2f / 3f, interior.Command.Score, 0.001f);
+            Assert.AreEqual("hard burn", interior.Command.GetSlot("burn_level"));
+
+            // Leading miss: same count, same arithmetic, no verb. Nothing identifies an action.
+            Assert.AreEqual(
+                0,
+                parser.Parse("by hard burn").Length,
+                "same score, but the element that went missing was the verb"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void LeadingMiss_SkipsOptionals_InBothDirections()
+        {
+            // The latch's two failure modes (issue #124, F3), which are both silent and both
+            // produce a bar that is subtly the WRONG RULE rather than an obviously broken one.
+            //
+            // Not skipping optionals would bar a pattern for omitting something the author
+            // marked skippable — inverting the whole point of optionality. Latching inside an
+            // optional branch would be the mirror error. Optional elements contribute to
+            // neither side of the required ledger (scoring DR-7) and contribute nothing here.
+            //
+            // Pinned as BEHAVIOUR, not mechanism: the shipped latch derives "first required"
+            // from that ledger, so it cannot forget the skip — but this test survives a future
+            // re-shaping of the latch, which is the point of writing it this way.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "switch_weapons",
+                        new[] { new[] { "?please", "switch", "to", "weapons" } }
+                    ),
+                }
+            );
+
+            // The leading element is an UNMATCHED OPTIONAL. It is skipped when locating the
+            // first required element, so "switch" is it — and "switch" matched.
+            var polite = ParseOne(parser, "switch to weapons");
+
+            Assert.AreEqual("switch_weapons", polite.Command.Intent);
+            Assert.AreEqual(
+                1.0f,
+                polite.Command.Score,
+                0.001f,
+                "an omitted optional drops out of both sides of the ratio"
+            );
+
+            // Same pattern, same omitted optional — but now the first REQUIRED element is what
+            // went missing. That is the one the bar is about.
+            Assert.AreEqual(
+                0,
+                parser.Parse("to weapons").Length,
+                "the first REQUIRED element is what missed, optional or not"
+            );
+
+            // The optional SLOT arm of the same rule. An unmatched optional literal and an
+            // unmatched optional slot are two different branches of TryMatchScored — the first
+            // falls out of IsOptionalLiteral, the second out of the isSlot/isOptional path —
+            // and only one of them is exercised above. DR-2 refused to let element type split
+            // the rule on the required side; the skip has to be uniform on the optional side
+            // too, or a pattern led by a droppable ARGUMENT gets barred for dropping it.
+            var slotLed = new VoxrCommandParser(
+                new[] { new VoxrSlotDefinition("quantity", new[] { "all", "two" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "launch_salvo",
+                        new[] { new[] { "{?quantity}", "launch", "salvo" } }
+                    ),
+                }
+            );
+
+            var omitted = ParseOne(slotLed, "launch salvo");
+
+            Assert.AreEqual("launch_salvo", omitted.Command.Intent);
+            Assert.AreEqual(
+                1.0f,
+                omitted.Command.Score,
+                0.001f,
+                "a leading optional SLOT is skipped when locating the first required element"
+            );
+
+            // And the mirror: with the optional slot present but the first required element
+            // gone, the bar does apply.
+            Assert.AreEqual(
+                0,
+                slotLed.Parse("all salvo").Length,
+                "the optional slot matched; 'launch' is the anchor and it did not"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void LeadingMiss_AppliesToASlotAnchor_NotOnlyALiteralOne()
+        {
+            // DR-2, uniform over element type — and this test is its ONLY evidence. The 699-row
+            // corpus contains no pattern whose first required element is a slot, so the
+            // measurement has no opinion here and DR-2 was ruled on principle:
+            //
+            //   the first required element is the pattern's ANCHOR, and a pattern that matched
+            //   nothing of its anchor has identified nothing, whether that anchor is a verb or
+            //   a value — and a type branch here would be a rule the parser cannot explain to
+            //   an author.
+            //
+            // Six required elements, not three, so the CONTROL below is meaningful: at three the
+            // pattern would score 0.3333 and prove nothing about clearing a gate. (Note Parse
+            // itself applies no gate at all — the length buys the control, not the bar.)
+            var slots = new[] { new VoxrSlotDefinition("track", new[] { "alpha one" }) };
+            var commands = new[]
+            {
+                new VoxrCommandDefinition(
+                    "hold_track",
+                    new[] { new[] { "{track}", "hold", "steady", "on", "my", "mark" } }
+                ),
+            };
+            var parser = new VoxrCommandParser(slots, commands);
+
+            // The anchor is a SLOT and it matched nothing. Five of six elements matched, so this
+            // is a strong candidate by every count the parser keeps — and it still may not fire.
+            Assert.AreEqual(
+                0,
+                parser.Parse("hold steady on my mark").Length,
+                "a slot anchor that matched nothing bars the candidate, same as a literal one"
+            );
+
+            // Control, on the same grammar with the anchor PRESENT and a later element dropped:
+            // 5/6 and it fires. Without this a mis-built grammar (a slot that never matches, a
+            // typo'd literal) would pass the assertion above vacuously.
+            var control = ParseOne(parser, "alpha one hold steady on mark");
+
+            Assert.AreEqual("hold_track", control.Command.Intent);
+            Assert.AreEqual(5f / 6f, control.Command.Score, 0.001f);
+            Assert.AreEqual("alpha one", control.Command.GetSlot("track"));
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void LeadingMiss_ABarredIncumbentBeatenByACleanRival_UnbarsTheRound()
+        {
+            // The bar is round state, not candidate state, and it therefore has to be CLEARED
+            // when a better candidate is adopted. `bestLeadingRequiredMissed` is assigned
+            // unconditionally at the adopt site, like every other best* field — a barred
+            // candidate can be the incumbent for part of the scan and still lose it.
+            //
+            // Nothing else in this suite exercises that. In every other leading-miss test the
+            // barred candidate is either the only candidate or is adopted LAST, so a sticky
+            // variant — `bestLeadingRequiredMissed |= matchResult.LeadingRequiredMissed;` —
+            // passes all of them while silently barring a round a clean command won. That edit
+            // is a plausible tidy-up, which is exactly why this pins the behaviour.
+            //
+            // The fixture makes `advance` the incumbent first: registration order puts it first,
+            // and it scores 2/3 with "alpha" missing. `hold` is then scored, matches the buffer
+            // exactly at 1.0, and wins. If adoption did not clear the flag, the round would be
+            // barred by the candidate that LOST it and Parse would return nothing.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "advance",
+                        new[] { new[] { "alpha", "bravo", "charlie" } }
+                    ),
+                    new VoxrCommandDefinition("hold", new[] { new[] { "bravo", "charlie" } }),
+                }
+            );
+
+            var result = ParseOne(parser, "bravo charlie");
+
+            Assert.AreEqual("hold", result.Command.Intent, "the clean rival won the round");
+            Assert.AreEqual(
+                1.0f,
+                result.Command.Score,
+                0.001f,
+                "and the round is not barred by the candidate it beat"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // --- Back to the numbers Documentation~/scoring.md publishes (issue #83) ---
 
         [Test]
         public void Coverage_LosingCandidateTerms_MatchWhatTheWorkedExamplesPublish()
@@ -3167,15 +3492,48 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void MissedLiteral_TwoElementPattern_StillRejected()
+        public void MissedLiteral_TwoElementPattern_BarredByPosition()
         {
-            // Deliberately preserved, not an oversight: "cease fire" heard as "fire" scores
-            // (0 + 1) / 2 = 0.5 — half its evidence — and stays under the gate. It was 0.25.
-            // Parse itself applies no threshold, so the command IS returned here; the
-            // recogniser-level counterpart proves it does not fire.
+            // Until issue #124 this asserted the 0.50 score itself: "cease fire" heard as
+            // "fire" is half its evidence, and Parse applies no threshold, so the command WAS
+            // returned here even though the recogniser-level counterpart refused to fire it.
+            //
+            // The bar now refuses it earlier and for a different reason. "cease" is the
+            // pattern's first required element and it matched nothing, so the candidate is
+            // barred by POSITION before its score is ever consulted — it still wins its round
+            // and still consumes "fire", but it may not produce a result. The 0.50 arithmetic
+            // is unchanged and still reachable; it is pinned on a TRAILING miss by the
+            // companion below, which is the shape the bar does not touch.
+            //
+            // This is a real change to a PUBLIC surface — an integrator calling Parse directly
+            // on "fire" got one result at 0.50 and now gets none — and it is exactly the
+            // subtraction the feature designs. Nothing that was FIRING stops firing: 0.50 was
+            // already under the 0.60 gate.
             var parser = MissedLiteralParser();
 
-            var result = ParseOne(parser, "fire");
+            Assert.AreEqual(
+                0,
+                parser.Parse("fire").Length,
+                "refused by position, before score is consulted"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void MissedLiteral_TwoElementPattern_TrailingMiss_StillScoresAHalf()
+        {
+            // The companion to the test above, and the reason transforming it did not simply
+            // delete a pinned number. Documentation~/scoring.md publishes 0.50 as what a
+            // two-element pattern is worth when one required literal is dropped, and that
+            // arithmetic is untouched by issue #124 — so it is pinned here on the half of the
+            // pattern the bar leaves alone.
+            //
+            // "cease fire" heard as "cease": the leading element MATCHED and the trailing one
+            // did not, so the bar is not tripped and the score is reported exactly as before.
+            // (1 + 0) / 2 = 0.50, still under the gate, still not firing.
+            var parser = MissedLiteralParser();
+
+            var result = ParseOne(parser, "cease");
 
             Assert.AreEqual("cease_fire", result.Command.Intent);
             Assert.AreEqual(0.5f, result.Command.Score, 0.001f);
@@ -4530,10 +4888,17 @@ namespace VoXR.Tests.Runtime
         {
             // Losing one required element out of a frame worth D leaves (D-1)/D, so a
             // two-element pattern drops to 0.5 — under the default minScore, which rejects
-            // BOTH siblings. MissedLiteral_TwoElementPattern_StillRejected pins the score and
-            // its recogniser-level counterpart pins that nothing fires. So the tie the message
-            // describes is unreachable at shipped settings and reporting it would tell the
-            // author something untrue.
+            // BOTH siblings. MissedLiteral_TwoElementPattern_TrailingMiss_StillScoresAHalf pins
+            // that score and the recogniser-level counterpart pins that nothing fires. So the
+            // tie the message describes is unreachable at shipped settings and reporting it
+            // would tell the author something untrue.
+            //
+            // Since issue #124 there is a second, independent reason it is unreachable, and it
+            // is stronger: on THIS pair the dropped discriminator is the pattern's first
+            // required element, so the leading-miss bar refuses both candidates by position
+            // whatever the threshold — see MissedLiteral_TwoElementPattern_BarredByPosition.
+            // The (D-1)/D test above is therefore conservative rather than wrong, and narrowing
+            // it is issue #124 item 3's job, not this test's.
             //
             // Still DETECTED: the relation admits it, and a consumer that applies its own
             // threshold may care. Only the author-facing warning is withheld.
@@ -4751,6 +5116,74 @@ namespace VoXR.Tests.Runtime
                 EagerCommitVerdict.None,
                 parser.TryEagerCommit(tokens, null, 0.6f, 0f),
                 "the sibling refusal, which is the branch that calls AreSiblingRivals"
+            );
+
+            Assert.That(
+                () =>
+                {
+                    for (int i = 0; i < 100; i++)
+                        parser.TryEagerCommit(tokens, null, 0.6f, 0f);
+                },
+                Is.Not.AllocatingGCMemory()
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // ---------- Leading-miss latch cost (issue #124, G-5) ----------
+
+        [Test]
+        public void LeadingMissLatch_AllocatesNothingPerCall()
+        {
+            // The leading-miss latch (issue #124) lives in TryMatchScored, which runs on the
+            // innermost (command x pattern x startIdx) triple of both selection paths. It is
+            // one stack local plus one MatchResult field, and at most one store per required
+            // miss — and this is what says the walk stays allocation-free, which is what G-5
+            // asks. (F15's "two stack locals" predates the field landing on MatchResult; the
+            // field is the per-candidate half and is why the struct's packing was checked.)
+            //
+            // Measured over TryEagerCommit for the reason the test above records: Parse
+            // necessarily allocates the results it returns and can never be pinned at zero,
+            // whereas the eager scan drives the same walk and returns an enum. And measured with
+            // the AllocatingGCMemory constraint, NOT GC.GetAllocatedBytesForCurrentThread —
+            // that counter is inert in this environment (0 B after a deliberate 1 MB
+            // allocation), so an assertion written against it is green whatever the code does.
+            //
+            // Literal-only grammar, because the constraint admits no budget and a matched slot
+            // allocates its own captured value.
+            //
+            // TWO commands, and deliberately so. The obvious fixture — one leading-missed
+            // pattern — makes the verdict itself depend on the bar, so deleting the bar breaks
+            // this test as collateral and F14's "the eager mutation must fail the eager test
+            // ALONE" can never be met. Here the winner is `hold`, which matches the buffer
+            // exactly and is not leading-missed, so the verdict is Commit whether or not the bar
+            // exists; `advance` is the LOSING candidate whose absent "alpha" drives the latch on
+            // every call. What is measured is unchanged and what is pinned is now independent of
+            // the gate, which is what a measurement instrument should be.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "advance",
+                        new[] { new[] { "alpha", "bravo", "charlie" } }
+                    ),
+                    new VoxrCommandDefinition("hold", new[] { new[] { "bravo", "charlie" } }),
+                }
+            );
+
+            // ONE array instance, hoisted OUT of the measured delegate: allocating it inside
+            // would be the test failing on its own garbage.
+            var tokens = new[] { "bravo", "charlie" };
+
+            // The latch has to be REACHED, or this measures a walk that never misses a leading
+            // required element — "alpha" is absent from the buffer, so scoring `advance` runs
+            // the latch site on every call even though `hold` is what wins. This call is also
+            // the warm-up: the extendability analysis and the coverage tables are built lazily
+            // on the first eager check and are per-parser costs, not per-call ones.
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(tokens, null, 0.6f, 0f),
+                "the fully-matched rival wins, so this verdict does not depend on the bar"
             );
 
             Assert.That(

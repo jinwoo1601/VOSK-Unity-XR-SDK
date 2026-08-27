@@ -834,8 +834,19 @@ namespace VoXR.Tests.Runtime
         public void MissedLiteral_TwoElementPattern_DoesNotFire()
         {
             // The other half of §5.1, and the reason the miss cost was reduced rather than
-            // removed: "cease fire" heard as "fire" is genuinely ambiguous, scores
-            // (0 + 1) / 2 = 0.5, and must stay under the gate.
+            // removed: "cease fire" heard as "fire" is genuinely ambiguous and must not fire.
+            //
+            // The OUTCOME below is unchanged since issue #124, but the mechanism that produces
+            // it is not, so the old reasoning ("scores (0 + 1) / 2 = 0.5, and must stay under
+            // the gate") no longer describes what happens. "cease" is the pattern's first
+            // required element and it matched nothing, so the leading-miss bar refuses the
+            // candidate a result and the parse returns empty — the utterance never reaches the
+            // score gate at all. It is reported unrecognised one step earlier than it used to
+            // be, which is also why the rejectReason recorded in LastMatchDiagnostics is now
+            // "no match" rather than "score 0.50 < minScore 0.60".
+            //
+            // The 0.50 arithmetic itself is untouched and is pinned at parser level by
+            // MissedLiteral_TwoElementPattern_TrailingMiss_StillScoresAHalf.
             ConfigureWithSyncDefaults();
 
             int recognisedCount = 0;
@@ -847,6 +858,142 @@ namespace VoXR.Tests.Runtime
 
             Assert.AreEqual(0, recognisedCount, "half the evidence must not fire a command");
             Assert.AreEqual("fire", unrecognised);
+        }
+
+        // -------- Leading-required-miss bar (issue #124, DR-1) --------
+
+        [Test]
+        public void LeadingRequiredMiss_AboveTheGate_FiresOnlyTheCommandThatWasSpoken()
+        {
+            // Issue #124 as reported, at the level the report is about. Every other
+            // recogniser-level pin for this rule uses a candidate that was ALREADY below
+            // minScore and therefore already not firing — 0.50 for the two-element miss, 0.25
+            // for the pending case. Those prove the bar does no harm; none of them proves it
+            // does the thing it was built for, because none reaches the branch that fires.
+            //
+            // This one does. The phantom scores 0.6667, clears the 0.60 gate, fills its slot,
+            // and is complete — so before the bar it went straight down the accepting branch and
+            // raised OnCommandRecognised for a command whose verb ("intercept") was never
+            // spoken. A read-only query executed a manoeuvre order, and a subscriber could not
+            // tell: OnCommandRecognised fires once per command, so the two arrived looking like
+            // two things the speaker asked for.
+            _recogniser.Configure(
+                new[] { VoxrSlotDefinition.NumberSequence("track", 1, 4) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "query_time_to_target",
+                        new[] { new[] { "time", "to", "target" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "intercept_target",
+                        new[] { new[] { "intercept", "track", "{track}" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 0f;
+            _recogniser.CommandCooldown = 0f;
+
+            int firedCount = 0;
+            VoxrCommand? lastFired = null;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                firedCount++;
+                lastFired = cmd;
+            };
+
+            _recogniser.InjectText("time to target track one two four four");
+
+            Assert.AreEqual(1, firedCount, "the phantom second command no longer fires");
+            Assert.AreEqual("query_time_to_target", lastFired.Value.Intent);
+            Assert.AreEqual(
+                1.0f,
+                lastFired.Value.Score,
+                0.001f,
+                "and the command that WAS spoken is untouched — no score moves under the bar"
+            );
+
+            // Control: spoken with its verb, the same command fires normally at the same gate.
+            firedCount = 0;
+            _recogniser.InjectText("intercept track one two four four");
+
+            Assert.AreEqual(1, firedCount, "a genuine command is unaffected");
+            Assert.AreEqual("intercept_target", lastFired.Value.Intent);
+            Assert.AreEqual("one two four four", lastFired.Value.GetSlot("track"));
+        }
+
+        [Test]
+        public void EagerFlush_LeadingRequiredMiss_KeepsTheBufferForTheRestOfTheUtterance()
+        {
+            // The eager refusal (issue #124, DR-5) at the level where its harm actually shows —
+            // the other half of TryEagerCommit_LeadingRequiredMiss_ReturnsNone, which drives the
+            // gate as a pure function and so cannot observe what happens after a refusal.
+            //
+            // That gap is a documented trap in this suite, not a hypothetical: the section note
+            // above records that issue #74 item 2's two most important tests were never built
+            // "because every eager test called TryEagerCommit as a pure function and so
+            // structurally could not observe what happened after a refusal". Issue #70's gate
+            // carries both halves for the same reason (see EagerFlush_PatternStillOwingItsLast
+            // Word_FiresTheRightCommand); this one had only the pure-function half.
+            //
+            // What the refusal actually protects is the BUFFER — not G-1, which the flush-path
+            // bar secures on its own. Commit makes the recogniser call FlushBuffer, which
+            // consumes and CLEARS the accumulated transcript. So without the refusal the first
+            // half below is flushed and thrown away, and "target hotel one" then arrives to an
+            // empty buffer as a separate utterance instead of completing the command.
+            _recogniser.Configure(MakeSlots(), MakeCommands());
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+            _recogniser.EagerFlushOnCompleteMatch = true;
+
+            int firedCount = 0;
+            VoxrCommand? lastFired = null;
+            _recogniser.OnCommandRecognised += cmd =>
+            {
+                firedCount++;
+                lastFired = cmd;
+            };
+
+            // "missiles target" against launch {weapon} target {target}: "launch" was never
+            // heard, so this is leading-missed. It must not commit early.
+            _recogniser.InjectText("missiles target");
+
+            Assert.AreEqual(0, firedCount, "a leading-missed candidate must not commit early");
+
+            // The buffer has to have SURVIVED that refusal. If the eager gate had committed,
+            // this arrives to an emptied buffer and cannot complete anything.
+            _recogniser.InjectText("hotel one");
+
+            Assert.AreEqual(
+                0,
+                firedCount,
+                "still barred on the merged buffer — the verb is missing from the whole utterance"
+            );
+
+            // Drain what accumulated, so the control below starts from an empty buffer. The
+            // flush re-scores "missiles target hotel one" and bars it again, firing nothing —
+            // which is itself the proof that the two injections above were being MERGED rather
+            // than silently dropped, since a dropped buffer would have nothing left to flush.
+            string unrecognised = null;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(0, firedCount, "the barred buffer flushes to nothing");
+            Assert.AreEqual(
+                "missiles target hotel one",
+                unrecognised,
+                "and it flushes the MERGED text, which is what proves the buffer survived"
+            );
+
+            // The control, now on a clean buffer: the same command spoken with its verb, split
+            // across two injections exactly as above, merges and fires. Without this the two
+            // assertions above would also pass if eager flushing were simply broken.
+            _recogniser.InjectText("launch missiles");
+            _recogniser.InjectText("target hotel one");
+
+            Assert.AreEqual(1, firedCount, "the split utterance still merges and fires");
+            Assert.AreEqual("launch_weapon", lastFired.Value.Intent);
+            Assert.AreEqual("hotel one", lastFired.Value.GetSlot("target"));
         }
 
         [Test]

@@ -917,6 +917,60 @@ namespace VoXR.Tests.Runtime
             );
         }
 
+        // ---------- Leading-required-miss bar (issue #124, design DR-5) ----------
+
+        [Test]
+        public void TryEagerCommit_LeadingRequiredMiss_ReturnsNone()
+        {
+            // The leading-required-miss bar on the eager path (issue #124, design DR-5), and the
+            // one condition in this method that is NOT inherited from the comparator. DR-3 puts
+            // the bar in ParseInternal's post-selection block, which TryEagerCommit never calls,
+            // so without this gate a leading-missed candidate commits early — while every
+            // flush-path test stays green, because the flush path is correct and is simply
+            // never reached.
+            //
+            // What that costs is the BUFFER, not a wrong command. Canon (design §2.4) says "an
+            // eager commit IS a fire"; it is not — Commit makes the recogniser call FlushBuffer,
+            // which routes back into ParseInternal, where the bar refuses the winner anyway. The
+            // damage is that the accumulated transcript is consumed and reported unrecognised a
+            // whole buffer window early, so a continuation that would have completed a genuine
+            // command arrives to an emptied buffer and is parsed as a separate utterance. That
+            // is the shape EagerFlush_SplitCommand_FiresWhenSecondHalfCompletes protects from
+            // the other side. Recorded as an erratum against §2.4; DR-5's ruling stands.
+            //
+            // The fixture has to reach the bar and NO earlier refusal, and that is the whole
+            // difficulty — every gate BELOW the bar would also answer None, which would make the
+            // mutation check vacuous. All five are cleared deliberately:
+            //   score      (1 + 1) / 3 = 0.667, over the 0.6 gate;
+            //   issue #66  no slots at all, so no required slot can be unfilled;
+            //   issue #70  the miss is LEADING, so "bravo" and "charlie" match after it and
+            //              requiredAfterLastMatch is reset to zero — no required TAIL;
+            //   whole-buffer  the match starts at token 0 and ends at tokens.Length;
+            //   sibling    a lone command with a lone pattern has no rival to tie with.
+            // Drop any one of those and deleting the bar still returns None and this test still
+            // passes, pinning nothing.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(Cmd("advance", P("alpha", "bravo", "charlie")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("bravo charlie"), null, 0.6f, 0.4f),
+                "the leading required literal was never spoken, so this may not commit early"
+            );
+
+            // Control, on the same grammar: with the leading element present the same pattern
+            // commits. Without it a bar that refused everything would pass the assertion above.
+            Assert.AreEqual(
+                EagerCommitVerdict.Commit,
+                parser.TryEagerCommit(Tok("alpha bravo charlie"), null, 0.6f, 0.4f),
+                "the anchor is present, so nothing about this candidate is barred"
+            );
+        }
+
+        // ---------- Back to the unfilled required slot (issue #66) ----------
+
         [Test]
         public void TryEagerCommit_MedialUnfilledRequiredSlot_ReturnsNone()
         {
@@ -1530,7 +1584,7 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
-        public void TryEagerCommit_LeadingTwoElementTie_RefusesForScoreAtDefaultAndForTheTieBelowIt()
+        public void TryEagerCommit_LeadingTwoElementTie_RefusesForScoreAtDefaultAndForTheBarBelowIt()
         {
             // The asymmetry between this gate and the author-facing warning, pinned rather than
             // left to be discovered. "cease fire" / "resume fire" lose their discriminator to
@@ -1547,6 +1601,16 @@ namespace VoXR.Tests.Runtime
             // not take it: "fire" is the last element and it matched.
             // No LogAssert.Expect: this pair is precisely the one the warning stays quiet about,
             // which is the point of the test.
+            //
+            // Dominated as an eager-REFUSAL cause since issue #124: the discriminator being
+            // LEADING is exactly what the leading-miss bar refuses, and the bar sits above the
+            // sibling condition, so below the default threshold it is the bar — not the tie —
+            // that answers None. Both assertions still hold, and the FIRST one is still refused
+            // by the score condition, because the bar was placed after the score gate rather
+            // than before it. What this test no longer covers is the sibling refusal at a
+            // leading discriminator: that shape can never reach the sibling condition again.
+            // TryEagerCommit_MedialSiblingDiscriminator_RefusesOnTheTie carries the sibling
+            // refusal on a shape the bar does not reach.
             VoxrCommandParser Build() =>
                 new VoxrCommandParser(
                     Slots(),
@@ -1565,7 +1629,8 @@ namespace VoXR.Tests.Runtime
             Assert.AreEqual(
                 EagerCommitVerdict.None,
                 Build().TryEagerCommit(Tok("fire"), null, 0.4f, 0.4f),
-                "below the default the tie is live, and the sibling condition is what refuses"
+                "below the default the score no longer refuses, and the leading-miss bar does "
+                    + "— dominating the sibling condition, which this shape can no longer reach"
             );
         }
 
