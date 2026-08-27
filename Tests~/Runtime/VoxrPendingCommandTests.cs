@@ -195,6 +195,58 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void LeadingRequiredMiss_OpensNoPending()
+        {
+            // DR-8 of issue #124, and the one place where the leading-miss bar is visible on the
+            // PENDING path rather than the firing one. It needs no special-casing in the pending
+            // code — pending is fed by RESULTS, and a barred round produces none — but "no
+            // special-casing" is not the same as "no behaviour change", and this is the change.
+            //
+            // "missiles target" against launch {weapon} target {target}: "launch" was never
+            // spoken, {weapon} takes "missiles", the "target" literal matches, and {target} is
+            // left unfilled. Two matched against two missed, so the admission rule lets it
+            // through at 0.25 — and BEFORE this feature that was enough to route it, because
+            // allowPartialMatch sends any incomplete candidate to slot-fill regardless of score.
+            // The recogniser would open a pending command, and then ask the speaker to fill in
+            // the argument of a command whose VERB they never uttered.
+            //
+            // Under the bar the parse yields nothing, so there is no candidate to hold open and
+            // the utterance is simply unrecognised. This is why DR-8 refuses to route barred
+            // candidates to slot-fill: there is no command to hold open.
+            ConfigureSync(allowPartial: true);
+
+            VoxrCommand? pending = null;
+            _recogniser.OnCommandPending += cmd => pending = cmd;
+            VoxrCommand? recognised = null;
+            _recogniser.OnCommandRecognised += cmd => recognised = cmd;
+            string unrecognised = null;
+            _recogniser.OnUnrecognisedSpeech += text => unrecognised = text;
+
+            _recogniser.InjectText("missiles target");
+
+            Assert.IsFalse(recognised.HasValue, "nothing fires — the verb was never spoken");
+            Assert.IsFalse(
+                pending.HasValue,
+                "and nothing is held open: a barred candidate is not a command to complete"
+            );
+            Assert.IsFalse(_recogniser.HasPendingCommand);
+            Assert.AreEqual(
+                "missiles target",
+                unrecognised,
+                "zero results reaches the recogniser as OnUnrecognisedSpeech, as it already did"
+            );
+
+            // Control on the same grammar: spoken with its verb and missing the same argument,
+            // the command still routes to slot-fill exactly as before. The bar took the phantom,
+            // not the feature.
+            _recogniser.InjectText("launch missiles target");
+
+            Assert.IsTrue(pending.HasValue, "a genuine incomplete command still opens a pending");
+            Assert.IsTrue(_recogniser.HasPendingCommand);
+            Assert.AreEqual("missiles", pending.Value.GetSlot("weapon"));
+        }
+
+        [Test]
         public void IncompleteNewCommand_DoesNotCancelALivePending()
         {
             // The Step 4 half of #73, and the reason the completeness term has to be read twice.

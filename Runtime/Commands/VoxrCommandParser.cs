@@ -1634,9 +1634,17 @@ namespace VoXR.Commands
                 // frame worth D leaves (D-1)/D, so a two-element pattern drops to 0.5 — under
                 // the shipped minScore default, which rejects BOTH siblings. Nothing fires,
                 // rather than the wrong thing, and this repo already pins that twice
-                // (MissedLiteral_TwoElementPattern_StillRejected and its recogniser-level
+                // (MissedLiteral_TwoElementPattern_BarredByPosition and its recogniser-level
                 // counterpart _DoesNotFire). Warning "the wrong intent can fire" there is
                 // false, and the remedy it offers is inert when no command fires at all.
+                //
+                // Since issue #124 those two pin it for a different reason than the score: when
+                // the dropped element is the pattern's FIRST required one, the leading-miss bar
+                // refuses the candidate by position before the gate is consulted at all. That
+                // makes this reachability test conservative rather than wrong — a leading
+                // discriminator can never fire at any D, so a set the test admits at D >= 3 may
+                // still be unable to fire. Narrowing it is item 3's (feat-leading-miss-warning),
+                // not this scan's: no set in the package's own grammar differs at element 1.
                 //
                 // Judged against the DEFAULT, because the parser constructor is never handed the
                 // recogniser's configured minScore. An author who lowers it below (D-1)/D
@@ -2283,6 +2291,7 @@ namespace VoXR.Commands
                 int bestEndIdx = 0;
                 int bestConsumedEndIdx = 0;
                 int bestSlotCount = 0;
+                bool bestLeadingRequiredMissed = false;
 
                 // Declared HERE, with the round's other best* locals, and not outside the loop:
                 // selection restarts per extraction round, so a rival recorded in round 1 must
@@ -2361,6 +2370,7 @@ namespace VoXR.Commands
                                 bestEndIdx = matchResult.EndIdx;
                                 bestConsumedEndIdx = matchResult.ConsumedEndIdx;
                                 bestSlotCount = matchResult.SlotCount;
+                                bestLeadingRequiredMissed = matchResult.LeadingRequiredMissed;
 
                                 // Clear-on-adopt: a new incumbent has its own rivals, and the
                                 // old one's are about a candidate that no longer wins. This rule
@@ -2500,6 +2510,37 @@ namespace VoXR.Commands
                 // Safety: prevent infinite loop if a match consumes no tokens
                 if (bestEndIdx <= searchStart)
                     break;
+
+                // The leading-required-miss bar (issue #124, design DR-1/DR-3). The winner
+                // matched nothing of its pattern's FIRST required element — in a command
+                // grammar, its verb — so there is no evidence any action was requested, only
+                // that some words matched a pattern's tail. It still WON the round and still
+                // consumes its span: that is what re-bases searchStart past leading debris and
+                // keeps SkippedBefore off the next command, which is the whole of why DR-4 chose
+                // refuse-to-FIRE over refuse-to-compete. What it may not do is produce a result.
+                //
+                // Placed HERE, above ComputeConfidence, the slot-array copy, the VoxrCommand
+                // construction, the sibling-tie write and the Editor diagnostic, for two
+                // reasons:
+                //   - progress is already guaranteed by the guard above, so this continue cannot
+                //     spin and needs no second guard;
+                //   - a barred round should allocate nothing. In a player build with a
+                //     literal-only winner and _recordSiblingTies off nothing below here
+                //     heap-allocates anyway (the command types are all readonly struct), but the
+                //     Editor diagnostic allocates three times per round and any slot-carrying
+                //     winner allocates its slot array.
+                //
+                // It also keeps a barred round from writing a _tiedSiblingBuf entry for a result
+                // slot it never fills. That is an invariant worth holding because it is free
+                // here — NOT because violating it would corrupt output: the buffer is written at
+                // index _resultCount before the increment, so a later emitting round overwrites
+                // the slot, and an unemitted slot sits at or past _resultCount where the
+                // accessor's contract says nothing reads it.
+                if (bestLeadingRequiredMissed)
+                {
+                    searchStart = bestEndIdx;
+                    continue;
+                }
 
                 // No post-selection adjustment: the score a candidate was SELECTED on is the
                 // score it is reported with.
@@ -2983,6 +3024,18 @@ namespace VoXR.Commands
             // of matched-optional credit to bite, which no pattern in this package carries.
             public int MatchedRequired;
             public int MissedRequired;
+
+            // Whether the pattern's FIRST REQUIRED element matched nothing — the verb, in a
+            // command grammar. Optional elements are skipped when locating it, so a pattern led
+            // by an unmatched optional is not flagged, and a pattern with no required elements
+            // at all never sets it. Drives the leading-miss bar in ParseInternal and the eager
+            // refusal in TryEagerCommit (issue #124, design DR-1/DR-3/DR-5).
+            //
+            // Orthogonal to the two counts above, and the distinction is the whole rule: they
+            // ask HOW MANY required elements were missed, this asks WHICH one. Losing an
+            // argument leaves the action identified; losing the verb leaves no evidence any
+            // action was requested. A threshold cannot express that difference.
+            public bool LeadingRequiredMissed;
         }
 
         // How a candidate ranks against the current incumbent. Three states rather than the
@@ -3171,6 +3224,14 @@ namespace VoXR.Commands
             // feed the admission rule in CompareCandidate, not the score.
             int matchedRequired = 0;
             int missedRequired = 0;
+            // The leading-required-miss bar (issue #124, DR-1). Latched at the two REQUIRED-miss
+            // sites below, each time guarded on both counters still being zero — which is
+            // exactly "no required element has been reached yet", because those two counters are
+            // incremented at four sites and no optional branch touches either (DR-7). Deriving
+            // "first" from the ledger rather than tracking it separately is what makes design
+            // §9's third trap — the latch must skip optionals — structurally impossible instead
+            // of a convention: this reads the counters that DEFINE "required".
+            bool leadingRequiredMissed = false;
             bool missedRequiredSlot = false;
             // Required elements that have missed since the last one that actually matched.
             // Reset by every match, so a non-zero value at the end means the pattern's TAIL
@@ -3231,6 +3292,12 @@ namespace VoXR.Commands
                     {
                         rawScore += RequiredSlotMissPenalty;
                         denominator += MatchScore;
+                        // Before the increment, or the guard can never hold (issue #124, DR-1).
+                        // Uniform over element type by DR-2: the first required element is the
+                        // pattern's ANCHOR, and a pattern that matched nothing of its anchor has
+                        // identified nothing, whether that anchor is a verb or a value.
+                        if (matchedRequired == 0 && missedRequired == 0)
+                            leadingRequiredMissed = true;
                         missedRequired++;
                         missedRequiredSlot = true;
                         // Dominated as an eager-REFUSAL cause: missedRequiredSlot refuses one
@@ -3277,6 +3344,11 @@ namespace VoXR.Commands
                         // denominator credit taken above, which this element keeps whether or
                         // not it matched.
                         rawScore += RequiredLiteralMissPenalty;
+                        // Before the increment (issue #124, DR-1). The literal half of the same
+                        // latch as the slot branch above; see the local's declaration for why
+                        // both counters being zero IS "no required element reached yet".
+                        if (matchedRequired == 0 && missedRequired == 0)
+                            leadingRequiredMissed = true;
                         missedRequired++;
                         requiredAfterLastMatch++;
                     }
@@ -3331,6 +3403,7 @@ namespace VoXR.Commands
                 ConsumedEndIdx = consumedEndIdx,
                 MatchedRequired = matchedRequired,
                 MissedRequired = missedRequired,
+                LeadingRequiredMissed = leadingRequiredMissed,
             };
         }
 
@@ -3965,6 +4038,7 @@ namespace VoXR.Commands
             int bestConsumedEndIdx = 0;
             bool bestMissedRequiredSlot = false;
             bool bestHasUnmatchedRequiredTail = false;
+            bool bestLeadingRequiredMissed = false;
 
             // The first sibling rival found tying the current incumbent, or -1. Cleared
             // whenever a new incumbent is adopted: Tied means the whole key tuple compared
@@ -4017,6 +4091,7 @@ namespace VoXR.Commands
                             bestEndIdx = matchResult.EndIdx;
                             bestMissedRequiredSlot = matchResult.MissedRequiredSlot;
                             bestHasUnmatchedRequiredTail = matchResult.HasUnmatchedRequiredTail;
+                            bestLeadingRequiredMissed = matchResult.LeadingRequiredMissed;
                             bestTiedSiblingCommandIdx = -1;
                             bestTiedSiblingPatternIdx = -1;
                         }
@@ -4041,6 +4116,14 @@ namespace VoXR.Commands
             // whose missed required elements outnumber its matched ones, so nothing that
             // sparse ever reaches these checks or the score gate above. The eager scan
             // inherits it by sharing the comparator with ParseInternal.
+            //
+            // That inheritance is specific to rules that live IN the comparator, and the
+            // leading-required-miss bar (issue #124) is deliberately not one of them: DR-3
+            // places it in ParseInternal's post-selection block, which this method does not
+            // call. So the bar reaches this path only through the explicit condition below, and
+            // that condition is load-bearing rather than defensive — delete it and a
+            // leading-missed candidate commits early and fires, with every flush-path test still
+            // passing.
             //
             // Completeness: every required SLOT must actually have matched (issue #66).
             // Nothing else here asserts that. The score arithmetic only sinks such candidates
@@ -4085,6 +4168,23 @@ namespace VoXR.Commands
             // catches that; it sits there rather than here so that it can refuse a Commit
             // without also lengthening a HoldExtendable.
             if (bestHasUnmatchedRequiredTail)
+                return EagerCommitVerdict.None;
+
+            // The leading-required-miss bar (issue #124, design DR-5). Unlike the admission rule
+            // noted above, this one is NOT inherited from the comparator — see the amended note.
+            // A candidate whose first required element matched nothing may never fire, and an
+            // eager commit IS a fire, so it must be refused here as well as at the flush.
+            //
+            // None, for the same reason the two conditions above use it: at this gate refusing
+            // costs only latency, and the flush applies the bar properly once the transcript is
+            // final. There is no case where this delays a command that would otherwise have
+            // fired correctly — a candidate this refuses could not have fired on either path.
+            //
+            // Sits AFTER the tail condition so the two completeness conditions (#66, #70) stay
+            // adjacent — they are one idea and this is a different one — and after the score
+            // gate above, which is what keeps the score gate the first refusal for a two-element
+            // pattern heard as its own tail.
+            if (bestLeadingRequiredMissed)
                 return EagerCommitVerdict.None;
 
             // The match must span the whole buffer from the first recognised token: anything

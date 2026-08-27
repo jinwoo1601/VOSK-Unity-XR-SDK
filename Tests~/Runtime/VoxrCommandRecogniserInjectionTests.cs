@@ -834,8 +834,19 @@ namespace VoXR.Tests.Runtime
         public void MissedLiteral_TwoElementPattern_DoesNotFire()
         {
             // The other half of §5.1, and the reason the miss cost was reduced rather than
-            // removed: "cease fire" heard as "fire" is genuinely ambiguous, scores
-            // (0 + 1) / 2 = 0.5, and must stay under the gate.
+            // removed: "cease fire" heard as "fire" is genuinely ambiguous and must not fire.
+            //
+            // The OUTCOME below is unchanged since issue #124, but the mechanism that produces
+            // it is not, so the old reasoning ("scores (0 + 1) / 2 = 0.5, and must stay under
+            // the gate") no longer describes what happens. "cease" is the pattern's first
+            // required element and it matched nothing, so the leading-miss bar refuses the
+            // candidate a result and the parse returns empty — the utterance never reaches the
+            // score gate at all. It is reported unrecognised one step earlier than it used to
+            // be, which is also why the rejectReason recorded in LastMatchDiagnostics is now
+            // "no match" rather than "score 0.50 < minScore 0.60".
+            //
+            // The 0.50 arithmetic itself is untouched and is pinned at parser level by
+            // MissedLiteral_TwoElementPattern_TrailingMiss_StillScoresAHalf.
             ConfigureWithSyncDefaults();
 
             int recognisedCount = 0;
