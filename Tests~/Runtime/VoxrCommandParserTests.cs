@@ -4638,6 +4638,37 @@ namespace VoXR.Tests.Runtime
         }
 
         [Test]
+        public void SiblingWarning_CancelCollisionOnAnEveryMembersAnchor_ReportsNothing()
+        {
+            // Issue #132. The discriminating value is cancel vocabulary AND is every member's
+            // first required element, so the leading-required-miss bar refuses whichever member
+            // wins the round: nothing fires, no pending opens for that set, and there is no
+            // answer for cancel to swallow. Both messages are withheld, so
+            // NoUnexpectedReceived is the whole assertion.
+            //
+            // THREE elements, not two, and that is what makes this test about the anchor
+            // condition rather than the one beside it: dropping the discriminator leaves
+            // 2 / 3 = 0.67, clear of the default minScore, so the (D - 1) / D test passes the
+            // set through and the anchor condition is the only thing withholding either
+            // message. A two-element grammar would go quiet for the wrong reason.
+            //
+            // SiblingWarning_DiscriminatorCollidingWithCancel_IsAlsoReported is the control:
+            // same intents, same two values, same collision, discriminator moved to the LAST
+            // element — and it expects both warnings.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("answer_affirmative", SibP("friendly", "mark", "contact")),
+                    Sib("answer_negative", SibP("negative", "mark", "contact")),
+                }
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void SiblingWarning_MembersDisagreeingOnTheAuthoredIndex_NumberEachPattern()
         {
             // Issue #91, the asymmetric shape it was opened for. The set is keyed on the frame
