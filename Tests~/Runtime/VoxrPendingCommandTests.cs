@@ -1825,6 +1825,55 @@ namespace VoXR.Tests.Runtime
             );
         }
 
+        // ======== Issue #133: a pending opening is not "unrecognised" ========
+        //
+        // Two of the three branches that enter a pending and `continue` left
+        // `anyThresholdFiltered` clear, so the utterance reached the tail of the result loop
+        // with acceptedCount == 0 and was reported unrecognised in the same frame
+        // OnCommandPending asked the integrator to prompt the speaker. The disambiguation
+        // branch already set the flag and carried a comment naming that exact harm; these two
+        // now match it.
+
+        [Test]
+        public void PartialMatchPending_DoesNotAlsoReportUnrecognised()
+        {
+            ConfigureSync(allowPartial: true);
+
+            VoxrCommand? pending = null;
+            _recogniser.OnCommandPending += cmd => pending = cmd;
+            int unrecognisedCount = 0;
+            _recogniser.OnUnrecognisedSpeech += _ => unrecognisedCount++;
+
+            _recogniser.InjectText("launch missiles target");
+
+            Assert.IsTrue(pending.HasValue, "the partial-match branch is the one under test");
+            Assert.AreEqual(
+                0,
+                unrecognisedCount,
+                "a prompt to fill a slot is not a report that the speech was not understood"
+            );
+        }
+
+        [Test]
+        public void ConfirmationPending_DoesNotAlsoReportUnrecognised()
+        {
+            ConfigureSync(requiresConfirm: true);
+
+            VoxrCommand? pending = null;
+            _recogniser.OnCommandPending += cmd => pending = cmd;
+            int unrecognisedCount = 0;
+            _recogniser.OnUnrecognisedSpeech += _ => unrecognisedCount++;
+
+            _recogniser.InjectText("launch missiles target hotel one");
+
+            Assert.IsTrue(pending.HasValue, "the confirmation branch is the one under test");
+            Assert.AreEqual(
+                0,
+                unrecognisedCount,
+                "a prompt to confirm is not a report that the speech was not understood"
+            );
+        }
+
         // -------- Helpers --------
 
         void ForceTimeoutNow()

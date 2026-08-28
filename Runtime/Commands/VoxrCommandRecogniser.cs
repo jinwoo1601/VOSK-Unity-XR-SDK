@@ -935,6 +935,16 @@ namespace VoXR.Commands
                         var unfilled = _pending.ComputeUnfilledSlots(cmd, partialDef);
                         if (unfilled.Length > 0)
                         {
+                            // Handled, not rejected (issue #133) — same reason the
+                            // disambiguation branch below sets it. Without this the utterance
+                            // reaches acceptedCount == 0 with the flag clear and raises
+                            // OnUnrecognisedSpeech in the same frame OnCommandPending asked the
+                            // integrator to prompt for the missing slot. Inside the
+                            // unfilled.Length check rather than above it: a candidate that
+                            // opens no pending falls through to the reject below and must
+                            // still be reported.
+                            anyThresholdFiltered = true;
+
                             var enterRes = _pending.EnterPending(cmd, partialDef, unfilled,
                                 VoxrPendingReason.PartialMatch, Time.time,
                                 out var cancelRes);
@@ -1045,6 +1055,9 @@ namespace VoXR.Commands
                 if (_setManager.TryLookupCommand(cmd.Intent, out var confirmDef) &&
                     confirmDef.RequiresConfirmation)
                 {
+                    // Handled, not rejected (issue #133) — see the partial-match branch above.
+                    anyThresholdFiltered = true;
+
                     var enterConfRes = _pending.EnterPending(cmd, confirmDef,
                         Array.Empty<string>(), VoxrPendingReason.AwaitingConfirmation, Time.time,
                         out var cancelConfRes);

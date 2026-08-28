@@ -197,7 +197,7 @@ commandRecogniser.NotifySlotChanged();
 
 ### How it works
 
-The **grammar** (VOSK vocabulary) always contains the full universe of slot values registered via `Configure()`. This means VOSK can transcribe any value at any time. The **parser** is rebuilt with only the provider's active values, so excluded values produce `OnUnrecognisedSpeech` instead of `OnCommandRecognised`.
+The **grammar** (VOSK vocabulary) always contains the full universe of slot values registered via `Configure()`. This means VOSK can transcribe any value at any time. The **parser** is rebuilt with only the provider's active values, so excluded values produce `OnUnrecognisedSpeech` instead of `OnCommandRecognised` -- or, on a command that sets `allowPartialMatch`, `OnCommandPending` asking for the slot to be filled again, since an excluded value reads as an unfilled slot rather than as a wrong one.
 
 This two-layer design avoids the audio gap that grammar rebuilds cause (see [Command Sets](command-sets.md)). The trade-off: VOSK may still transcribe an excluded value since it's in the grammar, but the parser will reject it.
 
@@ -636,16 +636,15 @@ Two lifecycle interactions worth knowing:
 
 ## Unrecognised Speech
 
-When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in six situations:
+When speech passes through the pipeline but no command is produced, `OnUnrecognisedSpeech` fires with the raw transcript. This happens in five situations:
 
 1. **No pattern match** -- the parser could not match any command pattern against the transcript.
 2. **Every match fell under `minScore`** -- patterns matched, but no candidate scored high enough to fire.
 3. **A match was missing a required argument** -- the command may have scored well, but a required slot went unfilled and the command does not set `allowPartialMatch`. The completeness rule is independent of score, so this is the one case where "unrecognised" does not mean "scored badly".
-4. **A match was diverted to pending** -- a partial match or a `requiresConfirmation` command entered the pending state; `OnCommandPending` fires as well.
-5. **The winning candidate's first required element was never heard** -- the round's winner was [barred](scoring.md#the-leading-required-miss-bar). It may have scored well above `minScore`; the refusal is positional, not arithmetic, and the round leaves no session-log attempt behind.
-6. **A follow-up fill was refused for re-scoring at or below zero** -- follow-up speech completed a pending command, but the re-score landed at or below zero, so the same floor the flush paths apply refused it (see [the session-log table](scoring.md#reading-a-session-log)). The pending is left standing. Reaching this at all means two definitions share one intent.
+4. **The winning candidate's first required element was never heard** -- the round's winner was [barred](scoring.md#the-leading-required-miss-bar). It may have scored well above `minScore`; the refusal is positional, not arithmetic, and the round leaves no session-log attempt behind.
+5. **A follow-up fill was refused for re-scoring at or below zero** -- follow-up speech completed a pending command, but the re-score landed at or below zero, so the same floor the flush paths apply refused it (see [the session-log table](scoring.md#reading-a-session-log)). The pending is left standing. Reaching this at all means two definitions share one intent.
 
-It does **not** fire in three others: a candidate rejected by `minConfidence`, one suppressed by `commandCooldown` debounce, or one diverted to a **disambiguation** pending. The first two are silent on the reasoning that the user did say a valid command, just not confidently or not soon enough after the last one. The third is silent because telling you the speech was not understood, in the same frame you were asked to prompt about it, is exactly the confusion `disambiguateSiblingTies` exists to remove. See [the gates](scoring.md#what-onunrecognisedspeech-actually-means) for the full table.
+It does **not** fire in three others: a candidate rejected by `minConfidence`, one suppressed by `commandCooldown` debounce, or one diverted to a pending of **any** kind -- partial-match, confirmation, or disambiguation alike. The first two are silent on the reasoning that the user did say a valid command, just not confidently or not soon enough after the last one. A pending is silent because telling you the speech was not understood, in the same frame you were asked to prompt the speaker about it, is a contradiction: the prompt is the recogniser saying it understood enough to ask ([#133](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/133)). See [the gates](scoring.md#what-onunrecognisedspeech-actually-means) for the full table.
 
 The `string` parameter is the full buffered transcript (after utterance merging), exactly as VOSK transcribed it.
 
@@ -684,11 +683,13 @@ commandRecogniser.OnUnrecognisedSpeech += text =>
 };
 ```
 
+That recipe assumes the command leaves `allowPartialMatch` off, which is the default. With the flag **on**, an excluded value is an unfilled required slot, so the utterance opens a slot-fill pending and is *not* reported unrecognised -- put the same message on `OnCommandPending` instead, testing the pending command with `HasSlot("target")` to see which argument went missing.
+
 ### Relationship to other events
 
 `OnUnrecognisedSpeech` and `OnCommandRecognised`/`OnCommandsRecognised` are mutually exclusive per utterance: a transcript that produces at least one accepted command never also fires `OnUnrecognisedSpeech`.
 
-The converse does not hold. A transcript that produces *no* accepted command is silent when a candidate was filtered by `minConfidence`, suppressed by debounce, or diverted to a disambiguation pending, so "no command fired" and "`OnUnrecognisedSpeech` fired" are not the same condition.
+The converse does not hold. A transcript that produces *no* accepted command is silent when a candidate was filtered by `minConfidence`, suppressed by debounce, or diverted to a pending of any kind, so "no command fired" and "`OnUnrecognisedSpeech` fired" are not the same condition.
 
 ---
 
