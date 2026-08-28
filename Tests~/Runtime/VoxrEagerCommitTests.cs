@@ -969,6 +969,105 @@ namespace VoXR.Tests.Runtime
             );
         }
 
+        [Test]
+        public void TryEagerCommit_LeadingRequiredMiss_ExtendablePattern_StillReturnsNone()
+        {
+            // Pins the HoldExtendable -> None transition the bar introduces, at the second of
+            // the two hold returns: the extendable-pattern one (issue #32). The bar sits ABOVE
+            // both hold returns, so a barred winner that would otherwise have been HELD is
+            // refused outright instead — which lengthens the wait before OnUnrecognisedSpeech
+            // from prefixHoldSeconds to the full bufferWindow.
+            //
+            // That transition is deliberate and ruled (issue #127, accepted permanently). DR-5
+            // places the bar beside the #66/#70 completeness refusals — they are all refusals
+            // about the candidate itself — and moving it below the hold returns to preserve the
+            // shortened hold would be a design change, not a bug fix. The cost is latency only:
+            // a barred candidate produces no result at any length of wait, so the only thing the
+            // longer wait delays is how soon the speaker is told. At the shipped default
+            // prefixHoldSeconds = 0 there is no shortened hold to lose, so it is inert there.
+            //
+            // The fixture: "advance"'s only pattern is a proper prefix of "advance_more"'s, so
+            // CanCommitEarly reports false for it and the winner reaches the extendable hold
+            // return. Everything between the bar and that return is cleared deliberately —
+            // score (1 + 1) / 3 = 0.667 clears the 0.6 gate; there are no slots at all, so the
+            // issue #66 condition cannot bite; the miss is LEADING, so "bravo" and "charlie"
+            // match after it and no required TAIL remains (issue #70); and the match spans the
+            // whole buffer. "advance_more" cannot steal the win on the barred utterance — its
+            // unspoken "delta" drags it to (1 + 1) / 4 = 0.5, under the gate and under 0.667.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("advance", P("alpha", "bravo", "charlie")),
+                    Cmd("advance_more", P("alpha", "bravo", "charlie", "delta"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("bravo charlie"), null, 0.6f, 0.4f),
+                "the bar outranks the extendable hold — a barred winner is refused, not held"
+            );
+
+            // Control, on the same grammar, and the whole point of the test: with the leading
+            // element present the very same winning pattern reaches the extendable hold return
+            // and answers HoldExtendable. Without this the assertion above could go green from
+            // any refusal at all, and would not show that the fixture reaches a HOLD — i.e.
+            // that the bar really is converting HoldExtendable into None, rather than sitting
+            // above a None that would have happened anyway.
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("alpha bravo charlie"), null, 0.6f, 0.4f),
+                "unbarred, the same winner is held because its pattern is a prefix of a longer one"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_LeadingRequiredMiss_UnanalysableGrammar_StillReturnsNone()
+        {
+            // The same HoldExtendable -> None transition, at the FIRST hold return: the
+            // un-analysable-grammar degrade (issue #44). Both tests are needed because the two
+            // hold returns are separate lines — an edit that moved the bar to sit BETWEEN them
+            // would leave one of these green and flip the other, so neither one pins the
+            // transition on its own.
+            //
+            // Deliberate and ruled exactly as in the test above (issue #127, accepted
+            // permanently): DR-5 places the bar beside the #66/#70 completeness refusals, and
+            // moving it below the hold returns would be a design change, not a bug fix. The cost
+            // is latency only — a barred candidate produces no result however long the wait, so
+            // only the moment the speaker is told moves — and it is inert at the shipped default
+            // prefixHoldSeconds = 0.
+            //
+            // OverLimitCommand carries one optional past MaxOptionalExpansion, so the
+            // eligibility analysis is abandoned for the whole parser and _canCommitEarly is
+            // null; that is what puts hold return A in play here rather than B. It matches
+            // nothing in either utterance ("noisy" is never spoken), so "advance" still wins.
+            // The construction warns at authoring time (issue #44), hence the expectation
+            // before it and the sweep at the end.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(OverLimitCommand(), Cmd("advance", P("alpha", "bravo", "charlie")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("bravo charlie"), null, 0.6f, 0.4f),
+                "the bar outranks the un-analysable degrade — a barred winner is refused, not held"
+            );
+
+            // Control: the same grammar with the leading element present cannot commit either,
+            // because the analysis that would have vetted a commit was abandoned — so it
+            // degrades to the hold instead of None. That is what makes the barred utterance's
+            // None attributable to the bar, and not to the missing analysis.
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("alpha bravo charlie"), null, 0.6f, 0.4f),
+                "unbarred, the un-analysable grammar degrades to the hold rather than None"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
         // ---------- Back to the unfilled required slot (issue #66) ----------
 
         [Test]

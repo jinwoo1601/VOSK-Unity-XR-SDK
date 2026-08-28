@@ -4462,6 +4462,13 @@ namespace VoXR.Commands
             // commit early anyway. There is nothing to refuse when nothing was being offered,
             // and a refusal must not lengthen a wait it is not responsible for. Here the only
             // transition it introduces is Commit -> None.
+            //
+            // That principle is not absolute, though: the leading-required-miss bar above does
+            // convert HoldExtendable into None, and that is a ruled exception (issue #127,
+            // accepted permanently). A barred candidate produces no result at any length of
+            // wait, so the only cost there is how soon the speaker is told — whereas a tied
+            // candidate may still fire after the wait, which is what makes lengthening it
+            // pointless here.
             if (bestTiedSiblingCommandIdx >= 0)
                 return EagerCommitVerdict.None;
 
