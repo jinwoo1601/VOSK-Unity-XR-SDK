@@ -248,7 +248,8 @@ namespace VoXR.Commands
                 coverageWeight,
                 GetFollowUpGrammarWords(),
                 cancelVocabulary,
-                disambiguateSiblingTies
+                disambiguateSiblingTies,
+                minScore
             );
             _grammar.Rebuild(_slots, commands, GetFollowUpGrammarWords());
 
@@ -354,7 +355,8 @@ namespace VoXR.Commands
                 coverageWeight,
                 GetFollowUpGrammarWords(),
                 cancelVocabulary,
-                disambiguateSiblingTies
+                disambiguateSiblingTies,
+                minScore
             );
         }
 

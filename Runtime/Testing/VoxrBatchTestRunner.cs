@@ -25,7 +25,11 @@ namespace VoXR.Testing
             if (slots == null) throw new ArgumentNullException(nameof(slots));
             if (commands == null) throw new ArgumentNullException(nameof(commands));
 
-            _parser = new VoxrCommandParser(slots, commands, coverageWeight);
+            // The caller's threshold goes to the parser as well as to the gate below (issue
+            // #140): the parser's construction-time sibling scan predicts what a gate will do
+            // with this grammar, and the gate it should predict is this harness's own. Named,
+            // because the parameters between it and coverageWeight keep their defaults.
+            _parser = new VoxrCommandParser(slots, commands, coverageWeight, minScore: minScore);
             _defsByIntent = IndexByIntent(commands);
             _minScore = minScore;
             _minConfidence = minConfidence;
@@ -60,7 +64,7 @@ namespace VoXR.Testing
                 offset += c.Length;
             }
 
-            _parser = new VoxrCommandParser(slots, commands, coverageWeight);
+            _parser = new VoxrCommandParser(slots, commands, coverageWeight, minScore: minScore);
             _defsByIntent = IndexByIntent(commands);
             _minScore = minScore;
             _minConfidence = minConfidence;
