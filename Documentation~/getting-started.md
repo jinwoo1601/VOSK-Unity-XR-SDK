@@ -25,7 +25,7 @@ Full per-platform detail, including what is deferred and what is untested, is in
 To pin a specific version (recommended):
 
 ```
-https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.5.0
+https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v2.0.0
 ```
 
 ### Via manifest.json
@@ -35,7 +35,7 @@ Add to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v1.5.0"
+    "com.jinwoo1601.voxr": "https://github.com/jinwoo1601/VoXR-Speech-Recognition.git#v2.0.0"
   }
 }
 ```
