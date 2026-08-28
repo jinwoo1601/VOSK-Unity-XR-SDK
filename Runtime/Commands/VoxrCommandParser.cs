@@ -1751,7 +1751,14 @@ namespace VoXR.Commands
                     // predicate answers for the whole set at once whether any question is asked
                     // at all. The second subsumes the first set-wide, so no pair survives it.
                     // Placed after both member tests so the walk over members and their patterns
-                    // runs only for a member that would otherwise be reported.
+                    // runs only for a member whose value actually collides and is answerable,
+                    // rather than for every member of every set. It is deliberately NOT placed
+                    // after the dedup below, so a member whose value an earlier member already
+                    // reported does still pay for the walk: hoisting the test above the loop to
+                    // spare it would charge every set a walk to save the rare colliding one,
+                    // which is the worse trade. The predicate is set-invariant, so where several
+                    // members do reach it they all get the same answer — `continue` here is
+                    // equivalent to breaking, and no set is ever half-reported.
                     //
                     // Only this half of issue #132. The score test the filter above also carries
                     // is deliberately NOT inherited: it is judged against DefaultMinScore because
