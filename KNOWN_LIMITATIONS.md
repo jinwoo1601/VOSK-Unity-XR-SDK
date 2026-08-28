@@ -922,8 +922,13 @@ reference if applicable), root cause, workaround. Group entries by category —
 the categories above are a starting point but feel free to add more (e.g.
 "Threading", "Build/Deploy") as needed.
 
-"Where seen" references of the form `v2.1 test matrix Phase 3.1` cite the
-project's internal pre-1.0 verification phases, not package versions — the
-package's released versions are the `1.x` tags in `CHANGELOG.md`. Issue numbers
-(`#65`, `#82`, …) refer to the GitHub issue that introduced or changed the
-behaviour.
+Version-shaped references here come from two separate namespaces, and the
+shape tells them apart rather than the range. A `v`-prefixed **two**-part
+number — `v2.1`, `v2.0` — is one of the project's internal pre-1.0 verification
+phases. That holds whether or not the surrounding text says "test matrix
+Phase": several entries cite a phase in passing, as in "(v2.0 used raw
+`0.0`)". A **three**-part number — `1.4.0`, `2.0.0` — is a package release, and
+every one of those has its own dated section in `CHANGELOG.md`. The two
+numbering schemes ran independently and any overlap between them is
+coincidence. Issue numbers (`#65`, `#82`, …) refer to the GitHub issue that
+introduced or changed the behaviour.
