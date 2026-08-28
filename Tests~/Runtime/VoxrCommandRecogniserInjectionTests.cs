@@ -2290,6 +2290,17 @@ namespace VoXR.Tests.Runtime
             _recogniser.InjectText("alpha bravo now");
             _recogniser.FlushPendingBuffer();
 
+            // Asserted BEFORE the answer, or this test cannot fail for its own reason. Were
+            // TryBuildAmbiguity ever to stop building a question for this set, fire_at would
+            // fire straight off the flush — it has already cleared every filter, which is
+            // exactly what the pending opening proves — firedIntent would read "fire_at"
+            // before Answer() runs, and the answer would parse to nothing in silence. The
+            // assertion below would still pass, on the wrong world.
+            Assert.IsTrue(
+                _recogniser.PendingAmbiguity.HasValue,
+                "the question is asked before it is answered"
+            );
+
             Answer("at");
 
             Assert.AreEqual(

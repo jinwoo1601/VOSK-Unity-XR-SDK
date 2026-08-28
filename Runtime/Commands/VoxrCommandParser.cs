@@ -2832,24 +2832,35 @@ namespace VoXR.Commands
             // matchResult.LeadingRequiredMissed is in scope here and is deliberately NOT
             // carried into the record (issue #126, ruled 2026-08-28: recorded, not gated).
             //
-            // It is a real fire path, not an unreachable one. Where a sibling set is
-            // MIXED-anchored — one member's first required element is the discriminator, the
-            // other's is a required slot in front of it, which NormalizeElement folds against
-            // that member's "{?slot}" — the two tie on every key here, registration order hands
-            // the round to the member the bar does not touch, and the barred one is offered as a
-            // choice and fires when picked. Three tests in
-            // VoxrCommandRecogniserInjectionTests.cs pin exactly that.
+            // It is a real fire path, not an unreachable one. It needs a MIXED-anchored sibling
+            // set — one whose members disagree about which element is first required. They can
+            // disagree at all only because NormalizeElement folds "{?slot}" against "{slot}": one
+            // member leads with a required slot that matched and anchors there, while the other's
+            // leading slot is optional, so its own anchor is the next required element. That
+            // anchor may BE the discriminator (VoxrCommandRecogniserInjectionTests.cs's
+            // resume_fire/cease_fire fixture) or sit one place in front of it (its fire_at/fire_to
+            // fixture) — three tests there cover both.
+            //
+            // Two further conditions, and the second is easy to lose: the barred member's own
+            // anchor must be among the elements that went unmatched, and the UNBARRED member must
+            // WIN the round. Ties do not displace an incumbent — only CandidateOrder.Better does
+            // — so registration order decides, and in the other order the barred member wins, the
+            // bar below refuses it, and the round yields nothing at all. That half is pinned by
+            // MixedAnchorSet_BarredMemberRegisteredFirst_NothingFires, over in
+            // VoxrCommandParserTests.cs — parser-level, since no question is reached to observe.
             //
             // Gating it here would narrow the QUESTION rather than the hazard, which is why the
-            // ruling went the other way. Siblings differ at one element and agree everywhere
-            // else, so both members of such a round missed the same words: the survivor is
-            // admitted only because a matched leading SLOT precedes its verb. Drop the barred
-            // rival from a two-member set and TryBuildAmbiguity falls below two choices, returns
-            // false, and the round fires that equally-unheard survivor with nothing asked at
-            // all. A larger set keeps its question and merely loses an option — including, in
-            // the shape where the discriminator IS the barred member's own anchor, an option
-            // whose answer would have supplied the very element that went missing. Either way
-            // the speaker is told less and the same class of command still fires.
+            // ruling went the other way, and the argument holds only where the discriminator is
+            // NOT the barred member's anchor. There both members missed the same words — the
+            // shared verb and the discriminator — and the survivor is admitted only because a
+            // matched leading SLOT precedes its verb, so both choices fire a command whose verb
+            // went unheard. Drop the barred rival from a two-member set and TryBuildAmbiguity
+            // falls below two choices, returns false, and the round fires that equally-unheard
+            // survivor with nothing asked at all; a larger set keeps its question and merely
+            // loses an option. Where the discriminator IS the barred member's anchor the trade is
+            // worse still: each member missed only its own discriminating word, so the answer
+            // SUPPLIES the missing anchor, and gating would delete a question that was doing its
+            // job.
             //
             // The asymmetry underneath — that DR-1's "first required element" stops standing in
             // for "the verb" as soon as a required slot leads the pattern — is the finding worth
