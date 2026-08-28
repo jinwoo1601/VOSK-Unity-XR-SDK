@@ -197,7 +197,7 @@ commandRecogniser.NotifySlotChanged();
 
 ### How it works
 
-The **grammar** (VOSK vocabulary) always contains the full universe of slot values registered via `Configure()`. This means VOSK can transcribe any value at any time. The **parser** is rebuilt with only the provider's active values, so excluded values produce `OnUnrecognisedSpeech` instead of `OnCommandRecognised`.
+The **grammar** (VOSK vocabulary) always contains the full universe of slot values registered via `Configure()`. This means VOSK can transcribe any value at any time. The **parser** is rebuilt with only the provider's active values, so excluded values produce `OnUnrecognisedSpeech` instead of `OnCommandRecognised` -- or, on a command that sets `allowPartialMatch`, `OnCommandPending` asking for the slot to be filled again, since an excluded value reads as an unfilled slot rather than as a wrong one.
 
 This two-layer design avoids the audio gap that grammar rebuilds cause (see [Command Sets](command-sets.md)). The trade-off: VOSK may still transcribe an excluded value since it's in the grammar, but the parser will reject it.
 
@@ -682,6 +682,8 @@ commandRecogniser.OnUnrecognisedSpeech += text =>
         hudController.ShowTransientMessage("Target not available");
 };
 ```
+
+That recipe assumes the command leaves `allowPartialMatch` off, which is the default. With the flag **on**, an excluded value is an unfilled required slot, so the utterance opens a slot-fill pending and is *not* reported unrecognised -- put the same message on `OnCommandPending` instead, testing the pending command with `HasSlot("target")` to see which argument went missing.
 
 ### Relationship to other events
 
