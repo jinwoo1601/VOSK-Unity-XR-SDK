@@ -306,7 +306,7 @@ And below `minScore`, `allowPartialMatch` diverts to pending rather than rejecti
 
 ### What `OnUnrecognisedSpeech` actually means
 
-It does **not** mean "nothing matched". It fires whenever an utterance produced no accepted command, *except* when some candidate was dropped by `minConfidence`, suppressed by debounce, or diverted to a disambiguation pending — those three are the only filters that suppress it:
+It does **not** mean "nothing matched". It fires whenever an utterance produced no accepted command, *except* when some candidate was dropped by `minConfidence`, suppressed by debounce, or diverted to a pending — those three are the only filters that suppress it:
 
 | Outcome | `OnUnrecognisedSpeech` |
 |---------|------------------------|
@@ -314,13 +314,12 @@ It does **not** mean "nothing matched". It fires whenever an utterance produced 
 | Every candidate fell under `minScore` | **fires** |
 | The winning candidate's first required element was never heard ([the bar](#the-leading-required-miss-bar)) | **fires** |
 | The winner was missing a required slot (command without `allowPartialMatch`) | **fires** |
-| A candidate was diverted to pending (partial match or `requiresConfirmation`) | **fires**, alongside `OnCommandPending` |
 | A follow-up fill completed a pending command but re-scored at or below zero | **fires** — the fill is refused and the pending is left standing |
-| A candidate was diverted to a **disambiguation** pending | silent |
+| A candidate was diverted to a pending — partial match, `requiresConfirmation`, or **disambiguation** | silent; `OnCommandPending` fires instead |
 | A candidate was rejected by `minConfidence` | silent |
 | A candidate was suppressed by debounce | silent |
 
-The disambiguation row is the one deliberate silence among the diversions: being told the speech was not understood, in the same frame you were asked to prompt about it, is the confusion `disambiguateSiblingTies` exists to remove.
+Every diversion is silent, and for one reason: being told the speech was not understood, in the same frame you were asked to prompt the speaker about it, is a contradiction — the prompt is the recogniser saying it understood enough to ask ([#133](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/133)).
 
 So the event is not a reliable "I heard nothing" signal: the score-rejection rows of §7 raise it too. If you show the player feedback on it, expect it after a half-heard command as well as after noise.
 
