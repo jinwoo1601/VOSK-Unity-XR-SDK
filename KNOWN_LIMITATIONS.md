@@ -485,6 +485,58 @@ deliberate trade-offs rather than oversights.
   winning its round is what absorbs leading debris that would otherwise be charged to
   the next command.
 
+### A candidate barred for its missing first word can still fire as a disambiguation choice
+
+- **Symptom**: With `disambiguateSiblingTies` on, the recogniser asks which of two
+  commands you meant, and the one you pick fires although its own first required
+  word was never spoken. The same pattern on the same utterance is
+  [barred](Documentation~/scoring.md#the-leading-required-miss-bar) and silent
+  when it has to win a round on its own — the entry above. The flag is **off by
+  default**, and with it off nothing here applies.
+- **Repro**: Register `fire_at : ["{ship}", "fire", "at", "{target}", "now"]` and
+  `fire_to : ["{?ship}", "fire", "to", "{target}", "now"]`, with slots
+  `ship: alpha` and `target: bravo`, turn `disambiguateSiblingTies` on, and feed
+  the transcript "alpha bravo now". Both candidates score `3 / 5` = `0.60`,
+  clearing the default `minScore`, so the tie is offered as a question — "at" or
+  "to".
+  Answer "to" and `fire_to` fires, although "fire" was never spoken.
+- **Where seen**: issue #126, raised against the leading-required-miss bar (#124)
+  and ruled *recorded, not gated*. Pinned by three tests in
+  `Tests~/Runtime/VoxrCommandRecogniserInjectionTests.cs`.
+- **Root cause**: the bar is applied to the round's **winner** only. A tied
+  sibling rival is recorded before the bar runs and carries no leading-miss
+  information, so it reaches the choice list intact and fires when it is picked.
+  Getting there needs a **mixed-anchor** set — one whose members disagree about
+  which element is first required. Here `fire_at` is anchored on the required slot
+  `{ship}`, which matched "alpha"; `fire_to`'s leading slot is optional, so its
+  own first required element is "fire", which nothing matched. The two are
+  siblings at all only because `{?ship}` and `{ship}` normalise to the same
+  element. Note that the word settling the question ("to") is not the word
+  `fire_to` is missing ("fire"), so answering supplies no evidence for the anchor
+  that went unheard.
+- **Why this is recorded rather than fixed**: in a mixed set **both** members
+  missed the same words — siblings differ at one element and agree everywhere
+  else — and the member that survives the bar is admitted only because a matched
+  leading *slot* precedes its verb. So both choices fire a command whose verb went
+  unheard. Suppressing the barred rival would, in a two-member set, drop the choice
+  list below two — and `TryBuildAmbiguity` returns false below two choices, so the
+  question would not be asked at all and the surviving member would fire anyway. A
+  larger set keeps its question and simply loses an option. That narrows the
+  question, not the hazard.
+- **Not the uniform case**: where the discriminating word is **every** member's
+  first required element, the round's winner is barred, the round yields nothing
+  and no question opens. That case is unchanged — see *Sibling patterns that
+  differ at one word fire the first-registered one* above.
+- **Workaround**:
+  - Leave `disambiguateSiblingTies` off, which is the default.
+  - Do not author one member of a sibling pair with a leading **optional** slot
+    where its sibling leads with the required form; that mismatch is what makes
+    the set mixed-anchored.
+  - Give the riskier intent `requiresConfirmation`.
+    `PendingCommandHandler.Complete` re-enters pending on the **chosen
+    alternative's own** definition, so a confirmation declared on that intent does
+    apply to it.
+
 ### Default `bufferWindow` is too short for split commands on Quest 3
 
 - **Repro**: Speak a two-part command with a deliberate mid-command pause:

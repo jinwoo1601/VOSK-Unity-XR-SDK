@@ -1668,7 +1668,8 @@ namespace VoXR.Commands
                 // then no intent fires.
                 //
                 // Read exactly as scoped. The bar reaches the round's winner and no further
-                // (issue #126 is the rival half, still open), so what this justifies is that
+                // (issue #126 is the rival half — real, and ruled recorded-not-gated; see
+                // RecordTiedSiblingRival), so what this justifies is that
                 // for such a set the winner is barred and that round yields nothing — not that
                 // a leading-missed candidate can never fire anywhere.
                 //
@@ -1815,9 +1816,10 @@ namespace VoXR.Commands
         //
         // Scoped to the WINNER on purpose. The bar is applied to the round's winner alone, so
         // this says nothing about a leading-missed candidate that LOSES the round and is
-        // offered to the speaker as a disambiguation rival (issue #126, open). What it says is
-        // narrower: for this set, whoever wins the round is barred, so no command fires from
-        // that round and no pending opens out of it.
+        // offered to the speaker as a disambiguation rival — which a MIXED set really does, and
+        // which issue #126 ruled recorded rather than gated (see RecordTiedSiblingRival). What
+        // this says is narrower: for a set anchored in EVERY member, whoever wins the round is
+        // barred, so no command fires from that round and no pending opens out of it.
         //
         // Read off the AUTHORED pattern and compared against the member's OWN authored index,
         // never the frame's. The frame is one expansion's shape, so two members differing by a
@@ -2827,6 +2829,33 @@ namespace VoXR.Commands
                 tiedWinnerValue = winnerValue;
             }
 
+            // matchResult.LeadingRequiredMissed is in scope here and is deliberately NOT
+            // carried into the record (issue #126, ruled 2026-08-28: recorded, not gated).
+            //
+            // It is a real fire path, not an unreachable one. Where a sibling set is
+            // MIXED-anchored — one member's first required element is the discriminator, the
+            // other's is a required slot in front of it, which NormalizeElement folds against
+            // that member's "{?slot}" — the two tie on every key here, registration order hands
+            // the round to the member the bar does not touch, and the barred one is offered as a
+            // choice and fires when picked. Three tests in
+            // VoxrCommandRecogniserInjectionTests.cs pin exactly that.
+            //
+            // Gating it here would narrow the QUESTION rather than the hazard, which is why the
+            // ruling went the other way. Siblings differ at one element and agree everywhere
+            // else, so both members of such a round missed the same words: the survivor is
+            // admitted only because a matched leading SLOT precedes its verb. Drop the barred
+            // rival from a two-member set and TryBuildAmbiguity falls below two choices, returns
+            // false, and the round fires that equally-unheard survivor with nothing asked at
+            // all. A larger set keeps its question and merely loses an option — including, in
+            // the shape where the discriminator IS the barred member's own anchor, an option
+            // whose answer would have supplied the very element that went missing. Either way
+            // the speaker is told less and the same class of command still fires.
+            //
+            // The asymmetry underneath — that DR-1's "first required element" stops standing in
+            // for "the verb" as soon as a required slot leads the pattern — is the finding worth
+            // acting on, and it belongs to the deferred fork C, which canon already says may
+            // collapse the bar's two sites into one. Do not read this as "a leading-missed
+            // candidate can never fire": it can, here, by being chosen.
             int slot = firstRival + tiedRivalCount;
             _tiedSiblingRivalBuf[slot] = new TiedSiblingRival
             {

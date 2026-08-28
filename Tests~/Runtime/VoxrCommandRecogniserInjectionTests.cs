@@ -2071,6 +2071,235 @@ namespace VoXR.Tests.Runtime
             LogAssert.NoUnexpectedReceived();
         }
 
+        // -------- The rival half of the bar: a barred candidate as a CHOICE (issue #126) --------
+        //
+        // The test above pins the UNIFORM set, where the discriminator is every member's own
+        // anchor: whoever wins the round is barred, so nothing fires and nothing is asked. These
+        // three pin the other half, which the bar does not reach and which nothing in this suite
+        // previously parsed with the flag on.
+        //
+        // Reaching it needs a MIXED-anchor set, and that is possible only because
+        // NormalizeElement folds "{?ship}" and "{ship}" to one element: the two patterns are
+        // siblings, yet they disagree about which element is first-required. One member is barred
+        // and the other is not, they tie on every CompareCandidate key, and registration order
+        // hands the round to the member the bar does not touch — which fires, and carries the
+        // barred one into the question as a choice.
+        //
+        // Why this is RECORDED rather than closed, which is the part a future reader will want:
+        // refusing the barred rival here would not stop a command firing whose verb went unheard.
+        // It would remove one option from the prompt and leave the other — equally unheard —
+        // firing on its own, because TryBuildAmbiguity returns false below two choices
+        // (VoxrCommandRecogniser.cs, "if (choiceBuf.Count < 2) return false;") and the round then
+        // fires the winner with no question at all. The third test is that claim's evidence.
+
+        [Test]
+        public void Disambiguation_MixedAnchorSet_OffersTheBarredRivalAndFiresItWhenPicked()
+        {
+            // The anchored member here is cease_fire, and its anchor IS the discriminator: its
+            // leading slot is optional, so "cease" is its first required element. Dropping
+            // "cease" is therefore what both bars it and creates the tie.
+            //
+            // Note what the speaker must say to pick it — "cease", the very element that went
+            // missing. Answering the question SUPPLIES the anchor, so the command that fires is
+            // one whose first required element the speaker really did utter. That is why this
+            // shape is not the hazard the issue was filed about, and why a blanket refusal of
+            // barred rivals would be a loss: it would delete this question and hand the round to
+            // resume_fire on registration order, which is the coin flip the flag exists to
+            // replace.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 2"));
+
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new[] { new VoxrSlotDefinition("ship", new[] { "alpha" }) },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "resume_fire",
+                        new[] { new[] { "{ship}", "resume", "fire" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "cease_fire",
+                        new[] { new[] { "{?ship}", "cease", "fire" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            int pendingCount = 0,
+                firedCount = 0;
+            string firedIntent = null;
+            _recogniser.OnCommandPending += _ => pendingCount++;
+            _recogniser.OnCommandRecognised += c =>
+            {
+                firedCount++;
+                firedIntent = c.Intent;
+            };
+
+            _recogniser.InjectText("alpha fire");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.AreEqual(1, pendingCount, "the mixed set is asked about");
+            Assert.AreEqual(0, firedCount, "and nothing fires until it is answered");
+            Assert.IsTrue(_recogniser.PendingAmbiguity.HasValue);
+            CollectionAssert.AreEqual(
+                new[] { "resume", "cease" },
+                _recogniser.PendingAmbiguity.Value.DiscriminatingValues,
+                "the barred member is offered alongside the winner, in registration order"
+            );
+
+            Answer("cease");
+
+            Assert.AreEqual(1, firedCount, "the barred rival fires when it is picked");
+            Assert.AreEqual("cease_fire", firedIntent);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Disambiguation_MixedAnchorSet_FiresARivalWhoseAnchorWasNeverSpoken()
+        {
+            // The shape the issue is actually about, and it is NOT the one it describes. Here the
+            // barred member's anchor is "fire", while the discriminator is "at" / "to" one place
+            // further right — so the word that picks fire_to is not the word fire_to is missing.
+            // The speaker says "to" and a command fires whose first required element was never
+            // uttered at any point in the exchange.
+            //
+            // Five elements because the shorter forms cannot reach here: CompareCandidate refuses
+            // a candidate with MissedRequired > MatchedRequired, and two of the five are missed,
+            // so three must survive to admit it. Both then score 3/5 = 0.60 and clear the default
+            // gate exactly.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new[]
+                {
+                    new VoxrSlotDefinition("ship", new[] { "alpha" }),
+                    new VoxrSlotDefinition("target", new[] { "bravo" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[] { new[] { "{ship}", "fire", "at", "{target}", "now" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "fire_to",
+                        new[] { new[] { "{?ship}", "fire", "to", "{target}", "now" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            int firedCount = 0;
+            string firedIntent = null;
+            _recogniser.OnCommandRecognised += c =>
+            {
+                firedCount++;
+                firedIntent = c.Intent;
+            };
+
+            _recogniser.InjectText("alpha bravo now");
+            _recogniser.FlushPendingBuffer();
+
+            Assert.IsTrue(_recogniser.PendingAmbiguity.HasValue);
+            CollectionAssert.AreEqual(
+                new[] { "at", "to" },
+                _recogniser.PendingAmbiguity.Value.DiscriminatingValues,
+                "neither of which is the missing anchor \"fire\""
+            );
+
+            Answer("to");
+
+            Assert.AreEqual(1, firedCount);
+            Assert.AreEqual(
+                "fire_to",
+                firedIntent,
+                "a candidate the bar refuses as a winner fires as a chosen alternative"
+            );
+
+            // The control that makes the sentence above mean something: the same pattern, alone,
+            // on the same utterance. It is refused outright, so the only reason it reached the
+            // speaker at all is the rival path.
+            var parser = new VoxrCommandParser(
+                new[]
+                {
+                    new VoxrSlotDefinition("ship", new[] { "alpha" }),
+                    new VoxrSlotDefinition("target", new[] { "bravo" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_to",
+                        new[] { new[] { "{?ship}", "fire", "to", "{target}", "now" } }
+                    ),
+                }
+            );
+
+            Assert.AreEqual(
+                0,
+                parser.Parse("alpha bravo now").Length,
+                "barred as a round winner — it can only fire by being picked"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void Disambiguation_MixedAnchorSet_TheUnbarredWinnerIsEquallyUnheard()
+        {
+            // Why issue #126 is recorded rather than gated, in one assertion. The two members of
+            // the set above miss exactly the same words — "fire" and the discriminator — because
+            // siblings differ at one element and nothing else. fire_at survives the bar solely
+            // because a MATCHED leading slot sits in front of its verb, so its first required
+            // element is "{ship}" rather than "fire".
+            //
+            // So both answers fire a command whose verb went unheard. Refusing the barred rival
+            // would narrow the question, not the hazard: with one choice left TryBuildAmbiguity
+            // returns false and fire_at fires with nothing asked at all. DR-1 is positional about
+            // the FIRST REQUIRED ELEMENT, which stops standing in for "the verb" the moment a
+            // required slot leads the pattern — that asymmetry is the real finding here, and it
+            // belongs to the deferred fork C rather than to this gate.
+            LogAssert.Expect(LogType.Warning, new Regex("differ only at element 3"));
+
+            _recogniser.DisambiguateSiblingTies = true;
+            _recogniser.Configure(
+                new[]
+                {
+                    new VoxrSlotDefinition("ship", new[] { "alpha" }),
+                    new VoxrSlotDefinition("target", new[] { "bravo" }),
+                },
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "fire_at",
+                        new[] { new[] { "{ship}", "fire", "at", "{target}", "now" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "fire_to",
+                        new[] { new[] { "{?ship}", "fire", "to", "{target}", "now" } }
+                    ),
+                }
+            );
+            _recogniser.BufferWindow = 1.5f;
+            _recogniser.CommandCooldown = 0f;
+
+            string firedIntent = null;
+            _recogniser.OnCommandRecognised += c => firedIntent = c.Intent;
+
+            _recogniser.InjectText("alpha bravo now");
+            _recogniser.FlushPendingBuffer();
+
+            Answer("at");
+
+            Assert.AreEqual(
+                "fire_at",
+                firedIntent,
+                "the member the bar does not touch fires — and it never heard \"fire\" either"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
         // -------- Duplicate intent created by activating two sets (issue #120) --------
 
         [Test]
