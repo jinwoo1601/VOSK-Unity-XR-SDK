@@ -969,6 +969,131 @@ namespace VoXR.Tests.Runtime
             );
         }
 
+        [Test]
+        public void TryEagerCommit_LeadingRequiredMiss_ExtendablePattern_StillReturnsNone()
+        {
+            // Pins the HoldExtendable -> None transition the bar introduces, at the second of
+            // the two hold returns: the extendable-pattern one (issue #32). The bar sits ABOVE
+            // both hold returns, so a barred winner that would otherwise have been HELD is
+            // refused outright instead — which lengthens the wait before OnUnrecognisedSpeech
+            // from prefixHoldSeconds to the full bufferWindow.
+            //
+            // That transition is deliberate and ruled (issue #127, accepted permanently). DR-5
+            // places the bar beside the #66/#70 completeness refusals — they are all refusals
+            // about the candidate itself — and moving it below the hold returns to preserve the
+            // shortened hold would be a design change, not a bug fix. The cost is latency only:
+            // a barred candidate produces no result at any length of wait, so the only thing the
+            // longer wait delays is how soon the speaker is told. At the shipped default
+            // prefixHoldSeconds = 0 there is no shortened hold to lose, so it is inert there.
+            //
+            // The fixture: "advance"'s only pattern is a proper prefix of "advance_more"'s, so
+            // CanCommitEarly reports false for it and the winner reaches the extendable hold
+            // return. Gates are cleared deliberately on BOTH sides of the bar, for two different
+            // reasons. Above it, so that the bar is the first refusal and not a late one standing
+            // behind an earlier verdict: score (1 + 1) / 3 = 0.667 clears the 0.6 gate; there are
+            // no slots at all, so the issue #66 condition cannot bite; and the miss is LEADING,
+            // so "bravo" and "charlie" match after it and no required TAIL remains (issue #70).
+            // Below it, so that the control at the end of this test reaches the hold rather than
+            // some other refusal: the match spans the whole buffer, and the confidence gate is
+            // inert because both calls pass a null wordConfidence, which makes ComputeConfidence
+            // return -1f.
+            //
+            // "advance_more" cannot steal the win on the barred utterance — its unspoken "delta"
+            // drags it to (1 + 1) / 4 = 0.5, under the gate and under 0.667.
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(
+                    Cmd("advance", P("alpha", "bravo", "charlie")),
+                    Cmd("advance_more", P("alpha", "bravo", "charlie", "delta"))
+                )
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("bravo charlie"), null, 0.6f, 0.4f),
+                "the bar outranks the extendable hold — a barred winner is refused, not held"
+            );
+
+            // Control, on the same grammar: with the leading element present the very same
+            // winning pattern reaches the extendable hold return and answers HoldExtendable.
+            //
+            // Be exact about what this does and does not establish, because it is easy to credit
+            // it with more. It rules out "this grammar can never hold at all" — the case where a
+            // bar that refused everything would pass the assertion above, which is how the issue
+            // #125 pin words its own control. It does NOT establish that the BARRED utterance
+            // reached a hold. That is a different input, and the whole-buffer span gate sitting
+            // between the bar and the hold returns is input-dependent: a barred call refused
+            // THERE would also read None while this control still read HoldExtendable, and both
+            // assertions would pass with the bar deleted. TryEagerCommit_LeadingRecognisedLeftover_StillReturnsNone
+            // above is exactly that shape — a span-gate None on a grammar that can hold.
+            //
+            // What establishes the transition is mutation, recorded here because it lives
+            // nowhere else in the file: relocating the bar below both hold returns turns the
+            // assertion above red with "Expected: None / But was: HoldExtendable", and no other
+            // test in the suite moves.
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("alpha bravo charlie"), null, 0.6f, 0.4f),
+                "unbarred, the same winner is held because its pattern is a prefix of a longer one"
+            );
+        }
+
+        [Test]
+        public void TryEagerCommit_LeadingRequiredMiss_UnanalysableGrammar_StillReturnsNone()
+        {
+            // The same HoldExtendable -> None transition, at the FIRST hold return: the
+            // un-analysable-grammar degrade (issue #44). Both tests are needed because the two
+            // hold returns are separate lines and each test guards only one — but it takes TWO
+            // mutations to show that, and one of them alone would mislead. Relocating the bar to
+            // sit BETWEEN the two returns reddens this test and leaves the extendable one green.
+            // Narrowing the bar to (bestLeadingRequiredMissed && _canCommitEarly == null) does
+            // the reverse: this test still refuses, and the extendable one falls through to its
+            // own hold return and goes red. Each test is blind to one of those two edits, which
+            // is what "neither pins the transition on its own" actually rests on — not on the
+            // first mutation alone, which reddens this test as well.
+            //
+            // Deliberate and ruled exactly as in the test above (issue #127, accepted
+            // permanently): DR-5 places the bar beside the #66/#70 completeness refusals, and
+            // moving it below the hold returns would be a design change, not a bug fix. The cost
+            // is latency only — a barred candidate produces no result however long the wait, so
+            // only the moment the speaker is told moves — and it is inert at the shipped default
+            // prefixHoldSeconds = 0.
+            //
+            // OverLimitCommand carries one optional past MaxOptionalExpansion, so the
+            // eligibility analysis is abandoned for the whole parser and _canCommitEarly is
+            // null; that is what puts hold return A in play here rather than B. It matches
+            // nothing in either utterance ("noisy" is never spoken), so "advance" still wins.
+            // The construction warns at authoring time (issue #44), hence the expectation
+            // before it and the sweep at the end.
+            LogAssert.Expect(LogType.Warning, new Regex("more than the 12"));
+
+            var parser = new VoxrCommandParser(
+                Slots(),
+                Commands(OverLimitCommand(), Cmd("advance", P("alpha", "bravo", "charlie")))
+            );
+
+            Assert.AreEqual(
+                EagerCommitVerdict.None,
+                parser.TryEagerCommit(Tok("bravo charlie"), null, 0.6f, 0.4f),
+                "the bar outranks the un-analysable degrade — a barred winner is refused, not held"
+            );
+
+            // Control: the same grammar with the leading element present cannot commit either,
+            // because the analysis that would have vetted a commit was abandoned — so it
+            // degrades to the hold instead of None. The same precision as in the test above
+            // applies: this rules out "this grammar can never hold at all", but it does not by
+            // itself establish that the barred utterance reached the degrade, that being a
+            // different input. The mutation is what does — relocating the bar below both hold
+            // returns turns the assertion above red with
+            // "Expected: None / But was: HoldExtendable".
+            Assert.AreEqual(
+                EagerCommitVerdict.HoldExtendable,
+                parser.TryEagerCommit(Tok("alpha bravo charlie"), null, 0.6f, 0.4f),
+                "unbarred, the un-analysable grammar degrades to the hold rather than None"
+            );
+            LogAssert.NoUnexpectedReceived();
+        }
+
         // ---------- Back to the unfilled required slot (issue #66) ----------
 
         [Test]
