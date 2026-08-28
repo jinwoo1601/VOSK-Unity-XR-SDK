@@ -1668,7 +1668,8 @@ namespace VoXR.Commands
                 // then no intent fires.
                 //
                 // Read exactly as scoped. The bar reaches the round's winner and no further
-                // (issue #126 is the rival half, still open), so what this justifies is that
+                // (issue #126 is the rival half — real, and ruled recorded-not-gated; see
+                // RecordTiedSiblingRival), so what this justifies is that
                 // for such a set the winner is barred and that round yields nothing — not that
                 // a leading-missed candidate can never fire anywhere.
                 //
@@ -1815,9 +1816,10 @@ namespace VoXR.Commands
         //
         // Scoped to the WINNER on purpose. The bar is applied to the round's winner alone, so
         // this says nothing about a leading-missed candidate that LOSES the round and is
-        // offered to the speaker as a disambiguation rival (issue #126, open). What it says is
-        // narrower: for this set, whoever wins the round is barred, so no command fires from
-        // that round and no pending opens out of it.
+        // offered to the speaker as a disambiguation rival — which a MIXED set really does, and
+        // which issue #126 ruled recorded rather than gated (see RecordTiedSiblingRival). What
+        // this says is narrower: for a set anchored in EVERY member, whoever wins the round is
+        // barred, so no command fires from that round and no pending opens out of it.
         //
         // Read off the AUTHORED pattern and compared against the member's OWN authored index,
         // never the frame's. The frame is one expansion's shape, so two members differing by a
@@ -2827,6 +2829,44 @@ namespace VoXR.Commands
                 tiedWinnerValue = winnerValue;
             }
 
+            // matchResult.LeadingRequiredMissed is in scope here and is deliberately NOT
+            // carried into the record (issue #126, ruled 2026-08-28: recorded, not gated).
+            //
+            // It is a real fire path, not an unreachable one. It needs a MIXED-anchored sibling
+            // set — one whose members disagree about which element is first required. They can
+            // disagree at all only because NormalizeElement folds "{?slot}" against "{slot}": one
+            // member leads with a required slot that matched and anchors there, while the other's
+            // leading slot is optional, so its own anchor is the next required element. That
+            // anchor may BE the discriminator (VoxrCommandRecogniserInjectionTests.cs's
+            // resume_fire/cease_fire fixture) or sit one place in front of it (its fire_at/fire_to
+            // fixture) — three tests there cover both.
+            //
+            // Two further conditions, and the second is easy to lose: the barred member's own
+            // anchor must be among the elements that went unmatched, and the UNBARRED member must
+            // WIN the round. Ties do not displace an incumbent — only CandidateOrder.Better does
+            // — so registration order decides, and in the other order the barred member wins, the
+            // bar below refuses it, and the round yields nothing at all. That half is pinned by
+            // MixedAnchorSet_BarredMemberRegisteredFirst_NothingFires, over in
+            // VoxrCommandParserTests.cs — parser-level, since no question is reached to observe.
+            //
+            // Gating it here would narrow the QUESTION rather than the hazard, which is why the
+            // ruling went the other way, and the argument holds only where the discriminator is
+            // NOT the barred member's anchor. There both members missed the same words — the
+            // shared verb and the discriminator — and the survivor is admitted only because a
+            // matched leading SLOT precedes its verb, so both choices fire a command whose verb
+            // went unheard. Drop the barred rival from a two-member set and TryBuildAmbiguity
+            // falls below two choices, returns false, and the round fires that equally-unheard
+            // survivor with nothing asked at all; a larger set keeps its question and merely
+            // loses an option. Where the discriminator IS the barred member's anchor the trade is
+            // worse still: each member missed only its own discriminating word, so the answer
+            // SUPPLIES the missing anchor, and gating would delete a question that was doing its
+            // job.
+            //
+            // The asymmetry underneath — that DR-1's "first required element" stops standing in
+            // for "the verb" as soon as a required slot leads the pattern — is the finding worth
+            // acting on, and it belongs to the deferred fork C, which canon already says may
+            // collapse the bar's two sites into one. Do not read this as "a leading-missed
+            // candidate can never fire": it can, here, by being chosen.
             int slot = firstRival + tiedRivalCount;
             _tiedSiblingRivalBuf[slot] = new TiedSiblingRival
             {

@@ -144,6 +144,15 @@ namespace VoXR.Commands
                         // a rival missing a required slot takes RequiredSlotMissPenalty and
                         // could not have tied on score — so the shape is unreachable. Stated
                         // because the property is asserted of one candidate and used on another.
+                        //
+                        // That unreachability argument is specific to COMPLETENESS and does not
+                        // generalise to the neighbouring property. The leading-required-miss bar
+                        // (issue #124) is likewise asserted of the winner and used here, but it
+                        // carries no score penalty and is not a CompareCandidate key, so a
+                        // leading-missed rival CAN tie and CAN fire through this line. That is
+                        // issue #126, ruled recorded-not-gated; the reasoning is at
+                        // VoxrCommandParser.RecordTiedSiblingRival. Do not read the paragraph
+                        // above as covering it.
                         return Complete(
                             pending.Choices[i],
                             pending.ChoiceDefinitions[i],
