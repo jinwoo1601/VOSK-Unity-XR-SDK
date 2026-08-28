@@ -1736,6 +1736,41 @@ namespace VoXR.Commands
                     if (!HasAnswerableCoMember(set, m))
                         continue;
 
+                    // ...and not where the discriminator leads EVERY member, because then no
+                    // pair inside the set can be asked about either. Reaching the tie means
+                    // dropping that element, so whichever member wins the round missed its own
+                    // anchor and is barred: the round yields nothing, no pending opens, and the
+                    // "if this ambiguity is ever routed to the speaker" the message is built on
+                    // never happens. Telling an author to rename a literal to protect an answer
+                    // that can never be given is the knowingly false advisory named above, one
+                    // message over (issue #132).
+                    //
+                    // A set-level answer consulted inside a per-member loop, which is sound
+                    // rather than a leak from the per-PAIR/per-SET split above: the per-pair
+                    // narrowing asks whether THIS pair is worth a question, while the anchor
+                    // predicate answers for the whole set at once whether any question is asked
+                    // at all. The second subsumes the first set-wide, so no pair survives it.
+                    // Placed after both member tests so the walk over members and their patterns
+                    // runs only for a member whose value actually collides and is answerable,
+                    // rather than for every member of every set. It is deliberately NOT placed
+                    // after the dedup below, so a member whose value an earlier member already
+                    // reported does still pay for the walk: hoisting the test above the loop to
+                    // spare it would charge every set a walk to save the rare colliding one,
+                    // which is the worse trade. The predicate is set-invariant, so where several
+                    // members do reach it they all get the same answer — `continue` here is
+                    // equivalent to breaking, and no set is ever half-reported.
+                    //
+                    // Only this half of issue #132. The score test the filter above also carries
+                    // is deliberately NOT inherited: it is judged against DefaultMinScore because
+                    // the parser never sees the configured one, while the runtime gate is handed
+                    // it — so for an author who lowered minScore such a tie can still be routed
+                    // to the speaker (the asymmetry KNOWN_LIMITATIONS records under "The sibling
+                    // warning is silent below the default minScore"), and inheriting it would
+                    // suppress an advisory that is TRUE for exactly that author. This condition
+                    // reads no configuration and holds at every threshold.
+                    if (DiscriminatorIsEveryMembersAnchor(set))
+                        continue;
+
                     bool alreadyReported = false;
                     for (int e = 0; e < m; e++)
                     {
