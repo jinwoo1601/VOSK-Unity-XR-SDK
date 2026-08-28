@@ -4971,6 +4971,104 @@ namespace VoXR.Tests.Runtime
             LogAssert.NoUnexpectedReceived();
         }
 
+        [Test]
+        public void SiblingWarning_TwoElementCancelCollision_IsWithheldAtTheDefault()
+        {
+            // Issue #140, and a shape no fixture covered. TWO elements, so dropping the
+            // discriminator leaves (2 - 1) / 2 = 0.5 — under the default minScore of 0.6, which
+            // rejects BOTH siblings. Nothing fires, no pending ever opens, no question is ever
+            // put to the speaker, so there is no answer for cancel to swallow. The sibling
+            // warning was already withheld here by that arithmetic; the collision report was
+            // not, and told the author to rename "negative" to protect an answer that can never
+            // be given — the knowingly false advisory the collision loop already refuses to
+            // emit on an every-member anchor. It now inherits the score condition too.
+            //
+            // The discriminator sits at element 2 and NOT element 1, which is the whole reason
+            // this fixture exists beside
+            // SiblingWarning_TwoElementFrame_IsDetectedButNotWarnedAbout. That one uses
+            // "cease fire"/"resume fire", where the discriminating word is each pattern's own
+            // first required element, so DiscriminatorIsEveryMembersAnchor withholds both
+            // messages by position and the score gate is never reached — it cannot isolate the
+            // score condition at all. Here "mark" is the anchor and it MATCHES, so the anchor
+            // condition returns false and the score condition is the only thing withholding
+            // either message. Move the discriminator to the front and this test goes green for
+            // the issue #132 reason instead, proving nothing about #140.
+            //
+            // Read with the _ReportsAtALoweredMinScore companion below, which is this grammar
+            // at minScore 0.4. Neither half means much alone: this one is satisfied by an
+            // implementation that simply stopped reporting collisions, that one by an
+            // implementation that always reports. Only the pair pins that the report is
+            // conditional on the real threshold.
+            //
+            // Still DETECTED, exactly as the two-element test above — the relation admits the
+            // set and a consumer applying its own threshold may care. That assertion is also
+            // what stops this test passing vacuously on a grammar that never formed a sibling
+            // set to withhold a warning about.
+            var commands = new[]
+            {
+                Sib("mark_negative", SibP("mark", "negative")),
+                Sib("mark_friendly", SibP("mark", "friendly")),
+            };
+
+            Assert.AreEqual(
+                1,
+                VoxrCommandParser.FindSiblingSets(commands).Count,
+                "the relation still admits it"
+            );
+
+            var parser = new VoxrCommandParser(Array.Empty<VoxrSlotDefinition>(), commands);
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
+        public void SiblingWarning_TwoElementCancelCollision_ReportsAtALoweredMinScore()
+        {
+            // The companion, and the reason issue #140 had to plumb the recogniser's real
+            // minScore into the constructor rather than tighten the gate against the shipped
+            // constant. Same grammar, same 0.5 once the discriminator goes — but this author
+            // configured 0.4, so 0.5 clears the gate. The tie is genuinely live: one of the two
+            // siblings wins the round on registration order, and with disambiguateSiblingTies
+            // on it is routed to the speaker, where answering "negative" cancels rather than
+            // choosing that option. Both messages are TRUE for this author and both are owed.
+            //
+            // It also pins WHERE the configured value arrived. The sibling-tie warning firing
+            // proves the threshold reached that filter; the collision report firing proves it
+            // reached the collision loop as well. A fix that plumbed only the loop the issue
+            // was opened against would pass the negative above and fail here on the first
+            // expectation — and a fix that deleted the advisory instead of conditioning it
+            // would pass the negative and fail here on the second.
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intents 'mark_negative' and 'mark_friendly' have patterns \"mark negative\" "
+                        + "and \"mark friendly\" that differ only at element 2 "
+                        + "\\(\"negative\" or \"friendly\"\\)"
+                )
+            );
+            LogAssert.Expect(
+                UnityEngine.LogType.Warning,
+                new Regex(
+                    "Intent 'mark_negative' carries the discriminating value \"negative\" at "
+                        + "element 2, which is also in the default cancel vocabulary"
+                )
+            );
+
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[]
+                {
+                    Sib("mark_negative", SibP("mark", "negative")),
+                    Sib("mark_friendly", SibP("mark", "friendly")),
+                },
+                minScore: 0.4f
+            );
+
+            Assert.IsNotNull(parser);
+            LogAssert.NoUnexpectedReceived();
+        }
+
         // ---------- The anchor condition (issue #124 item 3) ----------
         //
         // A set whose discriminating word is the first REQUIRED element of EVERY member cannot
@@ -5296,10 +5394,13 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void SiblingWarning_ReachabilityGateTracksTheRecogniserDefault()
         {
-            // The scan judges reachability against a copy of the recogniser's default, because
-            // the parser constructor is never handed the configured threshold. If the shipped
-            // default moves and this copy does not, the scan starts warning about ties that no
-            // longer clear the gate, or goes quiet on ties that newly do.
+            // Since issue #140 the constructor IS handed the recogniser's configured
+            // threshold, so DefaultMinScore is no longer the scan's only reading of it — it is
+            // the FALLBACK the constructor applies when a caller supplies no minScore, which is
+            // most of this file and any consumer building a parser directly. Narrower, but not
+            // smaller: if the shipped default moves and this copy does not, every one of those
+            // callers starts warning about ties that no longer clear the gate, or goes quiet on
+            // ties that newly do.
             var field = typeof(VoxrCommandRecogniser).GetField(
                 "minScore",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
@@ -5315,7 +5416,7 @@ namespace VoXR.Tests.Runtime
                     0.6f,
                     (float)field.GetValue(recogniser),
                     0.0001f,
-                    "the sibling scan's DefaultMinScore mirrors this value — update both together"
+                    "the parser's DefaultMinScore fallback mirrors this — update both together"
                 );
             }
             finally

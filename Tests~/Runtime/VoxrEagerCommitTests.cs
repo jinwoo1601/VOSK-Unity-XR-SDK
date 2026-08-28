@@ -1711,16 +1711,28 @@ namespace VoXR.Tests.Runtime
         [Test]
         public void TryEagerCommit_LeadingTwoElementTie_RefusesForScoreAtDefaultAndForTheBarBelowIt()
         {
-            // The asymmetry between this gate and the author-facing warning, pinned rather than
-            // left to be discovered. "cease fire" / "resume fire" lose their discriminator to
-            // leave "fire", scoring 1/2 = 0.5. The warning is SILENT about this pair because it
-            // must judge against a default minScore the constructor cannot see, and 0.5 is under
-            // it — documented in KNOWN_LIMITATIONS.
+            // The relationship between this gate and the author-facing warning, pinned rather
+            // than left to be discovered. "cease fire" / "resume fire" lose their discriminator
+            // to leave "fire", scoring (2-1)/2 = 0.5, and the warning is SILENT about this pair
+            // twice over. By POSITION, which is threshold-independent: "cease" / "resume" is
+            // every member pattern's FIRST required element, so
+            // DiscriminatorIsEveryMembersAnchor withholds the sibling warning at ANY minScore —
+            // dropping the discriminator bars whichever member wins the round, so nothing fires
+            // and there is nothing to report (issue #132, PR #139; the same predicate gates the
+            // cancel-collision report beside it). And by SCORE, for the parser built here:
+            // Build() supplies no threshold, so it takes the DefaultMinScore fallback of 0.6,
+            // and 0.5 is under it. That is the fallback landing, not a constructor that cannot
+            // be told — since issue #140 the constructor takes a minScore and the scan compares
+            // against the resulting _minScore field. Documented in KNOWN_LIMITATIONS.
             //
-            // This gate is handed the real configured threshold, so it judges exactly rather
-            // than predicting. At the 0.6 default the score condition refuses first and the
-            // sibling condition is never reached. Lower the threshold and the tie becomes live —
-            // and the gate refuses it, on a pair the author was never warned about.
+            // What still separates this gate from that scan is LIFETIME, not blindness. Both
+            // judge against a real configured threshold now; TryEagerCommit takes minScore as a
+            // per-call PARAMETER (see its signature), so it answers for whatever value the call
+            // passes, while the scan captures _minScore once at construction and is frozen
+            // there until the parser is rebuilt. Hence the two assertions below: the same
+            // grammar, built fresh for each, handed 0.6 and then 0.4 — the gate moves with the
+            // call while the scan inside each construction only ever saw the 0.6 fallback. At
+            // 0.6 the score condition refuses first and the sibling condition is never reached.
             //
             // The discriminator is LEADING, not trailing, so the issue #70 tail condition does
             // not take it: "fire" is the last element and it matched.

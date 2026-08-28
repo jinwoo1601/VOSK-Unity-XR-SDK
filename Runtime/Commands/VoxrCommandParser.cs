@@ -142,9 +142,11 @@ namespace VoXR.Commands
         const float OptionalLiteralScore = 0.5f;
         const float RequiredSlotMissPenalty = -1.0f;
 
-        // Mirrors VoxrCommandRecogniser's serialized default. Used only by the construction-
-        // time sibling scan, which has to judge whether a tie could clear the gate but is not
-        // handed the configured threshold. Kept in sync by
+        // Mirrors VoxrCommandRecogniser's serialized default, and since issue #140 that is
+        // all it is: the fallback for this class's minScore parameter, so a caller that
+        // supplies no threshold of its own still has its construction-time sibling scan
+        // predict against the gate the recogniser ships with. A caller that does supply one
+        // is judged against that instead (see _minScore). Kept in sync by
         // SiblingWarning_ReachabilityGateTracksTheRecogniserDefault.
         const float DefaultMinScore = 0.6f;
 
@@ -368,9 +370,9 @@ namespace VoXR.Commands
         // whose discriminating word is every member's first required element. Silent, and for
         // that third shape harmless for the same reason the warning is withheld — it can only
         // tie when the word is dropped, and the round that drops it bars its own winner, so
-        // the question the cap limits is never asked. (Which of the three gates is exact, and
-        // which only at the default minScore, is set out where the note is built, in
-        // BuildSiblingWarning.)
+        // the question the cap limits is never asked. (What each of the three gates does and
+        // does not promise is set out where the note is built, in BuildSiblingWarning; since
+        // issue #140 the score gate reads the configured minScore, not a copy of the default.)
         internal const int MaxDisambiguationRivals = 4;
 
         // Whether the flush loop records which sibling rival tied the winner. The Editor always
@@ -396,6 +398,20 @@ namespace VoXR.Commands
         // collision message, which has to name the right source and offer the remedy that still
         // applies — "override cancelVocabulary" is not advice for an author who already did.
         readonly bool _cancelVocabularyIsOverridden;
+
+        // The recogniser's configured minScore, resolved once here so the construction-time
+        // sibling scan judges reachability against the threshold that will actually run rather
+        // than against a hardcoded copy of the shipped default (issue #140). DefaultMinScore
+        // when the caller supplies none.
+        //
+        // The parser does not gate parsing on it. Nothing in Parse, ParseInternal or the
+        // scoring helpers reads this field — they compute a score and hand it back, and the
+        // comparison against a threshold happens in the caller — and TryEagerCommit's gate is
+        // on the minScore it is HANDED per call, left a parameter so the eager path reads the
+        // recogniser's live value rather than whatever was current when this parser was built.
+        // This field exists to PREDICT what that gate will do with this grammar, at the one
+        // moment the prediction is made: construction.
+        readonly float _minScore;
 
         // Pooled StringBuilder for TryMatchNumberSequence.
         readonly System.Text.StringBuilder _numberSb = new System.Text.StringBuilder();
@@ -430,11 +446,26 @@ namespace VoXR.Commands
         // parameter, and for a sharper reason: VoxrCommandRecogniser builds a NEW parser on
         // Configure and RebuildParser, so a post-construction setter is one call site away from
         // a silently flag-off parser after a rebuild.
+        //
+        // minScore is the recogniser's configured minScore. The construction-time sibling scan
+        // has to judge whether a tie could clear the runtime gate, and until issue #140 it
+        // judged that against a hardcoded copy of the shipped default — blind to an author who
+        // moved the knob. Handed the real threshold, the scan and the cancel-collision report
+        // beside it speak about the gate that will actually run. It is APPENDED last so every
+        // existing positional call site stays valid, and defaults to DefaultMinScore for a
+        // caller with no threshold of its own.
+        //
+        // A constructor parameter for the reason effectiveCancelVocabulary is —
+        // WarnOnSiblingDiscriminator runs inside this constructor, so a property would be
+        // assigned after the warning it governs had already been emitted — and it inherits
+        // recordSiblingTies' sharper reason too, since a rebuild builds a new parser. It is not
+        // applied to parsing in any form; _minScore sets out what reads it and what does not.
         public VoxrCommandParser(VoxrSlotDefinition[] slots, VoxrCommandDefinition[] commands,
             float coverageWeight = DefaultCoverageWeight,
             string[] additionalGrammarWords = null,
             string[] effectiveCancelVocabulary = null,
-            bool recordSiblingTies = false
+            bool recordSiblingTies = false,
+            float minScore = DefaultMinScore
         )
         {
             if (slots == null) throw new ArgumentNullException(nameof(slots));
@@ -458,6 +489,10 @@ namespace VoXR.Commands
             // through every `<= 0f` floor because those comparisons are false for NaN.
             _coverageWeight =
                 coverageWeight > 0f && !float.IsInfinity(coverageWeight) ? coverageWeight : 0f;
+            // Taken as given, unlike coverageWeight: this one never enters scoring arithmetic.
+            // It only ever appears on the right of a comparison in the Editor-only sibling
+            // scan, where the worst a nonsense value can do is admit or withhold a warning.
+            _minScore = minScore;
 
             // Build slot name -> index mapping
             _slotIndex = new Dictionary<string, int>(slots.Length, StringComparer.Ordinal);
@@ -1653,11 +1688,14 @@ namespace VoXR.Commands
                 // counterpart _DoesNotFire). Warning "the wrong intent can fire" there is
                 // false, and the remedy it offers is inert when no command fires at all.
                 //
-                // Judged against the DEFAULT, because the parser constructor is never handed
-                // the recogniser's configured minScore. An author who lowers it below (D-1)/D
-                // makes these ties live and gets no warning — a real limitation, stated in
-                // KNOWN_LIMITATIONS rather than papered over. Erring the other way would put
-                // a knowingly false claim in front of every author who did not touch the knob.
+                // Judged against the CONFIGURED threshold. Since issue #140 the constructor is
+                // handed the recogniser's own minScore and this test uses it, so it asks about
+                // the gate that will actually run rather than about a copy of the default. An
+                // author who lowers minScore below (D-1)/D makes these ties live, and is now
+                // told: the limitation this paragraph used to record — the sibling warning
+                // going silent below the default minScore — is retired rather than restated.
+                // DefaultMinScore survives only as the fallback for a caller that supplies no
+                // threshold of its own.
                 //
                 // SECOND, by POSITION. The leading-required-miss bar lets the round's WINNER
                 // compete and consume when it missed its first required element, but not fire.
@@ -1673,11 +1711,11 @@ namespace VoXR.Commands
                 // for such a set the winner is barred and that round yields nothing — not that
                 // a leading-missed candidate can never fire anywhere.
                 //
-                // This condition reads no configuration, which is exactly what the (D-1)/D
-                // test cannot say for itself. It is positional and therefore
-                // threshold-independent: it stays correct for the author who lowered minScore
-                // out from under the score test above, and that author is the one the score
-                // test silently fails.
+                // This condition reads no configuration, and it keeps its point now that the
+                // score test above reads the real one. It is positional and therefore
+                // threshold-independent: it holds where the score test ADMITS the set as
+                // readily as where the score test withholds it, and at a minScore of 0 — every
+                // tie clearing on score — it is the only one of the two still refusing.
                 //
                 // EVERY member, not any. Where they disagree — one anchored, one not — the two
                 // candidates tie EXACTLY, because MatchedRequired is not one of
@@ -1698,7 +1736,7 @@ namespace VoXR.Commands
                 // construction.
                 if (
                     !IsSingleIntent(set)
-                    && ScoreAfterDroppingDiscriminator(set.Frame) >= DefaultMinScore
+                    && ScoreAfterDroppingDiscriminator(set.Frame) >= _minScore
                     && !DiscriminatorIsEveryMembersAnchor(set)
                 )
                     UnityEngine.Debug.LogWarning(BuildSiblingWarning(set));
@@ -1736,39 +1774,60 @@ namespace VoXR.Commands
                     if (!HasAnswerableCoMember(set, m))
                         continue;
 
-                    // ...and not where the discriminator leads EVERY member, because then no
-                    // pair inside the set can be asked about either. Reaching the tie means
-                    // dropping that element, so whichever member wins the round missed its own
-                    // anchor and is barred: the round yields nothing, no pending opens, and the
-                    // "if this ambiguity is ever routed to the speaker" the message is built on
-                    // never happens. Telling an author to rename a literal to protect an answer
-                    // that can never be given is the knowingly false advisory named above, one
-                    // message over (issue #132).
+                    // ...and not where the tie is unreachable, by either of the two tests the
+                    // filter above applies. This report is advice about the answer a speaker
+                    // would give to a question; where the question is never asked, telling an
+                    // author to rename a literal protects an answer that can never be given,
+                    // which is the knowingly false advisory named above.
                     //
-                    // A set-level answer consulted inside a per-member loop, which is sound
+                    // By SCORE (issue #140). A tie that cannot clear the gate leaves nothing to
+                    // answer: both tying siblings are rejected by it, so no pending opens and no
+                    // answer is waiting for a cancel word to swallow. That is the shape #140 was
+                    // reported on — a two-element pattern drops to (2-1)/2 = 0.5, under the 0.6
+                    // default neither sibling survives, and the author was told to rename anyway.
+                    //
+                    // Judged against _minScore: the threshold the recogniser was CONFIGURED
+                    // with, the same value its runtime gate applies. Not against
+                    // DefaultMinScore, and the distinction is the whole reason this test may be
+                    // here at all. PR #139 weighed the same condition and declined it, rightly
+                    // on the facts it had: the constructor was then blind to the configured
+                    // value, so a test judged against a hardcoded default would have silenced
+                    // this advisory for the author who lowered minScore — the one author for
+                    // whom it was TRUE. Issue #140 removed the blindness rather than overruled
+                    // the objection. Inheriting DefaultMinScore here would still be wrong, and
+                    // is not what this does.
+                    //
+                    // By POSITION (issue #132), because where the discriminator leads EVERY
+                    // member no pair inside the set can be asked about either. Reaching the tie
+                    // means dropping that element, so whichever member wins the round missed its
+                    // own anchor and is barred: the round yields nothing, no pending opens, and
+                    // the "if this ambiguity is ever routed to the speaker" the message is built
+                    // on never happens.
+                    //
+                    // Two set-level answers consulted inside a per-member loop, which is sound
                     // rather than a leak from the per-PAIR/per-SET split above: the per-pair
-                    // narrowing asks whether THIS pair is worth a question, while the anchor
-                    // predicate answers for the whole set at once whether any question is asked
-                    // at all. The second subsumes the first set-wide, so no pair survives it.
-                    // Placed after both member tests so the walk over members and their patterns
-                    // runs only for a member whose value actually collides and is answerable,
-                    // rather than for every member of every set. It is deliberately NOT placed
-                    // after the dedup below, so a member whose value an earlier member already
-                    // reported does still pay for the walk: hoisting the test above the loop to
-                    // spare it would charge every set a walk to save the rare colliding one,
-                    // which is the worse trade. The predicate is set-invariant, so where several
-                    // members do reach it they all get the same answer — `continue` here is
-                    // equivalent to breaking, and no set is ever half-reported.
+                    // narrowing asks whether THIS pair is worth a question, while both of these
+                    // answer for the whole set at once whether any question is asked at all.
+                    // Either one subsumes the per-pair narrowing set-wide, so no pair survives
+                    // it. Both are set-invariant — the score reads only set.Frame, the anchor
+                    // test only the members' authored patterns — so where several members do
+                    // reach them they all get the same answer: `continue` here is equivalent to
+                    // breaking, and no set is ever half-reported.
                     //
-                    // Only this half of issue #132. The score test the filter above also carries
-                    // is deliberately NOT inherited: it is judged against DefaultMinScore because
-                    // the parser never sees the configured one, while the runtime gate is handed
-                    // it — so for an author who lowered minScore such a tie can still be routed
-                    // to the speaker (the asymmetry KNOWN_LIMITATIONS records under "The sibling
-                    // warning is silent below the default minScore"), and inheriting it would
-                    // suppress an advisory that is TRUE for exactly that author. This condition
-                    // reads no configuration and holds at every threshold.
-                    if (DiscriminatorIsEveryMembersAnchor(set))
+                    // Placed after both member tests so this work runs only for a member whose
+                    // value actually collides and is answerable, rather than for every member of
+                    // every set. It is deliberately NOT placed after the dedup below, so a
+                    // member whose value an earlier member already reported does still pay for
+                    // it: hoisting the tests above the loop to spare that would charge every set
+                    // the work to save the rare colliding one, which is the worse trade. The
+                    // score test goes first within the guard for the same reason at a smaller
+                    // scale — it is one pass over the frame, while the anchor test walks every
+                    // member and its authored pattern, so short-circuiting on the cheap one
+                    // spares the walk.
+                    if (
+                        ScoreAfterDroppingDiscriminator(set.Frame) < _minScore
+                        || DiscriminatorIsEveryMembersAnchor(set)
+                    )
                         continue;
 
                     bool alreadyReported = false;
@@ -2298,23 +2357,20 @@ namespace VoXR.Commands
             // warning: same-intent, the (D-1)/D reachability score, and — since issue #124
             // item 3 — the discriminator being every member's first required element.
             //
-            // TWO of the three are exact, and under those two the note is owed nothing. A
-            // same-intent tie is never routed to the speaker at all; and where the
-            // discriminator is every member's anchor, whichever member wins the round is
-            // barred, so that set produces no result to route. Telling an author their synonym
-            // list is too long to ask about would, under either, be advice about a question
-            // never asked.
+            // Under each of the three the note is owed nothing. A same-intent tie is never
+            // routed to the speaker at all; where the discriminator is every member's anchor,
+            // whichever member wins the round is barred, so that set produces no result to
+            // route; and where the tie cannot clear the score gate both siblings are rejected,
+            // so nothing is routed there either. Telling an author their synonym list is too
+            // long to ask about would, under any of the three, be advice about a question never
+            // asked.
             //
-            // The SCORE gate is exact only at the DEFAULT minScore, which is the only
-            // threshold the parser is ever handed (the reachability scan says so where it is
-            // applied, and KNOWN_LIMITATIONS states it as a limitation). Lower minScore below
-            // (D-1)/D and those ties become live while both the warning and this note stay
-            // withheld: six cross-intent commands ["fire","alpha"] ... ["fire","foxtrot"] score
-            // (2-1)/2 = 0.5, so nothing is reported, yet at a configured 0.4 the tie fires and
-            // the set spans six values against a cap of five. That author is owed the note and
-            // does not get it. It is the score gate's existing limitation inherited here, not a
-            // new one — narrowing it would need the configured threshold, which construction
-            // does not have.
+            // The score gate reads the CONFIGURED minScore since issue #140, which is what
+            // closed the gap this paragraph used to record. Six cross-intent commands
+            // ["fire","alpha"] ... ["fire","foxtrot"] score (2-1)/2 = 0.5: silent at the 0.6
+            // default, where neither sibling clears the gate and no question is asked, and
+            // reported at a configured 0.4, where the tie is live and the set spans six values
+            // against a cap of five. That second author used to be owed the note and denied it.
             string capNote =
                 values.Count > 1 + MaxDisambiguationRivals
                     ? $" This set spans {values.Count} discriminating values and runtime "
