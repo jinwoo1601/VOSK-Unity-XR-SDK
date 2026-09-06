@@ -82,8 +82,9 @@ namespace VoXR.Native
                 UnityEngine.Debug.LogWarning(
                     $"[VoxrGrammarVocabulary] Grammar word \"{word}\" is not in the loaded VOSK "
                         + "model's vocabulary. The decoder drops it, so any phrase that needs it "
-                        + "can never be recognised. Remedies: spell it out as separate letters "
-                        + "(e.g. \"c q b\"), or add a phonetic alias for it. See "
+                        + "can never be recognised. Remedies: spell the phrase out in the "
+                        + "slot value (e.g. \"close quarters\" instead of \"cqb\"), or add a "
+                        + "phonetic alias for it. See "
                         + "KNOWN_LIMITATIONS.md, \"Abbreviations and letter sequences map to "
                         + "[unk]\"."
                 );
