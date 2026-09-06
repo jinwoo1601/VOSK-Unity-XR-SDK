@@ -47,6 +47,14 @@ namespace VoXR.Tests.Editor
         }
 
         [Test]
+        public void ValidateModelDirectory_MissingConfModelConf_ReturnsFalse()
+        {
+            CreateValidModelStructure(_testDir);
+            File.Delete(Path.Combine(_testDir, "conf", "model.conf"));
+            Assert.IsFalse(ModelExtractor.ValidateModelDirectory(_testDir));
+        }
+
+        [Test]
         public void ValidateModelDirectory_MissingGraphDir_ReturnsFalse()
         {
             CreateValidModelStructure(_testDir);
@@ -67,6 +75,7 @@ namespace VoXR.Tests.Editor
 
             Directory.CreateDirectory(Path.Combine(basePath, "conf"));
             File.WriteAllText(Path.Combine(basePath, "conf", "mfcc.conf"), "stub");
+            File.WriteAllText(Path.Combine(basePath, "conf", "model.conf"), "stub");
 
             Directory.CreateDirectory(Path.Combine(basePath, "graph"));
         }
