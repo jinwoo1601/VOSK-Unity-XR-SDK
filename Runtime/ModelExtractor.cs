@@ -1,5 +1,6 @@
 // ============================================================================
-// Purpose:  Extracts ZIP-compressed VOSK models from StreamingAssets to persistent storage
+// Purpose:  Extracts ZIP-compressed VOSK models from StreamingAssets to persistent
+//           storage, re-extracting whenever the archive's contents change
 // Layer:    Runtime
 // Owns:     ModelExtractor (internal static class)
 // Depends:  VoxrBridgeErrorCode
@@ -7,6 +8,8 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -16,13 +19,29 @@ namespace VoXR
     internal static class ModelExtractor
     {
         const string ModelCacheFolder = "VoxrModels";
+        internal const string StampFileName = ".voxr-model-stamp";
 
-        internal static async Task<string> ExtractModelAsync(
+        internal static Task<string> ExtractModelAsync(
             string modelRelativePath,
             Action<VoxrBridgeErrorCode, string> onError)
         {
-            string modelName = Path.GetFileName(modelRelativePath);
-            string basePath = Path.Combine(Application.persistentDataPath, ModelCacheFolder);
+            string archiveRelativePath = modelRelativePath + ".zip";
+
+            return ExtractModelAsync(
+                Path.GetFileName(modelRelativePath),
+                Path.Combine(Application.persistentDataPath, ModelCacheFolder),
+                () => ReadStreamingAsset(archiveRelativePath),
+                archiveRelativePath,
+                onError);
+        }
+
+        internal static async Task<string> ExtractModelAsync(
+            string modelName,
+            string basePath,
+            Func<Task<byte[]>> archiveSource,
+            string archiveDescription,
+            Action<VoxrBridgeErrorCode, string> onError)
+        {
             string finalPath = Path.Combine(basePath, modelName);
             string tempPath = Path.Combine(basePath, $".tmp_{modelName}");
 
@@ -30,9 +49,28 @@ namespace VoXR
             {
                 Directory.CreateDirectory(basePath);
 
+                byte[] archiveBytes = await archiveSource();
+                if (archiveBytes == null)
+                {
+                    // Without the archive the cache's freshness cannot be checked, but a
+                    // valid cache is still a usable model — and before stamping existed
+                    // an unreadable archive was harmless whenever the cache was valid.
+                    // Keep serving it silently rather than regressing into an error.
+                    if (Directory.Exists(finalPath) && ValidateModelDirectory(finalPath))
+                        return finalPath;
+
+                    onError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
+                        $"Model archive not found in StreamingAssets: {archiveDescription}");
+                    return null;
+                }
+
+                string sourceKey = await Task.Run(() => ComputeArchiveKey(archiveBytes));
+
                 if (Directory.Exists(finalPath))
                 {
-                    if (ValidateModelDirectory(finalPath))
+                    // A missing stamp reads as a mismatch, so a pre-stamp install
+                    // re-extracts exactly once and is stamped from then on.
+                    if (ValidateModelDirectory(finalPath) && ReadStamp(finalPath) == sourceKey)
                         return finalPath;
 
                     Directory.Delete(finalPath, true);
@@ -41,14 +79,6 @@ namespace VoXR
                 // Clean up stale temp from interrupted extraction
                 if (Directory.Exists(tempPath))
                     Directory.Delete(tempPath, true);
-
-                byte[] archiveBytes = await ReadStreamingAsset(modelRelativePath + ".zip");
-                if (archiveBytes == null)
-                {
-                    onError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
-                        $"Model archive not found in StreamingAssets: {modelRelativePath}.zip");
-                    return null;
-                }
 
                 await Task.Run(() =>
                 {
@@ -93,6 +123,10 @@ namespace VoXR
                     return null;
                 }
 
+                // Stamp inside the temp directory so the atomic rename below is what
+                // publishes it: a stamped cache can only ever appear complete.
+                File.WriteAllText(Path.Combine(tempPath, StampFileName), sourceKey);
+
                 // Atomic rename
                 Directory.Move(tempPath, finalPath);
                 return finalPath;
@@ -122,9 +156,41 @@ namespace VoXR
 
             bool hasModel = File.Exists(Path.Combine(path, "am", "final.mdl"));
             bool hasConf = File.Exists(Path.Combine(path, "conf", "mfcc.conf"));
+            bool hasModelConf = File.Exists(Path.Combine(path, "conf", "model.conf"));
             bool hasGraph = Directory.Exists(Path.Combine(path, "graph"));
 
-            return hasModel && hasConf && hasGraph;
+            return hasModel && hasConf && hasModelConf && hasGraph;
+        }
+
+        // SHA-256 over the raw archive bytes: deterministic across platforms and
+        // needs no dependency beyond the BCL.
+        internal static string ComputeArchiveKey(byte[] archiveBytes)
+        {
+            using var sha = SHA256.Create();
+            byte[] hash = sha.ComputeHash(archiveBytes);
+
+            var builder = new StringBuilder("sha256:", 7 + hash.Length * 2);
+            foreach (byte b in hash)
+                builder.Append(b.ToString("x2"));
+
+            return builder.ToString();
+        }
+
+        static string ReadStamp(string modelPath)
+        {
+            try
+            {
+                string stampPath = Path.Combine(modelPath, StampFileName);
+                if (!File.Exists(stampPath))
+                    return null;
+
+                return File.ReadAllText(stampPath).Trim();
+            }
+            catch
+            {
+                // An unreadable stamp must mean "re-extract", never an exception.
+                return null;
+            }
         }
 
         static async Task<byte[]> ReadStreamingAsset(string relativePath)
