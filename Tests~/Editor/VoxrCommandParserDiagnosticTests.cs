@@ -566,5 +566,294 @@ namespace VoXR.Tests.Editor
             Assert.IsFalse(diag[1].TiedRivalIsSibling);
             Assert.IsNull(diag[1].DescribeTiedRival());
         }
+
+        // ---------- The barred round and the runner-up (issue #144) ----------
+        //
+        // Neither field changes what fires. They exist because the session log could not
+        // answer two questions a field report has to answer: what the leading-required-miss
+        // bar refused (issue #124 left the round completely silent, which made the bar's cost
+        // unmeasurable), and what the round's second choice was.
+
+        [Test]
+        public void LastBarredRounds_LeadingRequiredMiss_RecordsTheRoundWithoutAResult()
+        {
+            // launch_weapon's first pattern is ["launch","{?quantity}","{weapon}","target",
+            // "{target}"], so its anchor is the required literal "launch". Dropping just that
+            // word leaves the whole tail matching: {weapon}=missiles, the literal "target" and
+            // {target}="hotel one" are three matched required elements against the one missed
+            // anchor, so the candidate is admissible (missed <= matched, CompareCandidate) and
+            // scores 3/4 with no coverage charge — it starts at the round origin and consumes
+            // every token. It therefore WINS the round and is then refused by the bar, which is
+            // the shape this pins. A grammar that merely failed to match would record nothing
+            // here at all, so the two are not interchangeable.
+            var parser = CreateParser();
+            var results = parser.Parse("missiles target hotel one", null);
+
+            var barred = parser.LastBarredRounds;
+            Assert.IsNotNull(barred);
+            Assert.AreEqual(1, barred.Length, "one round ran, and the bar refused it");
+            Assert.AreEqual("launch_weapon", barred[0].Intent);
+            Assert.AreEqual(
+                "launch {?quantity} {weapon} target {target}",
+                barred[0].PatternString,
+                "the pattern the bar refused, joined exactly as an emitting round's is"
+            );
+            Assert.Greater(
+                barred[0].Score,
+                0f,
+                "a barred round WON its selection — a zero score would mean it never competed"
+            );
+            Assert.AreEqual(0, barred[0].StartIdx);
+            Assert.AreEqual(4, barred[0].EndIdx, "half-open, and the span it consumed");
+            Assert.AreEqual(0, barred[0].ResultsBefore, "nothing had emitted ahead of it");
+
+            // The real point. A barred round is recorded WITHOUT becoming a result: the
+            // _resultBuf <-> LastParseDiagnostics 1:1 alignment is what both the recogniser's
+            // BuildAttempt(cmd, parseDiag, i, ...) and VoxrBatchTestRunner index by, so putting
+            // the barred round into LastParseDiagnostics would have shifted every entry after
+            // it onto the wrong command. If this pair ever goes non-zero, that contract broke.
+            Assert.AreEqual(0, results.Length, "the bar produced no command");
+            Assert.AreEqual(
+                0,
+                parser.LastParseDiagnostics.Length,
+                "and no diagnostic entry, because there is no result for one to describe"
+            );
+        }
+
+        [Test]
+        public void LastBarredRounds_AfterACleanParse_IsEmptyNotStale()
+        {
+            // Every exit from a parse must leave LastBarredRounds describing THAT parse. The
+            // failure this pins is silent and reads as a real finding: an utterance that barred
+            // nothing would report the previous utterance's refused round, and a consumer
+            // holding a zero result count alongside it has no way to tell.
+            var parser = CreateParser();
+
+            parser.Parse("missiles target hotel one", null);
+            Assert.AreEqual(1, parser.LastBarredRounds.Length, "precondition: a round was barred");
+
+            var results = parser.Parse("shoot missiles", null);
+            Assert.AreEqual(1, results.Length, "precondition: this one matches cleanly");
+            Assert.IsNotNull(parser.LastBarredRounds);
+            Assert.AreEqual(
+                0,
+                parser.LastBarredRounds.Length,
+                "a parse that barred nothing must not report the previous parse's barred round"
+            );
+
+            // …and again through the early return in Parse(string, VoxrWord[]) itself, which
+            // clears the array without ever entering ParseInternal. Re-barred first so the
+            // array being cleared is genuinely non-empty going in.
+            parser.Parse("missiles target hotel one", null);
+            Assert.AreEqual(1, parser.LastBarredRounds.Length, "precondition: barred again");
+
+            parser.Parse("   ", null);
+            Assert.IsNotNull(
+                parser.LastBarredRounds,
+                "the whitespace early return must leave an array, not null"
+            );
+            Assert.AreEqual(0, parser.LastBarredRounds.Length);
+        }
+
+        [Test]
+        public void LastParseDiagnostics_TwoCandidates_NamesTheRunnerUpAndItsScore()
+        {
+            // Two candidates at the same start index, both consuming the whole utterance, with
+            // different scores — so second place is unambiguous and neither carries a coverage
+            // charge (SkippedBefore is 0 at the round origin, and the trailing orphan run is 0
+            // at tokens.Length).
+            //
+            //   set_mode  ["set","{ship}","on"]          all three match      -> 3/3 = 1.00
+            //   set_level ["set","{ship}","level","on"]  "level" missed
+            //                                            medially, "on" then
+            //                                            matches              -> 3/4 = 0.75
+            //
+            // The miss is MEDIAL on purpose: a later match resets requiredAfterLastMatch, so
+            // the candidate does not take the forced-orphan charge and the arithmetic above is
+            // the whole of its score.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+
+            var results = parser.Parse("set alpha on", null);
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("set_mode", results[0].Command.Intent, "the full match wins");
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.AreEqual(
+                "set_level",
+                diag[0].RunnerUpIntent,
+                "what would have won had set_mode not been there"
+            );
+            Assert.AreEqual(
+                0.75f,
+                diag[0].RunnerUpScore,
+                1e-4f,
+                "the RUNNER-UP's score — copying the winner's would read 1.00 here"
+            );
+            Assert.Less(
+                diag[0].RunnerUpScore,
+                results[0].Command.Score,
+                "and it is second place, not the winner under another name"
+            );
+
+            // Nothing tied: 0.75 is not 1.00. The two records answer different questions and
+            // this is the half that shows a runner-up is recorded however far behind it
+            // finished, where a tied rival would not be recorded at all.
+            Assert.IsNull(diag[0].TiedRivalIntent);
+        }
+
+        [Test]
+        public void LastParseDiagnostics_SingleCandidate_RecordsNoRunnerUp()
+        {
+            // The negative. Second place must be absent, not zero: a runner-up slot seeded with
+            // float.MinValue and published unguarded would put a nonsense score in the log, and
+            // -1 is what every consumer tests for.
+            //
+            // A one-element pattern over a one-token utterance is the only shape with a single
+            // candidate — the selection loop tries every pattern at every start index, so even
+            // "cease fire" offers ["cease","fire"] started at token 1 as an admissible second.
+            var parser = new VoxrCommandParser(
+                Array.Empty<VoxrSlotDefinition>(),
+                new[] { new VoxrCommandDefinition("engage", new[] { new[] { "engage" } }) }
+            );
+
+            var results = parser.Parse("engage", null);
+
+            Assert.AreEqual(1, results.Length);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.IsNull(diag[0].RunnerUpIntent, "one candidate, so there is no second");
+            Assert.AreEqual(-1f, diag[0].RunnerUpScore);
+        }
+
+        [Test]
+        public void LastParseDiagnostics_RunnerUpInRoundOne_DoesNotLeakIntoRoundTwo()
+        {
+            // The same hand-off LastParseDiagnostics_TieInRoundOne_DoesNotLeakIntoRoundTwo pins
+            // for the tied rival, for the runner-up: selection restarts per extraction round, so
+            // round 1's second place is not a fact about round 2. Hoisting the runner-up locals
+            // out of the round loop compiles and passes every single-round test above.
+            //
+            // Round 1 is "set alpha on", where set_level is second at 0.75 behind set_mode's
+            // 1.00. Round 2 is "engage", whose only other candidates — the two set_* patterns
+            // probed at token 3 — miss their anchor AND their required {ship} slot, so both are
+            // refused by the score floor before the runner-up slot is ever offered them.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[] { new[] { "set", "{ship}", "on" } }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                    new VoxrCommandDefinition("engage", new[] { new[] { "engage" } }),
+                }
+            );
+
+            var results = parser.Parse("set alpha on engage", null);
+
+            Assert.AreEqual(2, results.Length, "two commands extracted, in two rounds");
+            Assert.AreEqual("set_mode", results[0].Command.Intent);
+            Assert.AreEqual("engage", results[1].Command.Intent);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(2, diag.Length);
+            Assert.AreEqual("set_level", diag[0].RunnerUpIntent, "round 1 had a second choice");
+
+            Assert.IsNull(
+                diag[1].RunnerUpIntent,
+                "round 2 had one candidate — a runner-up held over from round 1 would name a "
+                    + "pattern that never competed for this command"
+            );
+            Assert.AreEqual(-1f, diag[1].RunnerUpScore);
+        }
+
+        [Test]
+        public void LastParseDiagnostics_TiedRivalAndRunnerUp_AreRecordedIndependently()
+        {
+            // The two fields are computed separately and neither suppresses the other, which is
+            // only observable where they DISAGREE — and this fixture is the one shape that
+            // makes them disagree, so it is worth saying why it does.
+            //
+            // It is LastParseDiagnostics_ShadowedRival_IsTheCrossIntentOne's grammar. On
+            // "set alpha on" three candidates tie at 0.75 from token 0: set_mode pattern 0
+            // (the winner on registration order), set_mode pattern 1, and set_level pattern 0.
+            //
+            //   - The TIED RIVAL is an exemplar chosen by KIND, not by rank: a sibling rival
+            //     displaces a non-sibling one however late it arrives, so set_mode's own second
+            //     phrasing is passed over for set_level, the cross-intent hazard.
+            //   - The RUNNER-UP is chosen by RANK alone, by the same CompareCandidate order
+            //     selection used. set_mode pattern 1 at token 0 reaches the slot first and
+            //     outranks what was there (the same patterns probed at token 1, which lose on
+            //     start index); set_level then ties it on every key, and Tied is not Better, so
+            //     the slot is not handed over. Second by rank is set_mode pattern 1.
+            //
+            // So one field names set_level and the other names set_mode on the same round.
+            // Deriving either from the other would collapse them onto one answer here.
+            var parser = new VoxrCommandParser(
+                ShipSlots(),
+                new[]
+                {
+                    new VoxrCommandDefinition(
+                        "set_mode",
+                        new[]
+                        {
+                            new[] { "set", "{ship}", "mode", "on" },
+                            new[] { "set", "{ship}", "level", "on" },
+                        }
+                    ),
+                    new VoxrCommandDefinition(
+                        "set_level",
+                        new[] { new[] { "set", "{ship}", "level", "on" } }
+                    ),
+                }
+            );
+
+            var results = parser.Parse("set alpha on", null);
+
+            Assert.AreEqual(1, results.Length);
+            Assert.AreEqual("set_mode", results[0].Command.Intent);
+
+            var diag = parser.LastParseDiagnostics;
+            Assert.AreEqual(1, diag.Length);
+            Assert.AreEqual(
+                "set_level",
+                diag[0].TiedRivalIntent,
+                "the tie exemplar still prefers the cross-intent rival"
+            );
+            Assert.IsTrue(diag[0].TiedRivalIsSibling);
+
+            Assert.AreEqual(
+                "set_mode",
+                diag[0].RunnerUpIntent,
+                "and second by RANK is the winner's own second phrasing, which tied first"
+            );
+            Assert.AreEqual(
+                results[0].Command.Score,
+                diag[0].RunnerUpScore,
+                1e-6f,
+                "an exact tie, so the runner-up carries the winner's score — pinned against the "
+                    + "winner rather than a literal so a scoring change cannot make it stale"
+            );
+        }
     }
 }

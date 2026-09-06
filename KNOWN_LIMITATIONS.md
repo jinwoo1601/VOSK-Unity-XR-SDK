@@ -460,10 +460,13 @@ deliberate trade-offs rather than oversights.
 
 - **Symptom**: A command you said in full produces nothing at all. The transcript
   shows every word except the first one of the pattern, and before this change the
-  command fired at a reduced score. The round leaves no record — no scored attempt
-  for that pattern and no `rejectReason` naming it. Where nothing else in the
-  utterance fired either, the log carries only the synthetic `no match` entry, so
-  there is nothing to distinguish it from an utterance that matched nothing.
+  command fired at a reduced score. Nothing reaches your handlers, but the round is
+  on the record: the Editor session log carries an attempt for it flagged `barred`,
+  naming the pattern and the score the candidate reached, and the Command Debug
+  Window shows the same round as `Rejected: barred`. So this silence is
+  distinguishable after the fact from an utterance that genuinely matched nothing —
+  in the Editor. A player build records no diagnostics at all, and the runtime
+  events are the same either way.
 - **Repro**: With the demo grammar, say "heading two seven zero" (the leading "set"
   dropped by the decoder). `set_heading` matches the rest, scores `2 / 3` = `0.667`,
   clears the default `minScore` — and does not fire. Before #124 it fired.
@@ -500,8 +503,8 @@ deliberate trade-offs rather than oversights.
 - **Symptom**: With `disambiguateSiblingTies` on, the recogniser asks which of two
   commands you meant, and the one you pick fires although its own first required
   word was never spoken. The same pattern on the same utterance is
-  [barred](Documentation~/scoring.md#the-leading-required-miss-bar) and silent
-  when it has to win a round on its own — the entry above. The flag is **off by
+  [barred](Documentation~/scoring.md#the-leading-required-miss-bar) and fires
+  nothing when it has to win a round on its own — the entry above. The flag is **off by
   default**, and with it off nothing here applies.
 - **Repro**: Register `fire_at : ["{ship}", "fire", "at", "{target}", "now"]` and
   `fire_to : ["{?ship}", "fire", "to", "{target}", "now"]`, with slots
