@@ -25,8 +25,11 @@ namespace VoXR.Native
 
         // The generated grammar is a flat JSON array of double-quoted entries joined by
         // ", " and built with no escaping pass (VoxrCommandParser.GenerateGrammarJson), so
-        // scanning for quote pairs is sufficient and needs no JSON parser. Entries are a
-        // mix of single words and space-joined multi-word phrases, e.g.
+        // scanning for quote pairs needs no JSON parser — and is sufficient provided no
+        // grammar word contains a '"' itself. A word that did would desynchronise the scan,
+        // but it would also emit malformed JSON that crashes the decoder long before any of
+        // this matters. Entries are a mix of single words and space-joined multi-word
+        // phrases, e.g.
         //   ["[unk]", "close distance", "close", "distance"]
         //
         // Returns the distinct words in first-seen order; deterministic output matters to
@@ -83,8 +86,7 @@ namespace VoXR.Native
                     $"[VoxrGrammarVocabulary] Grammar word \"{word}\" is not in the loaded VOSK "
                         + "model's vocabulary. The decoder drops it, so any phrase that needs it "
                         + "can never be recognised. Remedies: spell the phrase out in the "
-                        + "slot value (e.g. \"close quarters\" instead of \"cqb\"), or add a "
-                        + "phonetic alias for it. See "
+                        + "slot value, or add a phonetic alias for it. See "
                         + "KNOWN_LIMITATIONS.md, \"Abbreviations and letter sequences map to "
                         + "[unk]\"."
                 );
@@ -92,10 +94,13 @@ namespace VoXR.Native
         }
 
         // Production overload. vosk_model_find_word returns the word's symbol id, or -1 when
-        // the model does not know it. The upstream header documents no return contract at
-        // all; -1 is measured against the vendored vosk-model-small-en-us-0.15 (known words
-        // return positive ids — "fire" 146905, "cease" 66827 — while "cqb", "railgun" and a
-        // nonsense string all return -1). Note it is NOT 0: 0 is a valid symbol id.
+        // the model does not know it. Upstream documents this: vosk_api.h says the call
+        // returns "the word symbol if word exists inside the model or -1 otherwise", and
+        // that symbol 0 is <epsilon>. The trimmed copy this repo carries at
+        // NativeBridge~/include/vosk_api.h:21 drops that comment, which is why it is
+        // restated here. Confirmed by measurement against vosk-model-small-en-us-0.15:
+        // "fire" 146905, "cease" 66827, <eps> 0, while "cqb", "railgun" and a nonsense
+        // string all return -1. Note the sentinel is NOT 0: 0 is a valid symbol id.
         [System.Diagnostics.Conditional("UNITY_EDITOR")]
         internal static void WarnOnUnknownWords(string grammarJson, IntPtr model)
         {

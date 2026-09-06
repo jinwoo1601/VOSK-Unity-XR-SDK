@@ -13,8 +13,9 @@ Each entry includes a short repro, the root cause, and a workaround (if any).
 ## VOSK Acoustic Model
 
 Limitations rooted in the small English VOSK model
-(`vosk-model-small-en-us-0.15`) we ship with. Switching to a larger model would
-mitigate some of these but at the cost of memory and download size.
+(`vosk-model-small-en-us-0.15`) the README directs you to install. Switching
+to a larger model would mitigate some of these but at the cost of memory and
+download size.
 
 ### "to" misrecognised as "two"
 
@@ -90,14 +91,14 @@ mitigate some of these but at the cost of memory and download size.
   `close distance [unk] target alpha three`; the `range=cqb` slot fails.
 - **Where seen**: v2.0 test matrix Phase 3.2. The shipped sample grammar
   contains **two** such words, not one: `cqb` and `railgun` (measured against
-  `vosk-model-small-en-us-0.15`, the model this package vendors). Every other
-  word in that grammar is in the model — including `pdc`, which reads like an
-  abbreviation but is present.
-- **Detection**: In the Windows Editor, each grammar word is looked up in the
-  loaded model as the grammar is applied, and a word the model does not know
-  logs a `[VoxrGrammarVocabulary]` Console warning naming it, instead of
-  failing silently at recognition time. The warning is advisory — the grammar
-  is applied unchanged.
+  `vosk-model-small-en-us-0.15`). Every other word in that grammar is in the
+  model — including `pdc`, which reads like an abbreviation but is present.
+- **Detection**: In the Windows Editor, each grammar word apart from the
+  package's own `[unk]` token is looked up in the loaded model as the grammar
+  is applied, and a word the model does not know logs a
+  `[VoxrGrammarVocabulary]` Console warning naming it, instead of failing
+  silently at recognition time. The warning is advisory — the grammar is
+  applied unchanged.
 - **Root cause**: The small English model has no entries for some military/radio
   abbreviations and coinages. Grammar mode forces VOSK to choose something
   in-vocabulary, so those words become `[unk]`.
