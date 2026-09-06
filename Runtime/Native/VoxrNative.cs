@@ -25,6 +25,13 @@ namespace VoXR.Native
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)] [Preserve]
         internal static extern void vosk_model_free(IntPtr model);
 
+        [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+        [Preserve]
+        internal static extern int vosk_model_find_word(
+            IntPtr model,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string word
+        );
+
         // Recognizer
 
         [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)] [Preserve]

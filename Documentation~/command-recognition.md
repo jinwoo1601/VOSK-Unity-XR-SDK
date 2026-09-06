@@ -719,6 +719,8 @@ Two consequences worth knowing when you author patterns:
 
 This is automatic -- there is no setting, and nothing about your pattern or slot declarations changes.
 
+In the Windows Editor, every word the grammar emits is looked up in the loaded model's vocabulary at the moment the grammar is handed to the model, and any word the model does not know produces a Console warning naming it. The check exists because the decoder drops an unknown word *silently* -- it is simply not in the model, so no phrase that needs it can ever be recognised, and nothing in the transcript says why. The warning is advisory only: the grammar is still applied unchanged. See [Known Limitations](../KNOWN_LIMITATIONS.md) for the two remedies -- spell the word out as separate letters, or add a phonetic alias.
+
 ### When to use each mode
 
 | | Grammar Mode (default) | Free Speech Mode |

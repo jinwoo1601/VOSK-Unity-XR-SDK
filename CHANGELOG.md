@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Editor now tells you when a grammar word is not in the model's vocabulary, instead of letting the decoder drop it silently.** A word VOSK has never heard of cannot be recognised — the decoder discards it when the grammar is compiled, and the Kaldi-side complaint is suppressed by the log level the bridge sets, so the only symptom was a phrase that never matched and a transcript that gave no reason. Whenever a grammar is handed to the model, every word it contains is now looked up with `vosk_model_find_word`, and each unknown word logs one Console warning naming it and repeating the two documented remedies (spell it out as separate letters, or add a phonetic alias). Because the check runs at the point where a grammar meets a live model handle rather than where the grammar is generated, it also covers runtime rebuilds — a slot repopulated by `NotifySlotChanged`, or a `SetActiveSets` switch — and it does not misfire on the common startup ordering where the grammar is built before the model has finished loading. It never rejects a grammar: the grammar is applied exactly as before and nothing about parsing, scoring, or which commands fire moves. The package's own `[unk]` token is skipped deliberately, since it is not author vocabulary. **Windows Editor only** (`UNITY_EDITOR_WIN`, because the managed libvosk bindings exist only there, and `[Conditional("UNITY_EDITOR")]` besides) — player builds and non-Windows Editors are unchanged, and no public API is added. Pointed at the shipped sample grammar the check surfaces two words: `cqb`, which `KNOWN_LIMITATIONS.md` already documented, and `railgun`, which nothing in the repo had recorded. ([#143](https://github.com/jinwoo1601/VoXR-Speech-Recognition/issues/143))
+
 ## [2.0.0] - 2026-08-28
 
 ### Changed
