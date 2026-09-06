@@ -720,6 +720,12 @@ namespace VoXR.Commands
 
 #if UNITY_EDITOR
             var parseDiag = _parser.LastParseDiagnostics;
+            // Snapshotted here beside parseDiag, and for the same reason the parser itself is
+            // snapshotted below: Step 7 raises public events between iterations and a subscriber
+            // may answer one by re-parsing, which would replace this array mid-walk with another
+            // utterance's barred rounds.
+            var barredRounds =
+                _parser.LastBarredRounds ?? Array.Empty<VoxrCommandParser.BarredRoundEntry>();
             // wordConfidence is already built above — reuse for diagnostics.
             Dictionary<string, float> diagWordConf = wordConfidence;
 #endif
@@ -831,7 +837,9 @@ namespace VoXR.Commands
                             followUpResult.Value.Score, minScore,
                             followUpResult.Value.Confidence, minConfidence,
                             null,
-                            $"follow-up re-score {followUpResult.Value.Score:F2} <= 0",
+                            FormattableString.Invariant(
+                                $"follow-up re-score {followUpResult.Value.Score:F2} <= 0"
+                            ),
                             false) },
                         Time.frameCount);
 #endif
@@ -889,11 +897,48 @@ namespace VoXR.Commands
             if (resultCount == 0)
             {
 #if UNITY_EDITOR
+                // An utterance whose every round was barred produced no result, but it is not
+                // the same thing as nothing having matched — and the synthetic "no match" below
+                // says exactly that, hiding the one shape the bar exists to catch. Publish what
+                // was refused instead. Only the diagnostic changes: OnUnrecognisedSpeech still
+                // fires for a fully-barred utterance, which is what issue #124 settled.
+                VoxrMatchAttempt[] noResultAttempts;
+                if (barredRounds.Length > 0)
+                {
+                    noResultAttempts = new VoxrMatchAttempt[barredRounds.Length];
+                    for (int b = 0; b < barredRounds.Length; b++)
+                    {
+                        noResultAttempts[b] = BuildBarredAttempt(
+                            barredRounds[b],
+                            tokens,
+                            diagWordConf
+                        );
+                    }
+                }
+                else
+                {
+                    noResultAttempts = new[]
+                    {
+                        new VoxrMatchAttempt(
+                            null,
+                            null,
+                            0f,
+                            minScore,
+                            0f,
+                            minConfidence,
+                            null,
+                            "no match",
+                            false
+                        ),
+                    };
+                }
+
                 LastMatchDiagnostics = new VoxrMatchDiagnostics(
-                    text, diagWords,
-                    new[] { new VoxrMatchAttempt(null, null, 0f, minScore, 0f, minConfidence,
-                        null, "no match", false) },
-                    Time.frameCount);
+                    text,
+                    diagWords,
+                    noResultAttempts,
+                    Time.frameCount
+                );
 #endif
                 OnUnrecognisedSpeech?.Invoke(text);
                 return;
@@ -909,6 +954,18 @@ namespace VoXR.Commands
 
             for (int i = 0; i < resultCount; i++)
             {
+#if UNITY_EDITOR
+                // Barred rounds carry the number of results emitted before them, so draining
+                // them here puts every attempt in the order its round actually ran rather than
+                // appending them all at the end. Several can share an index: consecutive barred
+                // rounds all fire before the next result is emitted.
+                for (int b = 0; b < barredRounds.Length; b++)
+                {
+                    if (barredRounds[b].ResultsBefore == i)
+                        attempts.Add(BuildBarredAttempt(barredRounds[b], tokens, diagWordConf));
+                }
+#endif
+
                 var cmd = resultBuf[i].Command;
 
                 // Below score threshold, OR missing a required argument — either way this is
@@ -967,7 +1024,9 @@ namespace VoXR.Commands
                     // comparison that is plainly false in the session log and the debug window.
                     attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
                             cmd.Score < minScore
-                                ? $"score {cmd.Score:F2} < minScore {minScore:F2}"
+                                ? FormattableString.Invariant(
+                                    $"score {cmd.Score:F2} < minScore {minScore:F2}"
+                                )
                                 : "required slot unfilled",
                             false
                         )
@@ -982,7 +1041,9 @@ namespace VoXR.Commands
                     anyThresholdFiltered = true;
 #if UNITY_EDITOR
                     attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
-                        $"confidence {cmd.Confidence:F2} < minConfidence {minConfidence:F2}", false));
+                        FormattableString.Invariant(
+                            $"confidence {cmd.Confidence:F2} < minConfidence {minConfidence:F2}"
+                        ), false));
 #endif
                     continue;
                 }
@@ -994,7 +1055,8 @@ namespace VoXR.Commands
                     anyThresholdFiltered = true;
 #if UNITY_EDITOR
                     attempts.Add(BuildAttempt(cmd, parseDiag, i, tokens, diagWordConf,
-                        $"debounced ({commandCooldown:F1}s cooldown)", false));
+                        FormattableString.Invariant($"debounced ({commandCooldown:F1}s cooldown)"),
+                        false));
 #endif
                     continue;
                 }
@@ -1080,6 +1142,18 @@ namespace VoXR.Commands
             }
 
 #if UNITY_EDITOR
+            // The rounds barred after the last emitting one. The loop above cannot reach them:
+            // it stops at resultCount, and theirs is exactly resultCount. Tested with >= rather
+            // than ==, which is equivalent today — the parser stops the round loop when the
+            // result buffer fills, so ResultsBefore can never exceed the count it returns — but
+            // == would turn any future drift there into attempts silently vanishing from the
+            // log, which is the failure mode issue #144 exists to close.
+            for (int b = 0; b < barredRounds.Length; b++)
+            {
+                if (barredRounds[b].ResultsBefore >= resultCount)
+                    attempts.Add(BuildBarredAttempt(barredRounds[b], tokens, diagWordConf));
+            }
+
             LastMatchDiagnostics = new VoxrMatchDiagnostics(
                 text, diagWords, attempts.ToArray(), Time.frameCount);
 #endif
@@ -1341,6 +1415,11 @@ namespace VoXR.Commands
             string pattern = null;
             string tiedRival = null;
             bool tiedRivalIsSibling = false;
+            // Defaulted to "no runner-up" rather than left unassigned: an attempt built with no
+            // parse entry behind it (the synthetic paths) has no second-ranked candidate to
+            // name, and reporting one would be a claim about a selection that never ran.
+            string runnerUpIntent = null;
+            float runnerUpScore = -1f;
             VoxrDiagnosticSlotMatch[] diagSlots = Array.Empty<VoxrDiagnosticSlotMatch>();
 
             if (parseDiag != null && index < parseDiag.Length)
@@ -1348,6 +1427,8 @@ namespace VoXR.Commands
                 pattern = parseDiag[index].PatternString;
                 tiedRival = parseDiag[index].DescribeTiedRival();
                 tiedRivalIsSibling = parseDiag[index].TiedRivalIsSibling;
+                runnerUpIntent = parseDiag[index].RunnerUpIntent;
+                runnerUpScore = parseDiag[index].RunnerUpScore;
 
                 if (cmd.Slots.Length > 0 && parseDiag[index].SlotStartWords != null)
                 {
@@ -1370,7 +1451,48 @@ namespace VoXR.Commands
                 rejectReason,
                 isAccepted,
                 tiedRival,
-                tiedRivalIsSibling
+                tiedRivalIsSibling,
+                barred: false,
+                runnerUpIntent: runnerUpIntent,
+                runnerUpScore: runnerUpScore
+            );
+        }
+
+        // A barred round produced no VoxrCommand, so it cannot go through BuildAttempt: the
+        // intent, pattern and score come off the parser's barred record instead, and the span's
+        // confidence is computed here exactly as BuildAttempt computes a slot's.
+        //
+        // Slots are left empty deliberately — the parser returns above the point where a barred
+        // winner's slot array would be built, and building one purely for the log would put
+        // allocation back on the path the bar exists to keep cheap.
+        VoxrMatchAttempt BuildBarredAttempt(
+            in VoxrCommandParser.BarredRoundEntry barred,
+            string[] tokens,
+            Dictionary<string, float> wordConf
+        )
+        {
+            float confidence = VoxrCommandParser.ComputeConfidence(
+                tokens,
+                barred.StartIdx,
+                barred.EndIdx,
+                wordConf
+            );
+
+            return new VoxrMatchAttempt(
+                barred.Intent,
+                barred.PatternString,
+                barred.Score,
+                minScore,
+                confidence,
+                minConfidence,
+                null,
+                "barred",
+                false,
+                tiedRival: null,
+                tiedRivalIsSibling: false,
+                barred: true,
+                runnerUpIntent: barred.RunnerUpIntent,
+                runnerUpScore: barred.RunnerUpScore
             );
         }
 #endif

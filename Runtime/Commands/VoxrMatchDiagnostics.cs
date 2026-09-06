@@ -65,12 +65,41 @@ namespace VoXR.Commands
         /// </summary>
         public readonly bool TiedRivalIsSibling;
 
+        /// <summary>
+        /// Whether this attempt records a round the leading-required-miss bar refused: the
+        /// candidate won selection and consumed its span, but produced no command. Always
+        /// accompanied by <see cref="IsAccepted"/> false and a <see cref="RejectReason"/> of
+        /// <c>barred</c>. Distinguishable from an ordinary rejection because the bar refuses
+        /// before a result exists, so <see cref="Slots"/> is always empty here.
+        /// </summary>
+        public readonly bool Barred;
+
+        /// <summary>
+        /// The intent of the round's second-ranked candidate — what would have won had the
+        /// winner not been there — or null when the round had only one candidate. Ranked by the
+        /// same order selection used, so "second" means second by every key and not merely by
+        /// score. Distinct from <see cref="TiedRival"/>, which is set only on an exact tie: a
+        /// runner-up is recorded however far behind it finished. May equal
+        /// <see cref="Intent"/> — a command's own second phrasing, or the same pattern at a
+        /// later start index. Null on the synthetic attempts that come from no parse round.
+        /// </summary>
+        public readonly string RunnerUpIntent;
+
+        /// <summary>
+        /// That candidate's score, or -1 when there was no runner-up. Because earliest start
+        /// outranks score in selection, this can exceed <see cref="Score"/>.
+        /// </summary>
+        public readonly float RunnerUpScore;
+
         public VoxrMatchAttempt(string intent, string pattern, float score, float minScore,
             float aggregateConfidence, float minConfidence, VoxrDiagnosticSlotMatch[] slots,
             string rejectReason,
             bool isAccepted,
             string tiedRival = null,
-            bool tiedRivalIsSibling = false
+            bool tiedRivalIsSibling = false,
+            bool barred = false,
+            string runnerUpIntent = null,
+            float runnerUpScore = -1f
         )
         {
             Intent = intent;
@@ -84,6 +113,9 @@ namespace VoXR.Commands
             IsAccepted = isAccepted;
             TiedRival = tiedRival;
             TiedRivalIsSibling = tiedRivalIsSibling;
+            Barred = barred;
+            RunnerUpIntent = runnerUpIntent;
+            RunnerUpScore = runnerUpScore;
         }
     }
 

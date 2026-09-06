@@ -193,7 +193,8 @@ namespace VoXR.Testing
         {
             if (cmd.Score < _minScore)
             {
-                rejectReason = $"score {cmd.Score:F2} < minScore {_minScore:F2}";
+                rejectReason = FormattableString.Invariant(
+                    $"score {cmd.Score:F2} < minScore {_minScore:F2}");
                 return false;
             }
             // Completeness (issue #73), kept in step with the recogniser's own gate and for the
@@ -210,7 +211,8 @@ namespace VoXR.Testing
             }
             if (cmd.Confidence >= 0f && cmd.Confidence < _minConfidence)
             {
-                rejectReason = $"confidence {cmd.Confidence:F2} < minConfidence {_minConfidence:F2}";
+                rejectReason = FormattableString.Invariant(
+                    $"confidence {cmd.Confidence:F2} < minConfidence {_minConfidence:F2}");
                 return false;
             }
             rejectReason = null;
@@ -252,6 +254,12 @@ namespace VoXR.Testing
         {
 #if UNITY_EDITOR
             // Build per-command diagnostic attempts from parser diagnostics
+            //
+            // Reads only LastParseDiagnostics, deliberately: LastBarredRounds (issue #144) is
+            // published for the session log, whose unit is one utterance, while this harness
+            // reports one row per TEST CASE against an expected intent — a round that produced
+            // no command has no place in that shape. A barred round is therefore invisible
+            // here, the same as it was before #144.
             var parseDiag = _parser.LastParseDiagnostics;
             VoxrMatchAttempt[] attempts;
 
@@ -271,7 +279,10 @@ namespace VoXR.Testing
                         reason,
                         accepted,
                         parseDiag[i].DescribeTiedRival(),
-                        parseDiag[i].TiedRivalIsSibling
+                        parseDiag[i].TiedRivalIsSibling,
+                        barred: false,
+                        runnerUpIntent: parseDiag[i].RunnerUpIntent,
+                        runnerUpScore: parseDiag[i].RunnerUpScore
                     );
                 }
             }

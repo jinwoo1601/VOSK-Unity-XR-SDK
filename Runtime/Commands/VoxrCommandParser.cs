@@ -2427,6 +2427,7 @@ namespace VoXR.Commands
             {
 #if UNITY_EDITOR
                 LastParseDiagnostics = Array.Empty<ParseDiagnosticEntry>();
+                LastBarredRounds = Array.Empty<BarredRoundEntry>();
 #endif
                 return Array.Empty<VoxrCommandResult>();
             }
@@ -2436,6 +2437,7 @@ namespace VoXR.Commands
             {
 #if UNITY_EDITOR
                 LastParseDiagnostics = Array.Empty<ParseDiagnosticEntry>();
+                LastBarredRounds = Array.Empty<BarredRoundEntry>();
 #endif
                 return Array.Empty<VoxrCommandResult>();
             }
@@ -2461,6 +2463,7 @@ namespace VoXR.Commands
             {
 #if UNITY_EDITOR
                 LastParseDiagnostics = Array.Empty<ParseDiagnosticEntry>();
+                LastBarredRounds = Array.Empty<BarredRoundEntry>();
 #endif
                 return 0;
             }
@@ -2470,6 +2473,7 @@ namespace VoXR.Commands
             int searchStart = 0;
 #if UNITY_EDITOR
             var diagnosticEntries = new List<ParseDiagnosticEntry>();
+            var barredRounds = new List<BarredRoundEntry>();
 #endif
 
             while (searchStart < tokens.Length)
@@ -2495,6 +2499,26 @@ namespace VoXR.Commands
                 int bestConsumedEndIdx = 0;
                 int bestSlotCount = 0;
                 bool bestLeadingRequiredMissed = false;
+
+#if UNITY_EDITOR
+                // The round's second-ranked candidate: what would have won had the winner not
+                // been there. Ranked by CompareCandidate, the same order selection itself uses,
+                // so "second" means second by every key and not merely by score. Editor-only
+                // because nothing at runtime reads it — unlike the tie state below, which
+                // disambiguateSiblingTies acts on.
+                //
+                // Reset per round with the best* locals, for the reason recorded there: a
+                // runner-up from round 1 is not a fact about round 2.
+                //
+                // Seeded exactly as the incumbent slot is, which is what makes the same
+                // comparator serve both: CompareCandidate reads bestScore <= 0f as "no
+                // incumbent" and answers Better, so float.MinValue means "the slot is empty".
+                int runnerUpCommandIdx = -1;
+                float runnerUpScore = float.MinValue;
+                int runnerUpStartIdx = int.MaxValue;
+                int runnerUpConsumedEndIdx = 0;
+                int runnerUpLiteralCount = -1;
+#endif
 
                 // Declared HERE, with the round's other best* locals, and not outside the loop:
                 // selection restarts per extraction round, so a rival recorded in round 1 must
@@ -2565,6 +2589,19 @@ namespace VoXR.Commands
 
                             if (order == CandidateOrder.Better)
                             {
+#if UNITY_EDITOR
+                                // The displaced incumbent is the runner-up by construction: it
+                                // out-ranked every candidate seen so far, the current runner-up
+                                // included, so no comparison is needed here.
+                                if (bestCommandIdx >= 0)
+                                {
+                                    runnerUpCommandIdx = bestCommandIdx;
+                                    runnerUpScore = bestScore;
+                                    runnerUpStartIdx = bestStartIdx;
+                                    runnerUpConsumedEndIdx = bestConsumedEndIdx;
+                                    runnerUpLiteralCount = bestLiteralCount;
+                                }
+#endif
                                 bestScore = matchResult.Score;
                                 bestLiteralCount = matchResult.LiteralCount;
                                 bestCommandIdx = ci;
@@ -2703,6 +2740,38 @@ namespace VoXR.Commands
                                         );
                                 }
                             }
+
+#if UNITY_EDITOR
+                            // A candidate that did not take the round still ranks against the
+                            // runner-up slot. A separate statement rather than a third arm of the
+                            // chain above, for two reasons: that chain's second arm is gated on
+                            // _recordSiblingTies and this is not, and a Worse candidate must
+                            // reach here too — a runner-up is not a tie. Placed after the chain
+                            // because neither arm can leave the iteration early, so nothing can
+                            // skip past it.
+                            //
+                            // Costs one extra CompareCandidate per candidate in the Editor and
+                            // nothing at all in a player build.
+                            if (order != CandidateOrder.Better)
+                            {
+                                var runnerUpOrder = CompareCandidate(
+                                    matchResult,
+                                    startIdx,
+                                    runnerUpScore,
+                                    runnerUpStartIdx,
+                                    runnerUpConsumedEndIdx,
+                                    runnerUpLiteralCount
+                                );
+                                if (runnerUpOrder == CandidateOrder.Better)
+                                {
+                                    runnerUpCommandIdx = ci;
+                                    runnerUpScore = matchResult.Score;
+                                    runnerUpStartIdx = startIdx;
+                                    runnerUpConsumedEndIdx = matchResult.ConsumedEndIdx;
+                                    runnerUpLiteralCount = matchResult.LiteralCount;
+                                }
+                            }
+#endif
                         }
                     }
                 }
@@ -2727,11 +2796,14 @@ namespace VoXR.Commands
                 // reasons:
                 //   - progress is already guaranteed by the guard above, so this continue cannot
                 //     spin and needs no second guard;
-                //   - a barred round should allocate nothing. In a player build with a
-                //     literal-only winner and _recordSiblingTies off nothing below here
-                //     heap-allocates anyway (the command types are all readonly struct), but the
-                //     Editor diagnostic allocates three times per round and any slot-carrying
-                //     winner allocates its slot array.
+                //   - a barred round allocates nothing in a PLAYER build. With a literal-only
+                //     winner and _recordSiblingTies off nothing below here heap-allocates anyway
+                //     (the command types are all readonly struct), but the Editor diagnostic
+                //     allocates three times per round and any slot-carrying winner allocates its
+                //     slot array. In the Editor the round now records one BarredRoundEntry
+                //     below, deliberately: issue #144 is that the round's total silence made the
+                //     bar's field cost unmeasurable, and one entry costs no more than the
+                //     Editor-only diagnostic an emitting round already pays for.
                 //
                 // It also keeps a barred round from writing a _tiedSiblingBuf entry for a result
                 // slot it never fills. That is an invariant worth holding because it is free
@@ -2741,6 +2813,33 @@ namespace VoXR.Commands
                 // accessor's contract says nothing reads it.
                 if (bestLeadingRequiredMissed)
                 {
+#if UNITY_EDITOR
+                    // Locals rather than inline initialiser members purely so the record below
+                    // stays readable at this indentation.
+                    string barredPattern = string.Join(
+                        " ",
+                        _commands[bestCommandIdx].Patterns[bestPatternIdx]
+                    );
+                    string barredRunnerUp =
+                        runnerUpCommandIdx >= 0 ? _commands[runnerUpCommandIdx].Intent : null;
+                    barredRounds.Add(
+                        new BarredRoundEntry
+                        {
+                            Intent = _commands[bestCommandIdx].Intent,
+                            PatternString = barredPattern,
+                            Score = bestScore,
+                            StartIdx = bestStartIdx,
+                            EndIdx = bestEndIdx,
+
+                            // Read BEFORE the round's continue and while _resultCount still counts
+                            // only the rounds that emitted ahead of this one — that number is what
+                            // lets a consumer put this round back in sequence.
+                            ResultsBefore = _resultCount,
+                            RunnerUpIntent = barredRunnerUp,
+                            RunnerUpScore = barredRunnerUp != null ? runnerUpScore : -1f,
+                        }
+                    );
+#endif
                     searchStart = bestEndIdx;
                     continue;
                 }
@@ -2808,6 +2907,8 @@ namespace VoXR.Commands
                     Array.Copy(_bestSlotStartBuf, diagStartWords, bestSlotCount);
                     Array.Copy(_bestSlotEndBuf, diagEndWords, bestSlotCount);
                 }
+                string roundRunnerUp =
+                    runnerUpCommandIdx >= 0 ? _commands[runnerUpCommandIdx].Intent : null;
                 diagnosticEntries.Add(new ParseDiagnosticEntry
                 {
                     PatternString = string.Join(" ", _commands[bestCommandIdx].Patterns[bestPatternIdx]),
@@ -2824,6 +2925,8 @@ namespace VoXR.Commands
                         diagRivalCommandIdx >= 0 ? _commands[diagRivalCommandIdx].Intent : null,
                         TiedRivalPatternIndex = diagRivalPatternIdx,
                         TiedRivalIsSibling = diagRivalIsSibling,
+                        RunnerUpIntent = roundRunnerUp,
+                        RunnerUpScore = roundRunnerUp != null ? runnerUpScore : -1f,
                 });
 #endif
                 searchStart = bestEndIdx;
@@ -2833,6 +2936,13 @@ namespace VoXR.Commands
             LastParseDiagnostics = diagnosticEntries.Count > 0
                 ? diagnosticEntries.ToArray()
                 : Array.Empty<ParseDiagnosticEntry>();
+
+            // Cleared on every other exit too — the empty-input returns in this method and in
+            // Parse above — for the same reason LastParseDiagnostics is: a stale array left over
+            // from the previous parse would attribute another utterance's barred rounds to this
+            // one, and a consumer reading it alongside a zero result count has no way to tell.
+            LastBarredRounds =
+                barredRounds.Count > 0 ? barredRounds.ToArray() : Array.Empty<BarredRoundEntry>();
 #endif
             return _resultCount;
         }
@@ -3452,9 +3562,46 @@ namespace VoXR.Commands
                 TiedRivalIntent == null
                     ? null
                     : $"{TiedRivalIntent} (pattern {TiedRivalPatternIndex})";
+
+            // The round's second-ranked candidate — what would have won had this one not been
+            // there — by the same CompareCandidate order selection used. Null / -1 when the
+            // round had a single candidate.
+            //
+            // NOT the same question as TiedRivalIntent above, which is set only on an exact
+            // tie: a runner-up is recorded however far behind it finished, and the two coincide
+            // whenever the runner-up happened to tie (issue #144).
+            public string RunnerUpIntent;
+            public float RunnerUpScore;
         }
 
         internal ParseDiagnosticEntry[] LastParseDiagnostics;
+
+        // A round the leading-required-miss bar refused (issue #124). It won selection and
+        // consumed its span, but produced no VoxrCommand — so it has no slot in _resultBuf and
+        // cannot be carried in ParseDiagnosticEntry, whose i-th entry describes _resultBuf's
+        // i-th result and is indexed that way by both the recogniser and the batch test runner.
+        // A parallel array keeps that contract intact (issue #144).
+        internal struct BarredRoundEntry
+        {
+            public string Intent;
+            public string PatternString;
+            public float Score;
+
+            // Half-open [StartIdx, EndIdx) token range the barred winner matched, so a consumer
+            // can compute the span's confidence the same way an emitting round's is computed.
+            public int StartIdx;
+            public int EndIdx;
+
+            // How many results this parse had already emitted when the bar fired. It is what
+            // lets a consumer re-interleave barred rounds with emitting ones in the order they
+            // actually happened, without either array carrying holes.
+            public int ResultsBefore;
+
+            public string RunnerUpIntent;
+            public float RunnerUpScore;
+        }
+
+        internal BarredRoundEntry[] LastBarredRounds;
 #endif
 
         // searchStart is where this extraction round began, and only the leading coverage

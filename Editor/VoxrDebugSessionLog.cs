@@ -23,22 +23,24 @@ namespace VoXR.Editor
     [InitializeOnLoad]
     internal static class VoxrDebugSessionLog
     {
-        const int SchemaVersion = 2;
+        const int SchemaVersion = 3;
         const int MaxRetainedSessions = 10;
         const string LogDirName = "VoxrDebugLogs";
 
         const string Readme =
             "Auto-exported VoXR command recognition diagnostics for one Unity Play Mode session. "
             + "Each entry is one utterance. On the ordinary parse path each attempt within it is "
-            + "one emitting extraction round, reporting the command pattern that won selection "
-            + "that round — losing candidates are not recorded, and neither is a round whose "
-            + "winner missed its first required element and was barred from firing, so a "
-            + "pattern's absence means it lost selection or won its round and was barred, not "
-            + "that it was never tried. Six pipeline events instead publish a "
+            + "one extraction round. An emitting round reports the command pattern that won "
+            + "selection that round. A round whose winner missed its first required element and "
+            + "was barred from firing records an attempt too: barred is true, accepted is false, "
+            + "rejectReason is 'barred', slots is empty, and intent, pattern and score name the "
+            + "candidate the bar refused — so what the bar cost is readable from the log rather "
+            + "than inferred from a gap. Losing candidates are still not recorded, so a "
+            + "pattern's absence means it lost selection, not that it was never tried. Six "
+            + "pipeline events instead publish a "
             + "single synthetic attempt with an empty pattern: rejectReason 'no match' (no "
-            + "round produced a result; intent is empty and aggregateConfidence is 0, not -1 "
-            + "— this no longer implies nothing matched, since an utterance whose every round "
-            + "was barred lands here too), a "
+            + "round produced a result AND no round was barred; intent is empty and "
+            + "aggregateConfidence is 0, not -1), a "
             + "confirm/cancel resolution of a pending command, an answer to a disambiguation "
             + "prompt whose chosen command still needs confirming ('chosen via vocabulary, now "
             + "awaiting confirmation'), a follow-up slot-fill resolution of a pending command, "
@@ -63,10 +65,20 @@ namespace VoXR.Editor
             + "against this attempt's intent. A differing intent is a grammar defect — duplicate "
             + "or overlapping patterns, one of which can never fire. The SAME intent is the "
             + "winner's own second phrasing tying it, which is harmless and routine. "
-            + "tiedRivalIsSibling is meaningless when tiedRival is empty. Note the "
-            + "numbers embedded in rejectReason text are formatted with the Editor's current "
-            + "culture, so the decimal separator may be ',' — match on the surrounding words, "
-            + "not the whole literal. The scoring model behind these numbers — the score "
+            + "tiedRivalIsSibling is meaningless when tiedRival is empty. runnerUpIntent and "
+            + "runnerUpScore name the round's second-ranked candidate — what would have won "
+            + "had the winner not been there — ranked by the same order selection itself used: "
+            + "earliest start, then score, then consumed span, then literal count. They are "
+            + "empty and -1 when the round had a single candidate. This is NOT the same field "
+            + "as tiedRival: a runner-up is recorded however far behind it finished, while "
+            + "tiedRival is set only on an exact tie, and the two coincide exactly when the "
+            + "runner-up happened to tie. runnerUpIntent can equal intent — a command's own "
+            + "second phrasing, or the same pattern at a later start index. And because "
+            + "earliest start outranks score, a runner-up can carry a HIGHER score than the "
+            + "winner; that is the selection order working, not a defect. Note the "
+            + "numbers embedded in rejectReason text are formatted culture-invariantly, so the "
+            + "decimal separator is always '.' whatever the Editor's locale. The scoring "
+            + "model behind these numbers — the score "
             + "formula, the coverage weight charged for in-grammar words a match leaves "
             + "unexplained before AND after it, selection order, the leading-required-miss bar, "
             + "the two gates, and worked "
@@ -246,6 +258,9 @@ namespace VoXR.Editor
                     rejectReason = a.RejectReason ?? "",
                     tiedRival = a.TiedRival ?? "",
                     tiedRivalIsSibling = a.TiedRivalIsSibling,
+                    barred = a.Barred,
+                    runnerUpIntent = a.RunnerUpIntent ?? "",
+                    runnerUpScore = a.RunnerUpScore,
                     slots = new SlotDto[slots.Length],
                 };
 
@@ -316,6 +331,9 @@ namespace VoXR.Editor
             public string rejectReason;
             public string tiedRival;
             public bool tiedRivalIsSibling;
+            public bool barred;
+            public string runnerUpIntent;
+            public float runnerUpScore;
             public SlotDto[] slots;
         }
 
