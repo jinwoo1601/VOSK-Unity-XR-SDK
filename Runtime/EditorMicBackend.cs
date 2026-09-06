@@ -265,6 +265,12 @@ namespace VoXR
                 return;
             }
 
+            // Authoring aid: a grammar word the model does not know is dropped silently by
+            // the decoder (the Kaldi warning is suppressed by vosk_set_log_level(-1) in the
+            // bridge). This is the only point where a grammar and a live model handle meet —
+            // grammar generation can run before the model finishes loading.
+            VoxrGrammarVocabulary.WarnOnUnknownWords(grammarJson, _model);
+
             // VOSK has no grammar-swap API — we must free and recreate the recognizer.
             if (_recognizer != IntPtr.Zero)
             {

@@ -61,7 +61,7 @@ Declares a named slot with allowed values or number-sequence behaviour.
 var targets = VoxrSlotDefinition.OneOf("target", "alpha one", "bravo two", "hotel one");
 
 // Enumerated slot from an existing array (constructor, no aliases)
-var weapons = new VoxrSlotDefinition("weapon", new[] { "rocket", "laser", "railgun" });
+var weapons = new VoxrSlotDefinition("weapon", new[] { "rocket", "laser", "torpedo" });
 
 // Enumerated slot with aliases (constructor)
 var quantity = new VoxrSlotDefinition("quantity",
