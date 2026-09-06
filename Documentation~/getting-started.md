@@ -52,7 +52,7 @@ The SDK does not include VOSK models. You must download one separately.
 
 The SDK extracts the model to `Application.persistentDataPath/VoxrModels/<modelName>`, where `<modelName>` is the archive's file name without the `.zip`. Extraction unpacks to a temporary sibling folder and finishes with an atomic rename, so an interrupted extraction cannot leave a half-written cache behind.
 
-Every launch reads the archive and computes a SHA-256 hash of its bytes. Extraction records that hash in a `.voxr-model-stamp` file inside the extracted folder, written before the rename so a cache can never be stamped with a key it does not match. A cached extraction is reused only when it passes validation **and** its stamp matches the current archive; on a mismatch -- or when there is no stamp -- the SDK deletes the cache and re-extracts. So shipping a different model `.zip` under the same file name, or editing the `conf/model.conf` inside it, now takes effect on the next launch instead of being ignored on any device that had already run the app.
+Every launch reads the archive and computes a SHA-256 hash of its bytes. Extraction records that hash in a `.voxr-model-stamp` file inside the extracted folder, written before the rename so a cache can never be stamped with a key it does not match. A cached extraction is reused only when it passes validation **and** its stamp matches the current archive; on a mismatch -- or when there is no stamp -- the SDK re-extracts, keeping the existing cache in place as the working model and deleting it only once the replacement has been extracted, validated and stamped, immediately before the atomic rename. So shipping a different model `.zip` under the same file name, or editing the `conf/model.conf` inside it, now takes effect on the next launch instead of being ignored on any device that had already run the app.
 
 **Upgrading an existing install costs one re-extraction.** A cache extracted by an earlier version of the SDK carries no stamp, which reads as a mismatch: the first launch after the upgrade extracts the model once more, then stamps it. It is not an error and it does not repeat.
 
@@ -68,11 +68,11 @@ The SDK validates extracted models by checking for:
 
 `conf/model.conf` holds the decoder's live configuration -- beam, lattice beam, and the endpointer's trailing-silence rules -- and is now part of that list. A model archive that genuinely lacks it fails validation and raises `ModelLoadFailed` where it previously passed.
 
-If an existing cache fails validation, the SDK deletes it and re-extracts immediately, within the same call -- no restart is needed to recover a bad cache. A stamp mismatch takes the same path.
+If an existing cache fails validation, the SDK re-extracts immediately, within the same call -- no restart is needed to recover a bad cache -- and the old copy is replaced only once the new one is extracted, validated and stamped. A stamp mismatch takes the same path.
 
-If the freshly extracted copy fails validation, the archive itself is the problem: the SDK deletes the partial extraction, raises `ModelLoadFailed`, and returns no model. That repeats on **every** launch -- there is no next-launch self-heal for a corrupt archive. Replace the `.zip` in `StreamingAssets` to fix it.
+If the freshly extracted copy fails validation, the archive itself is the problem: the SDK deletes the partial extraction, raises `ModelLoadFailed`, and returns no model. A previously extracted cache is left untouched by that failure -- it is replaced only once a replacement has passed validation -- so a corrupt archive costs you an error rather than the model the device already had. It is not loaded in the replacement's place, though: the stamp still mismatches, so the re-extraction is attempted and fails again on **every** launch -- there is no next-launch self-heal for a corrupt archive. Replace the `.zip` in `StreamingAssets` to fix it.
 
-If the archive cannot be read at all -- missing, or unreadable -- but a cached extraction is present and valid, that cache is still used; only its freshness goes unchecked. `ModelLoadFailed` is raised for a missing archive only when there is no usable cache to fall back on.
+If the archive cannot be read at all -- missing, or unreadable -- but a cached extraction is present and valid, that cache is still used; only its freshness goes unchecked. `ModelLoadFailed` is raised only when there is no usable cache to fall back on, and the message tells the two apart: a missing archive reports `Model archive not found in StreamingAssets: <modelName>.zip`, while a read that failed reports that the archive could not be read and names the underlying reason. Before raising, this path cleans up after itself: a cache that failed validation is deleted, and a stale `.tmp_<modelName>` directory left by an interrupted extraction is swept.
 
 ---
 
@@ -163,7 +163,7 @@ The SDK uses a two-tier lifecycle that separates the expensive model load from t
 
 ### Heavyweight (model load / teardown)
 
-- `Initialise()` / `InitialiseAsync()` -- loads the VOSK model and creates the recogniser. Takes seconds whenever the model has to be extracted from StreamingAssets: the first launch, and any launch on which the archive changed. Otherwise it only reads and hashes the archive to confirm the cache is current, off the main thread.
+- `Initialise()` / `InitialiseAsync()` -- loads the VOSK model and creates the recogniser. Takes seconds whenever the model has to be extracted from StreamingAssets: the first launch, and any launch on which the archive changed. Otherwise it only reads and hashes the archive to confirm the cache is current -- but budget for that read on **every** launch, and not all of it is off the main thread. The hash always runs on a thread-pool thread. The read joins it there only in the Editor and in standalone builds; on Android the archive comes through `UnityWebRequest`, which is polled on the main thread and materialises the whole ~40 MB archive as a managed byte array there. The transfer itself is asynchronous -- the main thread is not blocked for its duration -- but the polling and that final array copy are main-thread work.
 - `ReleaseNativeResources()` -- frees all native resources. Called automatically by `OnDestroy()`.
 
 The native bridge is one per process, so **only one `VoxrSpeechRecogniser` can be initialised at a time**. A second one logs an error and stays inert rather than sharing the first's model; see [VoxrSpeechRecogniser](api/speech-recogniser.md#one-recogniser-per-process).

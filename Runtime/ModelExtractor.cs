@@ -49,7 +49,21 @@ namespace VoXR
             {
                 Directory.CreateDirectory(basePath);
 
-                byte[] archiveBytes = await archiveSource();
+                byte[] archiveBytes = null;
+                string readFailure = null;
+
+                try
+                {
+                    archiveBytes = await archiveSource();
+                }
+                catch (Exception ex)
+                {
+                    // A read that throws is no more fatal than one that returns null: both
+                    // leave the cache's freshness unverifiable, and a valid cache is still a
+                    // usable model. Degrade to the same fallback instead of failing outright.
+                    readFailure = ex.Message;
+                }
+
                 if (archiveBytes == null)
                 {
                     // Without the archive the cache's freshness cannot be checked, but a
@@ -59,22 +73,34 @@ namespace VoXR
                     if (Directory.Exists(finalPath) && ValidateModelDirectory(finalPath))
                         return finalPath;
 
-                    onError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed,
-                        $"Model archive not found in StreamingAssets: {archiveDescription}");
+                    // No replacement is coming down this path, so restore the disk hygiene
+                    // the pre-stamp code performed here: the cache has necessarily failed
+                    // validation and is worthless, and a stale temp is pure dead weight.
+                    if (Directory.Exists(finalPath))
+                        Directory.Delete(finalPath, true);
+
+                    if (Directory.Exists(tempPath))
+                        Directory.Delete(tempPath, true);
+
+                    string failureMessage = readFailure != null
+                        ? $"Model archive could not be read: {archiveDescription} ({readFailure})"
+                        : $"Model archive not found in StreamingAssets: {archiveDescription}";
+
+                    onError?.Invoke(VoxrBridgeErrorCode.ModelLoadFailed, failureMessage);
                     return null;
                 }
 
                 string sourceKey = await Task.Run(() => ComputeArchiveKey(archiveBytes));
 
-                if (Directory.Exists(finalPath))
-                {
-                    // A missing stamp reads as a mismatch, so a pre-stamp install
-                    // re-extracts exactly once and is stamped from then on.
-                    if (ValidateModelDirectory(finalPath) && ReadStamp(finalPath) == sourceKey)
-                        return finalPath;
-
-                    Directory.Delete(finalPath, true);
-                }
+                // A missing stamp reads as a mismatch, so a pre-stamp install re-extracts
+                // exactly once and is stamped from then on. The stale cache is deliberately
+                // NOT deleted here: it stays as the working model until its replacement is
+                // extracted, validated and stamped, so a corrupt archive costs an error
+                // rather than the model the device already had.
+                if (Directory.Exists(finalPath)
+                    && ValidateModelDirectory(finalPath)
+                    && ReadStamp(finalPath) == sourceKey)
+                    return finalPath;
 
                 // Clean up stale temp from interrupted extraction
                 if (Directory.Exists(tempPath))
@@ -126,6 +152,10 @@ namespace VoXR
                 // Stamp inside the temp directory so the atomic rename below is what
                 // publishes it: a stamped cache can only ever appear complete.
                 File.WriteAllText(Path.Combine(tempPath, StampFileName), sourceKey);
+
+                // Surrender the old cache only now that its replacement is complete.
+                if (Directory.Exists(finalPath))
+                    Directory.Delete(finalPath, true);
 
                 // Atomic rename
                 Directory.Move(tempPath, finalPath);
